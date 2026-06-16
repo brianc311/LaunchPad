@@ -1,0 +1,15 @@
+# PyInstaller build output
+build/
+build_new/
+dist/
+dist_new/
+
+# Unpacked installer (distributed as LaunchPad-Install.zip)
+LaunchPad-Install/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
