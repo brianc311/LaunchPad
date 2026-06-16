@@ -52,12 +52,16 @@ def launch_ssh(
     port_value = port or 22
 
     key_file = Path(key_path) if key_path else None
-    if key_file:
+    use_password_auth = bool(password)
+
+    if use_password_auth:
+        key_file = None
+    elif key_file:
         secure_private_key_file(key_file)
         _validate_private_key(key_file)
 
     if not key_file and not password:
-        raise ValueError("This card has no SSH key or password. Add one in Admin.")
+        raise ValueError("This card has no SSH password or key. Add one in Admin.")
 
     bat_path = TEMP_DIR / "launch_ssh.bat"
     lines = [
@@ -106,13 +110,18 @@ def launch_ssh(
                 ]
             )
     else:
+        askpass_cmd = write_askpass_helper(password)
         lines.extend(
             [
-                "echo Using password authentication.",
-                "echo Paste your password when prompted.",
+                "echo Using stored SSH password (key auth skipped).",
                 "echo.",
+                f'set "SSH_ASKPASS={askpass_cmd}"',
+                "set SSH_ASKPASS_REQUIRE=force",
+                "set DISPLAY=launchpad",
                 (
-                    f'"{ssh_exe}" -o StrictHostKeyChecking=accept-new '
+                    f'"{ssh_exe}" -o PubkeyAuthentication=no '
+                    f"-o PreferredAuthentications=password,keyboard-interactive "
+                    f"-o StrictHostKeyChecking=accept-new "
                     f"-p {port_value} {user_host}"
                 ),
             ]
@@ -153,8 +162,8 @@ def launch_ssh(
 
     if key_file and key_passphrase:
         return f"SSH window opened for {user_host} using stored key passphrase."
-    if password and not key_file:
-        return f"SSH window opened for {user_host}. Password copied — paste when prompted."
+    if password:
+        return f"SSH window opened for {user_host} using stored password."
     if key_file:
         return f"SSH window opened for {user_host}. Enter key passphrase if asked."
     return f"SSH window opened for {user_host}."

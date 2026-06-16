@@ -346,8 +346,9 @@ class AdminView(ctk.CTkFrame):
             ("Host", "host"),
             ("Port", "port"),
             ("Username", "username"),
+            ("Password", "password"),
             ("SSH Key File Path", "key_file_path"),
-            ("SSH Key Passphrase", "password"),
+            ("SSH Key Passphrase", "key_passphrase"),
             ("SSH Private Key", "ssh_key"),
             ("URL (web)", "url"),
             ("Category", "category"),
@@ -359,18 +360,22 @@ class AdminView(ctk.CTkFrame):
             ctk.CTkLabel(scroll, text=label, text_color=self.theme["muted"]).grid(
                 row=row, column=0, padx=8, pady=6, sticky="w"
             )
-            show = "*" if key == "password" else None
+            show = "*" if key in ("password", "key_passphrase") else None
             entry = ctk.CTkEntry(scroll, show=show)
             entry.grid(row=row, column=1, padx=8, pady=6, sticky="ew")
             self.entries[key] = entry
             if key == "key_file_path":
                 entry.configure(placeholder_text=str(Path.home() / ".ssh" / "wcelease_ed25519"))
             if key == "password":
-                entry.configure(placeholder_text="Enter key passphrase — stored masked in vault")
+                entry.configure(
+                    placeholder_text="SSH/RDP login password — for SSH, used instead of keys when set"
+                )
+            if key == "key_passphrase":
+                entry.configure(placeholder_text="Only if your private key file is encrypted")
 
         ctk.CTkLabel(
             scroll,
-            text="Use key file path + passphrase, or paste private key above.",
+            text="SSH: set Password for login without keys. Use key fields only when you prefer key auth.",
             text_color=self.theme["accent"],
             font=ctk.CTkFont(size=11),
             wraplength=420,
@@ -520,6 +525,10 @@ class AdminView(ctk.CTkFrame):
 
         if card.encrypted_password:
             self.entries["password"].insert(0, decrypt_text(self.crypto_key, card.encrypted_password))
+        if card.encrypted_key_passphrase:
+            self.entries["key_passphrase"].insert(
+                0, decrypt_text(self.crypto_key, card.encrypted_key_passphrase)
+            )
         if card.encrypted_key:
             self.entries["ssh_key"].insert(0, decrypt_text(self.crypto_key, card.encrypted_key))
 
@@ -544,6 +553,7 @@ class AdminView(ctk.CTkFrame):
         sort_order = int(sort_raw) if sort_raw else 0
 
         password = self.entries["password"].get()
+        key_passphrase = self.entries["key_passphrase"].get()
         ssh_key = self.entries["ssh_key"].get().strip()
         if card_type == "ssh" and ssh_key and "PRIVATE KEY" not in ssh_key:
             messagebox.showerror(
@@ -566,6 +576,7 @@ class AdminView(ctk.CTkFrame):
             "port": port,
             "username": self.entries["username"].get().strip(),
             "encrypted_password": encrypt_text(self.crypto_key, password),
+            "encrypted_key_passphrase": encrypt_text(self.crypto_key, key_passphrase),
             "encrypted_key": encrypt_text(self.crypto_key, ssh_key),
             "url": url,
             "category": self.entries["category"].get().strip() or "General",

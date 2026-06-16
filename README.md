@@ -82,7 +82,7 @@ Then copy the `LaunchPad-Install` folder to the other computer and run `install.
 
 | Type | Fields |
 |------|--------|
-| SSH | Host, port, username, password or private key |
+| SSH | Host, port, username, password (preferred) or private key + optional key passphrase |
 | RDP | Host, port, username, password |
 | Web | URL, optional username/password for basic auth |
 
@@ -92,4 +92,4 @@ Then copy the `LaunchPad-Install` folder to the other computer and run `install.
 
 **Backup:** Admin → Export Backup saves an encrypted `.lpb` file. Import requires the same master password used when exporting.
 
-**Note:** SSH passwords are copied to clipboard when launching (Windows limitation). Use SSH keys for one-click login.
+**Note:** When an SSH Password is set in Admin, LaunchPad uses password login and skips keys. SSH stats still require a key.

@@ -287,7 +287,7 @@ class DashboardView(ctk.CTkFrame):
 
     def _ssh_key_passphrase(self, card: Card) -> str:
         try:
-            return decrypt_text(self.crypto_key, card.encrypted_password)
+            return decrypt_text(self.crypto_key, card.encrypted_key_passphrase)
         except ValueError:
             return ""
 
@@ -465,10 +465,10 @@ class DashboardView(ctk.CTkFrame):
 
         key_passphrase = self._ssh_key_passphrase(card) if card.card_type == "ssh" else ""
 
-        if card.card_type == "ssh" and not key_path and not key_passphrase and not password:
-            _log("No SSH key or password available")
+        if card.card_type == "ssh" and not key_path and not password:
+            _log("No SSH password or key available")
             self.status_label.configure(
-                text="Connect failed: set SSH Key File Path and Passphrase in Admin.",
+                text="Connect failed: set SSH Password or a key in Admin.",
             )
             return
 
@@ -480,7 +480,7 @@ class DashboardView(ctk.CTkFrame):
                 card.port,
                 card.username,
                 password,
-                key_path,
+                key_path if not password else "",
                 card.url,
                 card.name,
                 key_passphrase,
@@ -490,11 +490,6 @@ class DashboardView(ctk.CTkFrame):
             _log(f"Launch exception: {exc}")
             self.status_label.configure(text=f"Connect failed: {exc}")
             return
-
-        if card.card_type == "ssh" and password and not key_path:
-            self.clipboard_clear()
-            self.clipboard_append(password)
-            message = "SSH opened — password copied to clipboard."
 
         self.status_label.configure(text=message)
         self.update_idletasks()

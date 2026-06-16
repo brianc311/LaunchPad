@@ -16,6 +16,7 @@ class Card:
     port: int | None
     username: str
     encrypted_password: str
+    encrypted_key_passphrase: str
     encrypted_key: str
     url: str
     icon: str
@@ -72,6 +73,40 @@ class Database:
                 conn.execute("ALTER TABLE cards ADD COLUMN key_file_path TEXT DEFAULT ''")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute(
+                    "ALTER TABLE cards ADD COLUMN encrypted_key_passphrase TEXT DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass
+            self._migrate_ssh_key_passphrases(conn)
+
+    def _migrate_ssh_key_passphrases(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT id, card_type, encrypted_password, encrypted_key, key_file_path,
+                   encrypted_key_passphrase
+            FROM cards
+            """
+        ).fetchall()
+        for row in rows:
+            if row["card_type"] != "ssh":
+                continue
+            if row["encrypted_key_passphrase"]:
+                continue
+            has_key = bool((row["key_file_path"] or "").strip()) or bool(
+                (row["encrypted_key"] or "").strip()
+            )
+            if has_key and row["encrypted_password"]:
+                conn.execute(
+                    """
+                    UPDATE cards
+                    SET encrypted_key_passphrase = encrypted_password,
+                        encrypted_password = ''
+                    WHERE id = ?
+                    """,
+                    (row["id"],),
+                )
 
     def get_setting(self, key: str, default: str = "") -> str:
         with self._connect() as conn:
@@ -121,9 +156,9 @@ class Database:
                 """
                 INSERT INTO cards (
                     name, card_type, host, port, username,
-                    encrypted_password, encrypted_key, url,
+                    encrypted_password, encrypted_key_passphrase, encrypted_key, url,
                     icon, category, sort_order, glow_color, key_file_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data["name"],
@@ -132,6 +167,7 @@ class Database:
                     data.get("port"),
                     data.get("username", ""),
                     data.get("encrypted_password", ""),
+                    data.get("encrypted_key_passphrase", ""),
                     data.get("encrypted_key", ""),
                     data.get("url", ""),
                     data.get("icon", "default"),
@@ -149,7 +185,7 @@ class Database:
                 """
                 UPDATE cards SET
                     name = ?, card_type = ?, host = ?, port = ?, username = ?,
-                    encrypted_password = ?, encrypted_key = ?, url = ?,
+                    encrypted_password = ?, encrypted_key_passphrase = ?, encrypted_key = ?, url = ?,
                     icon = ?, category = ?, sort_order = ?, glow_color = ?,
                     key_file_path = ?
                 WHERE id = ?
@@ -161,6 +197,7 @@ class Database:
                     data.get("port"),
                     data.get("username", ""),
                     data.get("encrypted_password", ""),
+                    data.get("encrypted_key_passphrase", ""),
                     data.get("encrypted_key", ""),
                     data.get("url", ""),
                     data.get("icon", "default"),
@@ -194,12 +231,14 @@ class Database:
                 "port": card.port,
                 "username": card.username,
                 "encrypted_password": card.encrypted_password,
+                "encrypted_key_passphrase": card.encrypted_key_passphrase,
                 "encrypted_key": card.encrypted_key,
                 "url": card.url,
                 "icon": card.icon,
                 "category": card.category,
                 "sort_order": card.sort_order,
                 "glow_color": card.glow_color,
+                "key_file_path": card.key_file_path,
             }
             for card in cards
         ]
@@ -219,12 +258,14 @@ class Database:
                     "port": entry.get("port"),
                     "username": entry.get("username", ""),
                     "encrypted_password": entry.get("encrypted_password", ""),
+                    "encrypted_key_passphrase": entry.get("encrypted_key_passphrase", ""),
                     "encrypted_key": entry.get("encrypted_key", ""),
                     "url": entry.get("url", ""),
                     "icon": entry.get("icon", "default"),
                     "category": entry.get("category", DEFAULT_CATEGORY),
                     "sort_order": entry.get("sort_order", 0),
                     "glow_color": entry.get("glow_color", DEFAULT_GLOW_COLOR),
+                    "key_file_path": entry.get("key_file_path", ""),
                 }
             )
             imported += 1
@@ -240,6 +281,12 @@ class Database:
             port=row["port"],
             username=row["username"] or "",
             encrypted_password=row["encrypted_password"] or "",
+            encrypted_key_passphrase=(
+                row["encrypted_key_passphrase"]
+                if "encrypted_key_passphrase" in row.keys()
+                else ""
+            )
+            or "",
             encrypted_key=row["encrypted_key"] or "",
             url=row["url"] or "",
             icon=row["icon"] or "default",
