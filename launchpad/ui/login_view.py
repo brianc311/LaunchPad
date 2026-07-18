@@ -1,6 +1,7 @@
 import customtkinter as ctk
 
 from launchpad.branding import get_app_name, load_ctk_logo_large
+from launchpad.config import APP_VERSION
 from launchpad.crypto import generate_salt, hash_password
 from launchpad.ui.theme import get_theme
 
@@ -37,7 +38,7 @@ class LoginView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             panel,
-            text="Secure connection dashboard",
+            text=f"Secure connection dashboard  ·  v{APP_VERSION}",
             font=ctk.CTkFont(size=14),
             text_color=self.theme["muted"],
         ).grid(row=1, column=0, padx=32, pady=(0, 24))

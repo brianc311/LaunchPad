@@ -14,6 +14,7 @@ class Card:
     card_type: str
     host: str
     port: int | None
+    serial_number: str
     username: str
     encrypted_password: str
     encrypted_key_passphrase: str
@@ -24,6 +25,8 @@ class Card:
     sort_order: int
     glow_color: str
     key_file_path: str
+    device_profile: str
+    custom_commands: str
 
 
 class Database:
@@ -79,6 +82,15 @@ class Database:
                 )
             except sqlite3.OperationalError:
                 pass
+            for column, ddl in (
+                ("device_profile", "ALTER TABLE cards ADD COLUMN device_profile TEXT DEFAULT ''"),
+                ("custom_commands", "ALTER TABLE cards ADD COLUMN custom_commands TEXT DEFAULT ''"),
+                ("serial_number", "ALTER TABLE cards ADD COLUMN serial_number TEXT DEFAULT ''"),
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass
             self._migrate_ssh_key_passphrases(conn)
 
     def _migrate_ssh_key_passphrases(self, conn: sqlite3.Connection) -> None:
@@ -155,16 +167,18 @@ class Database:
             cursor = conn.execute(
                 """
                 INSERT INTO cards (
-                    name, card_type, host, port, username,
+                    name, card_type, host, port, serial_number, username,
                     encrypted_password, encrypted_key_passphrase, encrypted_key, url,
-                    icon, category, sort_order, glow_color, key_file_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    icon, category, sort_order, glow_color, key_file_path,
+                    device_profile, custom_commands
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data["name"],
                     data["card_type"],
                     data.get("host", ""),
                     data.get("port"),
+                    data.get("serial_number", ""),
                     data.get("username", ""),
                     data.get("encrypted_password", ""),
                     data.get("encrypted_key_passphrase", ""),
@@ -175,6 +189,8 @@ class Database:
                     data.get("sort_order", 0),
                     data.get("glow_color", DEFAULT_GLOW_COLOR),
                     data.get("key_file_path", ""),
+                    data.get("device_profile", ""),
+                    data.get("custom_commands", ""),
                 ),
             )
             return int(cursor.lastrowid)
@@ -184,10 +200,10 @@ class Database:
             conn.execute(
                 """
                 UPDATE cards SET
-                    name = ?, card_type = ?, host = ?, port = ?, username = ?,
+                    name = ?, card_type = ?, host = ?, port = ?, serial_number = ?, username = ?,
                     encrypted_password = ?, encrypted_key_passphrase = ?, encrypted_key = ?, url = ?,
                     icon = ?, category = ?, sort_order = ?, glow_color = ?,
-                    key_file_path = ?
+                    key_file_path = ?, device_profile = ?, custom_commands = ?
                 WHERE id = ?
                 """,
                 (
@@ -195,6 +211,7 @@ class Database:
                     data["card_type"],
                     data.get("host", ""),
                     data.get("port"),
+                    data.get("serial_number", ""),
                     data.get("username", ""),
                     data.get("encrypted_password", ""),
                     data.get("encrypted_key_passphrase", ""),
@@ -205,6 +222,8 @@ class Database:
                     data.get("sort_order", 0),
                     data.get("glow_color", DEFAULT_GLOW_COLOR),
                     data.get("key_file_path", ""),
+                    data.get("device_profile", ""),
+                    data.get("custom_commands", ""),
                     card_id,
                 ),
             )
@@ -229,6 +248,7 @@ class Database:
                 "card_type": card.card_type,
                 "host": card.host,
                 "port": card.port,
+                "serial_number": card.serial_number,
                 "username": card.username,
                 "encrypted_password": card.encrypted_password,
                 "encrypted_key_passphrase": card.encrypted_key_passphrase,
@@ -239,6 +259,8 @@ class Database:
                 "sort_order": card.sort_order,
                 "glow_color": card.glow_color,
                 "key_file_path": card.key_file_path,
+                "device_profile": card.device_profile,
+                "custom_commands": card.custom_commands,
             }
             for card in cards
         ]
@@ -256,6 +278,7 @@ class Database:
                     "card_type": entry.get("card_type", "ssh"),
                     "host": entry.get("host", ""),
                     "port": entry.get("port"),
+                    "serial_number": entry.get("serial_number", ""),
                     "username": entry.get("username", ""),
                     "encrypted_password": entry.get("encrypted_password", ""),
                     "encrypted_key_passphrase": entry.get("encrypted_key_passphrase", ""),
@@ -266,6 +289,8 @@ class Database:
                     "sort_order": entry.get("sort_order", 0),
                     "glow_color": entry.get("glow_color", DEFAULT_GLOW_COLOR),
                     "key_file_path": entry.get("key_file_path", ""),
+                    "device_profile": entry.get("device_profile", ""),
+                    "custom_commands": entry.get("custom_commands", ""),
                 }
             )
             imported += 1
@@ -279,6 +304,7 @@ class Database:
             card_type=row["card_type"],
             host=row["host"],
             port=row["port"],
+            serial_number=(row["serial_number"] if "serial_number" in row.keys() else "") or "",
             username=row["username"] or "",
             encrypted_password=row["encrypted_password"] or "",
             encrypted_key_passphrase=(
@@ -294,4 +320,6 @@ class Database:
             sort_order=row["sort_order"] or 0,
             glow_color=normalize_color(row["glow_color"] or DEFAULT_GLOW_COLOR),
             key_file_path=(row["key_file_path"] if "key_file_path" in row.keys() else "") or "",
+            device_profile=(row["device_profile"] if "device_profile" in row.keys() else "") or "",
+            custom_commands=(row["custom_commands"] if "custom_commands" in row.keys() else "") or "",
         )

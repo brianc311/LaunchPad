@@ -1,8 +1,11 @@
 import customtkinter as ctk
+import queue
+import threading
+import time
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
-from launchpad.backup import read_backup_file, write_backup_file
+from launchpad.backup import BackupDecryptError, read_backup_file, write_backup_file
 from launchpad.branding import (
     clear_logo,
     get_app_name,
@@ -11,15 +14,27 @@ from launchpad.branding import (
     save_app_name,
     save_logo,
 )
-from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR
+from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, DEFAULT_SSH_PORT, APP_VERSION
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
 from launchpad.icons import ICON_CHOICES, resolve_icon
+from launchpad.storage_presets import (
+    DEVICE_PROFILES,
+    is_storage_profile,
+    preset_command_text,
+    preset_commands_for_profile,
+)
+from launchpad.ssh_test import probe_ssh_login_for_card, test_ssh_login
 from launchpad.ssh_utils import normalize_key_file_path
+from launchpad.ui.ssh_status import SSH_STATUS_INTERVAL_MS, create_ssh_status_led, set_ssh_status_led
 from launchpad.ui.colors import normalize_color
+from launchpad.ui.ssh_test_dialog import SshTestDialog
 from launchpad.ui.theme import get_theme
 
 
 class AdminView(ctk.CTkFrame):
+    _SECRET_ENTRY_KEYS = frozenset({"password", "key_passphrase"})
+    _MASK_CHAR = "•"
+
     def __init__(self, master, db, crypto_key, on_back) -> None:
         super().__init__(master, fg_color="transparent")
         self.db = db
@@ -28,6 +43,12 @@ class AdminView(ctk.CTkFrame):
         self.theme = get_theme(self.db.get_setting("theme", "dark"))
         self.editing_id: int | None = None
         self._authenticated = False
+        self._ssh_test_in_flight = False
+        self._ssh_test_dialog: SshTestDialog | None = None
+        self._ssh_test_poll_id: str | None = None
+        self._admin_ssh_leds: dict[int, ctk.CTkFrame] = {}
+        self._admin_ssh_status_in_flight: set[int] = set()
+        self._admin_ssh_status_timer: str | None = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -85,7 +106,7 @@ class AdminView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             header,
-            text="Admin Dashboard",
+            text=f"Admin Dashboard  ·  v{APP_VERSION}",
             font=ctk.CTkFont(size=24, weight="bold"),
             text_color=self.theme["accent"],
         ).grid(row=0, column=0, sticky="w")
@@ -343,6 +364,7 @@ class AdminView(ctk.CTkFrame):
 
         fields = [
             ("Name", "name"),
+            ("Serial Number", "serial_number"),
             ("Host", "host"),
             ("Port", "port"),
             ("Username", "username"),
@@ -360,18 +382,28 @@ class AdminView(ctk.CTkFrame):
             ctk.CTkLabel(scroll, text=label, text_color=self.theme["muted"]).grid(
                 row=row, column=0, padx=8, pady=6, sticky="w"
             )
-            show = "*" if key in ("password", "key_passphrase") else None
+            show = self._MASK_CHAR if key in self._SECRET_ENTRY_KEYS else None
             entry = ctk.CTkEntry(scroll, show=show)
             entry.grid(row=row, column=1, padx=8, pady=6, sticky="ew")
             self.entries[key] = entry
             if key == "key_file_path":
                 entry.configure(placeholder_text=str(Path.home() / ".ssh" / "wcelease_ed25519"))
+            if key == "serial_number":
+                entry.configure(
+                    placeholder_text="Device serial or Vultr instance ID (optional)"
+                )
+            if key == "port":
+                entry.configure(placeholder_text=str(DEFAULT_SSH_PORT))
             if key == "password":
                 entry.configure(
-                    placeholder_text="SSH/RDP login password — for SSH, used instead of keys when set"
+                    placeholder_text="SSH/RDP login password — for SSH, used instead of keys when set",
+                    show=self._MASK_CHAR,
                 )
             if key == "key_passphrase":
-                entry.configure(placeholder_text="Only if your private key file is encrypted")
+                entry.configure(
+                    placeholder_text="Only if your private key file is encrypted",
+                    show=self._MASK_CHAR,
+                )
 
         ctk.CTkLabel(
             scroll,
@@ -409,6 +441,83 @@ class AdminView(ctk.CTkFrame):
         self.icon_preview.grid(row=len(fields) + 2, column=2, padx=8, pady=6)
         self.icon_var.trace_add("write", self._update_icon_preview)
 
+        profile_row = len(fields) + 3
+        ctk.CTkLabel(scroll, text="Device Profile", text_color=self.theme["muted"]).grid(
+            row=profile_row, column=0, padx=8, pady=6, sticky="w"
+        )
+        self.device_profile_var = ctk.StringVar(value="")
+        profile_keys = list(DEVICE_PROFILES.keys())
+        profile_labels = [DEVICE_PROFILES[key] for key in profile_keys]
+        general = DEVICE_PROFILES[""]
+        sorted_labels = [general] + sorted(label for label in profile_labels if label != general)
+        sorted_keys = [""] + sorted(
+            (key for key in profile_keys if key),
+            key=lambda key: DEVICE_PROFILES[key].lower(),
+        )
+        self._device_profile_keys = sorted_keys
+        self.device_profile_menu = ctk.CTkComboBox(
+            scroll,
+            variable=self.device_profile_var,
+            values=sorted_labels,
+            command=self._on_device_profile_change,
+            width=320,
+            height=32,
+            dropdown_hover_color=self.theme["border"],
+        )
+        self.device_profile_menu.grid(row=profile_row, column=1, padx=8, pady=6, sticky="ew")
+        self._device_profile_label_to_key = dict(
+            zip(sorted_labels, sorted_keys, strict=True)
+        )
+        self.device_profile_var.set(general)
+
+        ctk.CTkLabel(
+            scroll,
+            text=f"{len(sorted_labels) - 1} device platforms (v{APP_VERSION}) — scroll list for Vultr",
+            text_color=self.theme["muted"],
+            font=ctk.CTkFont(size=11),
+        ).grid(row=profile_row, column=2, padx=8, pady=6, sticky="w")
+
+        commands_row = profile_row + 1
+        ctk.CTkLabel(scroll, text="SSH Commands", text_color=self.theme["muted"]).grid(
+            row=commands_row, column=0, padx=8, pady=(6, 0), sticky="nw"
+        )
+        commands_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        commands_frame.grid(row=commands_row, column=1, padx=8, pady=6, sticky="ew")
+        commands_frame.grid_columnconfigure(0, weight=1)
+
+        self.commands_box = ctk.CTkTextbox(
+            commands_frame,
+            height=180,
+            font=ctk.CTkFont(family="Consolas", size=11),
+        )
+        self.commands_box.grid(row=0, column=0, sticky="ew")
+        self.commands_box.insert(
+            "1.0",
+            "# One command per line. Optional label:\n"
+            "# Health - Nodes|svcinfo lsnode\n"
+            "# svcinfo lssystem\n",
+        )
+
+        ctk.CTkButton(
+            commands_frame,
+            text="Load Device Presets",
+            fg_color=self.theme["surface_alt"],
+            hover_color=self.theme["border"],
+            command=self._load_device_presets,
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+
+        ctk.CTkLabel(
+            scroll,
+            text=(
+                "Pick a device profile (storage, Vultr, etc.) and click Load Device Presets for health, "
+                "CPU, memory, and capacity commands — or paste your own CLI commands."
+            ),
+            text_color=self.theme["accent"],
+            font=ctk.CTkFont(size=11),
+            wraplength=420,
+            justify="left",
+        ).grid(row=commands_row + 1, column=0, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+
         actions = ctk.CTkFrame(form_panel, fg_color="transparent")
         actions.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
         actions.grid_columnconfigure((0, 1, 2), weight=1)
@@ -430,10 +539,214 @@ class AdminView(ctk.CTkFrame):
             command=self._delete_card,
         ).grid(row=0, column=2, padx=4, sticky="ew")
 
+        self.test_ssh_btn = ctk.CTkButton(
+            actions,
+            text="Test SSH Login",
+            fg_color=self.theme["surface_alt"],
+            hover_color=self.theme["border"],
+            border_width=1,
+            border_color=self.theme["accent"],
+            command=self._test_ssh_connection,
+        )
+        self.test_ssh_btn.grid(row=1, column=0, columnspan=3, padx=4, pady=(10, 0), sticky="ew")
+
         self.entries["glow_color"].insert(0, DEFAULT_GLOW_COLOR)
         self.entries["category"].insert(0, "General")
         self.entries["sort_order"].insert(0, "0")
+        self.entries["port"].insert(0, str(DEFAULT_SSH_PORT))
         self._set_form_mode(editing=False)
+
+    def _ssh_form_values(self) -> tuple[str, int, str, str, str, str, str]:
+        host = self.entries["host"].get().strip()
+        port_raw = self.entries["port"].get().strip()
+        port = int(port_raw) if port_raw else DEFAULT_SSH_PORT
+        username = self.entries["username"].get().strip()
+        password = self.entries["password"].get()
+        key_passphrase = self.entries["key_passphrase"].get()
+        key_path = normalize_key_file_path(self.entries["key_file_path"].get().strip())
+        ssh_key = self.entries["ssh_key"].get().strip()
+        return host, port, username, password, key_passphrase, key_path, ssh_key
+
+    def _test_ssh_connection(self) -> None:
+        if self._ssh_test_in_flight:
+            return
+        if self.type_var.get() != "ssh":
+            messagebox.showinfo("Admin", "SSH login test is only available for SSH cards.")
+            return
+
+        name = self.entries["name"].get().strip() or "SSH Card"
+        try:
+            host, port, username, password, key_passphrase, key_path, ssh_key = self._ssh_form_values()
+            if not host:
+                raise ValueError("Host is required.")
+            if not username:
+                raise ValueError("Username is required.")
+            if ssh_key and "PRIVATE KEY" not in ssh_key:
+                raise ValueError(
+                    "SSH Private Key must be your private key file, not the .pub public key."
+                )
+            key_path_raw = self.entries["key_file_path"].get().strip()
+            if key_path_raw and not Path(key_path).expanduser().exists() and not password and not ssh_key:
+                raise ValueError(f"SSH key file not found:\n{key_path}")
+            if not password and not key_path_raw and not ssh_key:
+                raise ValueError("Set SSH Password or an SSH key file / private key to test login.")
+        except ValueError as exc:
+            messagebox.showerror("Admin", str(exc))
+            return
+
+        port_label = f":{port}"
+        target_label = f"{username}@{host}{port_label}"
+        self._ssh_test_in_flight = True
+        self.test_ssh_btn.configure(state="disabled", text="Testing SSH...")
+        if hasattr(self, "admin_status"):
+            self.admin_status.configure(
+                text=f"Testing SSH login to {target_label}...",
+                text_color=self.theme["accent"],
+            )
+
+        result_queue: queue.Queue[tuple[bool, str]] = queue.Queue(maxsize=1)
+
+        def worker() -> None:
+            try:
+                summary = test_ssh_login(
+                    host,
+                    port,
+                    username,
+                    password=password,
+                    key_file_path=key_path,
+                    key_passphrase=key_passphrase,
+                    ssh_key_text=ssh_key,
+                )
+                result_queue.put((True, summary))
+            except Exception as exc:
+                result_queue.put((False, str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+        deadline = time.monotonic() + 35
+        self._poll_ssh_test_result(name, target_label, result_queue, deadline)
+
+    def _poll_ssh_test_result(
+        self,
+        card_name: str,
+        target_label: str,
+        result_queue: queue.Queue[tuple[bool, str]],
+        deadline: float,
+    ) -> None:
+        if self._ssh_test_poll_id:
+            try:
+                self.after_cancel(self._ssh_test_poll_id)
+            except ValueError:
+                pass
+            self._ssh_test_poll_id = None
+
+        try:
+            success, message = result_queue.get_nowait()
+            self._show_ssh_test_result(
+                card_name,
+                target_label,
+                success=success,
+                message=message,
+            )
+            return
+        except queue.Empty:
+            pass
+
+        if time.monotonic() >= deadline:
+            self._show_ssh_test_result(
+                card_name,
+                target_label,
+                success=False,
+                message=(
+                    "SSH test timed out after 35 seconds.\n\n"
+                    "Check host, port, firewall, username, and credentials.\n"
+                    "If the key is encrypted, enter the key passphrase."
+                ),
+            )
+            return
+
+        self._ssh_test_poll_id = self.after(
+            200,
+            lambda: self._poll_ssh_test_result(card_name, target_label, result_queue, deadline),
+        )
+
+    def _show_ssh_test_result(
+        self,
+        card_name: str,
+        target_label: str,
+        *,
+        success: bool,
+        message: str,
+    ) -> None:
+        self._ssh_test_in_flight = False
+        self.test_ssh_btn.configure(state="normal", text="Test SSH Login")
+        if hasattr(self, "admin_status"):
+            status = f"SSH test OK for {target_label}" if success else f"SSH test failed for {target_label}"
+            self.admin_status.configure(
+                text=status,
+                text_color=self.theme["accent"] if success else self.theme["danger"],
+            )
+
+        if self.editing_id and self.editing_id in self._admin_ssh_leds:
+            set_ssh_status_led(
+                self._admin_ssh_leds[self.editing_id],
+                "ok" if success else "fail",
+                message,
+            )
+
+        if self._ssh_test_dialog and self._ssh_test_dialog.winfo_exists():
+            self._ssh_test_dialog.destroy()
+
+        self._ssh_test_dialog = SshTestDialog(
+            self.winfo_toplevel(),
+            theme_name=self.db.get_setting("theme", "dark"),
+            card_name=card_name,
+            target_label=target_label,
+            success=success,
+            message=message,
+            on_return_admin=None,
+            on_return_dashboard=self.on_back,
+        )
+        self._ssh_test_dialog.focus_force()
+
+    def _on_device_profile_change(self, selected_label: str) -> None:
+        profile_key = self._device_profile_label_to_key.get(selected_label, "")
+        if is_storage_profile(profile_key):
+            self.commands_box.delete("1.0", "end")
+            self.commands_box.insert("1.0", preset_command_text(profile_key))
+
+    def _load_device_presets(self) -> None:
+        selected_label = self.device_profile_var.get()
+        profile_key = self._device_profile_label_to_key.get(selected_label, "")
+        if not is_storage_profile(profile_key):
+            messagebox.showinfo(
+                "Admin",
+                "Choose a storage device profile first (IBM, HPE, etc.).",
+            )
+            return
+        self.commands_box.delete("1.0", "end")
+        self.commands_box.insert("1.0", preset_command_text(profile_key))
+        if hasattr(self, "admin_status"):
+            self.admin_status.configure(
+                text=f"Loaded {len(preset_commands_for_profile(profile_key))} preset command(s) for {selected_label}.",
+                text_color=self.theme["accent"],
+            )
+
+    def _selected_device_profile_key(self) -> str:
+        return self._device_profile_label_to_key.get(self.device_profile_var.get(), "")
+
+    def _get_commands_text(self) -> str:
+        return self.commands_box.get("1.0", "end").strip()
+
+    def _set_commands_text(self, text: str) -> None:
+        self.commands_box.delete("1.0", "end")
+        if text:
+            self.commands_box.insert("1.0", text)
+        else:
+            self.commands_box.insert(
+                "1.0",
+                "# One command per line. Optional label:\n"
+                "# Health - Nodes|svcinfo lsnode\n",
+            )
 
     def _update_icon_preview(self, *_args) -> None:
         key = self.icon_var.get()
@@ -442,32 +755,45 @@ class AdminView(ctk.CTkFrame):
     def refresh_list(self) -> None:
         if not hasattr(self, "list_box"):
             return
+        if self._admin_ssh_status_timer:
+            self.after_cancel(self._admin_ssh_status_timer)
+            self._admin_ssh_status_timer = None
         for child in self.list_box.winfo_children():
             child.destroy()
+        self._admin_ssh_leds.clear()
         for card in self.db.list_cards():
             row = ctk.CTkFrame(self.list_box, fg_color=self.theme["surface_alt"], corner_radius=10)
             row.grid(sticky="ew", padx=4, pady=4)
-            row.grid_columnconfigure(1, weight=1)
+            row.grid_columnconfigure(2, weight=1)
+
+            if card.card_type == "ssh":
+                led = create_ssh_status_led(row, self.theme, state="unknown")
+                led.grid(row=0, column=0, padx=(10, 6), pady=8, sticky="w")
+                self._admin_ssh_leds[card.id] = led
+            else:
+                spacer = ctk.CTkFrame(row, width=10, height=10, fg_color="transparent")
+                spacer.grid(row=0, column=0, padx=(10, 6), pady=8, sticky="w")
+                spacer.grid_propagate(False)
 
             ctk.CTkLabel(
                 row,
                 text=resolve_icon(card.icon, card.card_type),
                 font=ctk.CTkFont(size=20),
                 width=32,
-            ).grid(row=0, column=0, padx=(10, 4), pady=8)
+            ).grid(row=0, column=1, padx=(0, 4), pady=8)
 
             ctk.CTkLabel(
                 row,
                 text=f"{card.name}  [{card.card_type.upper()}]",
                 text_color=self.theme["text"],
-            ).grid(row=0, column=1, padx=4, pady=8, sticky="w")
+            ).grid(row=0, column=2, padx=4, pady=8, sticky="w")
 
             ctk.CTkButton(
                 row,
                 text="Edit",
                 width=60,
                 command=lambda cid=card.id: self._load_card(cid),
-            ).grid(row=0, column=2, padx=(8, 4), pady=8)
+            ).grid(row=0, column=3, padx=(8, 4), pady=8)
 
             ctk.CTkButton(
                 row,
@@ -476,7 +802,59 @@ class AdminView(ctk.CTkFrame):
                 fg_color=self.theme["danger"],
                 hover_color="#B91C1C",
                 command=lambda cid=card.id, cname=card.name: self._delete_card_by_id(cid, cname),
-            ).grid(row=0, column=3, padx=(4, 8), pady=8)
+            ).grid(row=0, column=4, padx=(4, 8), pady=8)
+
+        self.after(300, self._probe_admin_ssh_status)
+        self._schedule_admin_ssh_status_checks()
+
+    def _schedule_admin_ssh_status_checks(self) -> None:
+        if self._admin_ssh_status_timer:
+            self.after_cancel(self._admin_ssh_status_timer)
+        self._admin_ssh_status_timer = self.after(
+            SSH_STATUS_INTERVAL_MS, self._on_admin_ssh_status_timer
+        )
+
+    def _on_admin_ssh_status_timer(self) -> None:
+        self._admin_ssh_status_timer = None
+        self._probe_admin_ssh_status()
+        self._schedule_admin_ssh_status_checks()
+
+    def _probe_admin_ssh_status(self) -> None:
+        for card_id, led in list(self._admin_ssh_leds.items()):
+            set_ssh_status_led(led, "checking")
+            if card_id in self._admin_ssh_status_in_flight:
+                continue
+            threading.Thread(
+                target=self._probe_admin_ssh_status_worker,
+                args=(card_id,),
+                daemon=True,
+            ).start()
+
+    def _probe_admin_ssh_status_worker(self, card_id: int) -> None:
+        if card_id in self._admin_ssh_status_in_flight:
+            return
+        self._admin_ssh_status_in_flight.add(card_id)
+        try:
+            card = self.db.get_card(card_id)
+            if not card or card.card_type != "ssh":
+                return
+            status, message = probe_ssh_login_for_card(card, self.crypto_key)
+            self.after(
+                0,
+                lambda cid=card_id, s=status, m=message: self._apply_admin_ssh_status(cid, s, m),
+            )
+        finally:
+            self._admin_ssh_status_in_flight.discard(card_id)
+
+    def _apply_admin_ssh_status(self, card_id: int, status: str, message: str = "") -> None:
+        set_ssh_status_led(self._admin_ssh_leds.get(card_id), status, message)
+
+    def _mask_secret_entries(self) -> None:
+        """CustomTkinter can drop show= after insert/configure — re-apply masking."""
+        for key in self._SECRET_ENTRY_KEYS:
+            entry = self.entries.get(key)
+            if entry:
+                entry.configure(show=self._MASK_CHAR)
 
     def _set_form_mode(self, *, editing: bool, name: str = "") -> None:
         if not hasattr(self, "form_mode_label"):
@@ -492,10 +870,16 @@ class AdminView(ctk.CTkFrame):
             entry.delete(0, "end")
         self.type_var.set("ssh")
         self.icon_var.set("terminal")
+        if hasattr(self, "device_profile_var"):
+            self.device_profile_var.set(DEVICE_PROFILES[""])
+        if hasattr(self, "commands_box"):
+            self._set_commands_text("")
         if defaults:
             self.entries["glow_color"].insert(0, DEFAULT_GLOW_COLOR)
             self.entries["category"].insert(0, "General")
             self.entries["sort_order"].insert(0, "0")
+            self.entries["port"].insert(0, str(DEFAULT_SSH_PORT))
+        self._mask_secret_entries()
         self._set_form_mode(editing=False)
 
     def _clear_form(self) -> None:
@@ -509,8 +893,13 @@ class AdminView(ctk.CTkFrame):
         self.editing_id = card_id
         self._set_form_mode(editing=True, name=card.name)
         self.entries["name"].insert(0, card.name)
+        self.entries["serial_number"].insert(0, getattr(card, "serial_number", "") or "")
         self.entries["host"].insert(0, card.host)
-        if card.port is not None:
+        if card.card_type == "ssh":
+            self.entries["port"].insert(
+                0, str(card.port if card.port is not None else DEFAULT_SSH_PORT)
+            )
+        elif card.port is not None:
             self.entries["port"].insert(0, str(card.port))
         self.entries["username"].insert(0, card.username)
         self.entries["url"].insert(0, card.url)
@@ -524,13 +913,56 @@ class AdminView(ctk.CTkFrame):
         self.icon_var.set(icon_key)
 
         if card.encrypted_password:
-            self.entries["password"].insert(0, decrypt_text(self.crypto_key, card.encrypted_password))
+            try:
+                self.entries["password"].insert(
+                    0, decrypt_text(self.crypto_key, card.encrypted_password)
+                )
+            except ValueError:
+                messagebox.showwarning(
+                    "Admin",
+                    "Could not decrypt the stored SSH/RDP password for this card.\n\n"
+                    "It may have been imported from a backup using a different vault password. "
+                    "Re-enter the password and click Save.",
+                )
         if card.encrypted_key_passphrase:
-            self.entries["key_passphrase"].insert(
-                0, decrypt_text(self.crypto_key, card.encrypted_key_passphrase)
-            )
+            try:
+                self.entries["key_passphrase"].insert(
+                    0, decrypt_text(self.crypto_key, card.encrypted_key_passphrase)
+                )
+            except ValueError:
+                messagebox.showwarning(
+                    "Admin",
+                    "Could not decrypt the stored key passphrase for this card.\n\n"
+                    "Re-enter the passphrase and click Save.",
+                )
         if card.encrypted_key:
-            self.entries["ssh_key"].insert(0, decrypt_text(self.crypto_key, card.encrypted_key))
+            try:
+                self.entries["ssh_key"].insert(0, decrypt_text(self.crypto_key, card.encrypted_key))
+            except ValueError:
+                messagebox.showwarning(
+                    "Admin",
+                    "Could not decrypt the stored private key for this card.\n\n"
+                    "Re-enter the key and click Save.",
+                )
+        self._mask_secret_entries()
+
+        if hasattr(self, "commands_box"):
+            self._set_commands_text(getattr(card, "custom_commands", "") or "")
+
+        profile_key = getattr(card, "device_profile", "") or ""
+        profile_label = DEVICE_PROFILES.get(profile_key, DEVICE_PROFILES[""])
+        if hasattr(self, "device_profile_var"):
+            self.device_profile_var.set(profile_label)
+        if hasattr(self, "admin_status") and is_storage_profile(profile_key):
+            self.admin_status.configure(
+                text=(
+                    f"Editing '{card.name}' — click Load Device Presets to load the latest "
+                    f"{profile_label} CLI commands, then Save."
+                ),
+                text_color=self.theme["accent"],
+            )
+        elif hasattr(self, "admin_status"):
+            self.admin_status.configure(text="", text_color=self.theme["muted"])
 
     def _save_card(self) -> None:
         name = self.entries["name"].get().strip()
@@ -548,7 +980,10 @@ class AdminView(ctk.CTkFrame):
             return
 
         port_raw = self.entries["port"].get().strip()
-        port = int(port_raw) if port_raw else None
+        if card_type == "ssh":
+            port = int(port_raw) if port_raw else DEFAULT_SSH_PORT
+        else:
+            port = int(port_raw) if port_raw else None
         sort_raw = self.entries["sort_order"].get().strip()
         sort_order = int(sort_raw) if sort_raw else 0
 
@@ -574,6 +1009,7 @@ class AdminView(ctk.CTkFrame):
             "card_type": card_type,
             "host": host,
             "port": port,
+            "serial_number": self.entries["serial_number"].get().strip(),
             "username": self.entries["username"].get().strip(),
             "encrypted_password": encrypt_text(self.crypto_key, password),
             "encrypted_key_passphrase": encrypt_text(self.crypto_key, key_passphrase),
@@ -584,6 +1020,8 @@ class AdminView(ctk.CTkFrame):
             "glow_color": normalize_color(self.entries["glow_color"].get().strip(), DEFAULT_GLOW_COLOR),
             "icon": self.icon_var.get(),
             "key_file_path": key_path,
+            "device_profile": self._selected_device_profile_key(),
+            "custom_commands": self._get_commands_text(),
         }
 
         if self.editing_id:
@@ -632,7 +1070,12 @@ class AdminView(ctk.CTkFrame):
             return
         try:
             cards = self.db.export_cards_raw()
-            write_backup_file(path, self.crypto_key, cards)
+            write_backup_file(
+                path,
+                self.crypto_key,
+                cards,
+                master_salt=self.db.get_setting("master_salt"),
+            )
             messagebox.showinfo("Admin", f"Backup exported to:\n{path}")
         except Exception as exc:
             messagebox.showerror("Admin", f"Export failed: {exc}")
@@ -661,11 +1104,70 @@ class AdminView(ctk.CTkFrame):
 
         try:
             cards = read_backup_file(path, self.crypto_key)
+        except BackupDecryptError:
+            cards = self._read_backup_with_export_password(path)
+            if cards is None:
+                return
+
+        try:
             count = self.db.import_cards(cards, mode=mode)
             self.refresh_list()
             messagebox.showinfo("Admin", f"Imported {count} card(s) successfully.")
         except Exception as exc:
             messagebox.showerror("Admin", f"Import failed: {exc}")
+
+    def _read_backup_with_export_password(self, path: str) -> list[dict] | None:
+        from launchpad.backup import read_backup_wrapper
+
+        try:
+            wrapper = read_backup_wrapper(Path(path).read_text(encoding="utf-8"))
+        except ValueError as exc:
+            messagebox.showerror("Admin", f"Import failed: {exc}")
+            return None
+
+        master_salt = wrapper.get("master_salt", "")
+        if not master_salt:
+            messagebox.showerror(
+                "Admin",
+                "This backup could not be decrypted with your current vault password.\n\n"
+                "It was exported from a different vault and does not include migration "
+                "information (older LaunchPad versions).\n\n"
+                "Fix options:\n"
+                "• Export a new backup from the original PC using LaunchPad v1.2.0+\n"
+                "• Or copy the entire folder:\n"
+                "  %APPDATA%\\LaunchPad",
+            )
+            return None
+
+        password = simpledialog.askstring(
+            "Backup Master Password",
+            "This backup was created on another vault.\n\n"
+            "Enter the master password that was used when the backup was exported.\n"
+            "Your cards will be re-encrypted for this vault after import.",
+            show="*",
+            parent=self.winfo_toplevel(),
+        )
+        if not password:
+            return None
+
+        try:
+            return read_backup_file(
+                path,
+                self.crypto_key,
+                backup_password=password,
+                backup_master_salt=master_salt,
+                vault_crypto_key=self.crypto_key,
+            )
+        except BackupDecryptError:
+            messagebox.showerror(
+                "Admin",
+                "That password did not open the backup.\n\n"
+                "Use the exact master password from the PC where you exported the backup.",
+            )
+            return None
+        except ValueError as exc:
+            messagebox.showerror("Admin", f"Import failed: {exc}")
+            return None
 
     def apply_theme(self, theme_name: str) -> None:
         self.theme = get_theme(theme_name)

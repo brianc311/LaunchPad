@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +33,43 @@ def _validate_private_key(key_path: Path) -> None:
             "Stored SSH key looks invalid. In Admin, paste your private key "
             "(id_ed25519), not the .pub file."
         )
+
+
+def _bundled_interactive_ssh_exe() -> Path:
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.extend(
+            [
+                Path(sys.executable).with_name("ssh_interactive.exe"),
+                Path(getattr(sys, "_MEIPASS", "")) / "ssh_interactive.exe",
+            ]
+        )
+    else:
+        root = Path(__file__).resolve().parents[1]
+        candidates.extend(
+            [
+                root / "dist_new" / "ssh_interactive.exe",
+                root / "dist" / "ssh_interactive.exe",
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "ssh_interactive.exe was not found. Rebuild LaunchPad to include the SSH shell helper."
+    )
+
+
+def _interactive_ssh_command(host: str, port: int, username: str, card_name: str) -> str:
+    try:
+        exe = _bundled_interactive_ssh_exe()
+        return f'"{exe}" "{host}" {port} "{username}" "{card_name}"'
+    except FileNotFoundError:
+        root = Path(__file__).resolve().parents[1]
+        script = root / "ssh_interactive_main.py"
+        return f'"{sys.executable}" "{script}" "{host}" {port} "{username}" "{card_name}"'
 
 
 def launch_ssh(
@@ -110,22 +148,31 @@ def launch_ssh(
                 ]
             )
     else:
-        askpass_cmd = write_askpass_helper(password)
+        write_askpass_helper(password)
         lines.extend(
             [
-                "echo Using stored SSH password (key auth skipped).",
+                "echo Using saved SSH password.",
                 "echo.",
-                f'set "SSH_ASKPASS={askpass_cmd}"',
-                "set SSH_ASKPASS_REQUIRE=force",
-                "set DISPLAY=launchpad",
-                (
-                    f'"{ssh_exe}" -o PubkeyAuthentication=no '
-                    f"-o PreferredAuthentications=password,keyboard-interactive "
-                    f"-o StrictHostKeyChecking=accept-new "
-                    f"-p {port_value} {user_host}"
-                ),
+                _interactive_ssh_command(host, port_value, username, card_name),
             ]
         )
+
+    if use_password_auth:
+        failure_tips = [
+            "  echo  Password login tips:",
+            "  echo  1. Confirm username and password in LaunchPad Admin",
+            "  echo  2. FlashSystem: use your CLI superuser password",
+            "  echo  3. Ensure SSH is enabled on the storage system",
+            "  echo  4. Rebuild LaunchPad if ssh_interactive.exe is missing",
+        ]
+    else:
+        failure_tips = [
+            "  echo  Key login tips:",
+            "  echo  1. Add your PUBLIC key to the server authorized_keys",
+            "  echo     Server path: /root/.ssh/authorized_keys",
+            "  echo  2. Confirm SSH Key File Path in LaunchPad Admin",
+            "  echo  3. Enter your key PASSPHRASE when prompted",
+        ]
 
     lines.extend(
         [
@@ -135,10 +182,7 @@ def launch_ssh(
             "  echo CONNECTION FAILED.",
             "  echo.",
             "  echo Common fixes:",
-            "  echo  1. Add your PUBLIC key to the server authorized_keys",
-            "  echo     Server path: /root/.ssh/authorized_keys",
-            "  echo  2. Confirm SSH Key File Path in LaunchPad Admin",
-            "  echo  3. Enter your key PASSPHRASE when prompted",
+            *failure_tips,
             "  echo.",
             ")",
             "pause",
@@ -163,7 +207,7 @@ def launch_ssh(
     if key_file and key_passphrase:
         return f"SSH window opened for {user_host} using stored key passphrase."
     if password:
-        return f"SSH window opened for {user_host} using stored password."
+        return f"SSH window opened for {user_host} using saved password."
     if key_file:
         return f"SSH window opened for {user_host}. Enter key passphrase if asked."
     return f"SSH window opened for {user_host}."

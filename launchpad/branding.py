@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from launchpad.config import APP_NAME, BRANDING_DIR, DEFAULT_APP_NAME
+from launchpad.config import APP_NAME, BRANDING_DIR, DEFAULT_APP_NAME, APP_VERSION
 
 SETTING_APP_NAME = "app_name"
 SETTING_LOGO_FILE = "logo_file"
@@ -87,6 +87,7 @@ def load_ctk_logo_large(db, max_height: int = 72):
 
 def window_title(db, suffix: str = "") -> str:
     name = get_app_name(db)
+    base = f"{name} v{APP_VERSION}"
     if suffix:
-        return f"{name} — {suffix}"
-    return name
+        return f"{base} — {suffix}"
+    return base

@@ -39,6 +39,7 @@ class LaunchPadApp(ctk.CTk):
     def _show_login(self) -> None:
         self._clear_view()
         self.crypto_key = None
+        self._wire_health_sync()
         self.current_view = LoginView(
             self,
             self.db,
@@ -51,7 +52,27 @@ class LaunchPadApp(ctk.CTk):
 
     def _on_unlock(self, crypto_key: bytes) -> None:
         self.crypto_key = crypto_key
+        self._wire_health_sync()
         self._show_dashboard()
+
+    def _wire_health_sync(self) -> None:
+        from launchpad.health_server import get_health_server
+        from launchpad.monitor import ensure_health_dashboard_registered
+
+        if not self.crypto_key:
+            get_health_server().set_sync_provider(None)
+            get_health_server().set_settings_backend(None, None)
+            get_health_server().clear_cards()
+            return
+
+        crypto_key = self.crypto_key
+        db = self.db
+
+        def provider() -> int:
+            return ensure_health_dashboard_registered(db, crypto_key)
+
+        get_health_server().set_sync_provider(provider)
+        get_health_server().set_settings_backend(db.get_setting, db.set_setting)
 
     def _show_dashboard(self) -> None:
         self._clear_view()

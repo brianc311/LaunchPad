@@ -35,7 +35,7 @@ You do **not** need Python on the other PC. Copy the packaged app:
 
 1. Old PC: Admin → **Export Backup** (`.lpb` file)
 2. New PC: first-run setup (new master password), then Admin → **Import Backup**
-3. Use the **same master password** as when you exported, or import will fail
+3. Use the **master password from the PC where you exported** (you may be prompted if this is a new vault)
 
 Your vault database lives at `%APPDATA%\LaunchPad\` — only copy that folder if you want to move the exact same vault **and** you know what you are doing. Export/import backup is safer.
 
@@ -90,6 +90,6 @@ Then copy the `LaunchPad-Install` folder to the other computer and run `install.
 
 **Reorder:** Drag the ⋮⋮ handle on a card (visible when viewing All categories with no search filter).
 
-**Backup:** Admin → Export Backup saves an encrypted `.lpb` file. Import requires the same master password used when exporting.
+**Backup:** Admin → Export Backup saves an encrypted `.lpb` file. Import on a new PC prompts for the export master password when needed and re-encrypts cards for your new vault.
 
-**Note:** When an SSH Password is set in Admin, LaunchPad uses password login and skips keys. SSH stats still require a key.
+**Note:** When an SSH Password is set in Admin, LaunchPad uses password login and skips keys. For **IBM FlashSystem 5200/7200/9500**, pick the device profile in Admin, load presets (or paste `svcinfo` commands), then use **Health Dashboard** to run them one by one in the browser.

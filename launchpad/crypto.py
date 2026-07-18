@@ -46,4 +46,8 @@ def decrypt_text(key: bytes, ciphertext: str) -> str:
     try:
         return Fernet(key).decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except InvalidToken as exc:
-        raise ValueError("Unable to decrypt stored credentials.") from exc
+        raise ValueError(
+            "Unable to decrypt stored credentials. "
+            "If you restored from backup, re-import using the export master password, "
+            "or re-enter credentials in Admin and save the card."
+        ) from exc

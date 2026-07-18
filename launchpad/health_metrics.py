@@ -7,6 +7,7 @@ from typing import Any
 
 from launchpad.ssh_keys import secure_private_key_file
 from launchpad.ssh_launcher import _log, _ssh_executable
+from launchpad.ssh_paramiko import run_ssh_command
 from launchpad.ssh_passphrase import askpass_env
 from launchpad.subprocess_utils import run_hidden
 
@@ -103,34 +104,54 @@ def run_remote_metrics(
     host: str,
     port: int | None,
     username: str,
-    key_path: str,
+    key_path: str = "",
     key_passphrase: str = "",
+    password: str = "",
 ) -> dict[str, Any]:
-    secure_private_key_file(Path(key_path))
+    use_password_auth = bool(password)
+    if use_password_auth:
+        key_path = ""
+    elif key_path:
+        secure_private_key_file(Path(key_path))
+
+    if not key_path and not password:
+        raise ValueError("SSH password or key is required for health metrics.")
+
     encoded = base64.b64encode(REMOTE_METRICS_SCRIPT.encode("utf-8")).decode("ascii")
     remote_cmd = f"echo {encoded} | base64 -d | python3"
 
-    ssh = _ssh_executable()
     target = f"{username}@{host}" if username else host
+    _log(f"Health check SSH: {target} ({'password' if use_password_auth else 'key'})")
+
+    if use_password_auth:
+        try:
+            output = run_ssh_command(host, port, username, password, remote_cmd, timeout=25)
+        except ValueError as exc:
+            raise ValueError(f"Could not fetch health metrics:\n{exc}") from exc
+        try:
+            return json.loads(output.strip())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid metrics response from server:\n{output[:300]}") from exc
+
+    ssh = _ssh_executable()
     args = [
         ssh,
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=12",
         "-i",
         key_path,
         "-o",
         "IdentitiesOnly=yes",
         "-o",
         "BatchMode=yes" if not key_passphrase else "BatchMode=no",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "ConnectTimeout=12",
     ]
+    env = {**os.environ, **askpass_env(key_passphrase)}
     if port:
         args.extend(["-p", str(port)])
     args.extend([target, remote_cmd])
 
-    _log(f"Health check SSH: {target}")
-    env = {**os.environ, **askpass_env(key_passphrase)}
     result = run_hidden(args, capture_output=True, text=True, timeout=25, check=False, env=env)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "Unknown SSH error").strip()

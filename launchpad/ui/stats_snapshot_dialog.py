@@ -26,7 +26,8 @@ class StatsSnapshotDialog(ctk.CTkToplevel):
 
         self.title(f"{card_name} — Stats")
         self.configure(fg_color=self.theme["bg"])
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(520, 320)
         self.attributes("-topmost", True)
         self.after(200, self.lift)
 
@@ -67,7 +68,7 @@ class StatsSnapshotDialog(ctk.CTkToplevel):
         stats_box.grid_columnconfigure(0, weight=1)
         stats_box.grid_columnconfigure(1, weight=1)
 
-        stat_font = ctk.CTkFont(family="Consolas", size=13)
+        stat_font = ctk.CTkFont(family="Consolas", size=12)
         self.stats_left = ctk.CTkLabel(
             stats_box,
             text="",
@@ -113,7 +114,7 @@ class StatsSnapshotDialog(ctk.CTkToplevel):
         ).grid(row=0, column=1, padx=(6, 0), sticky="ew")
 
         self.update_idletasks()
-        self.geometry(f"{max(460, self.winfo_reqwidth())}x{self.winfo_reqheight()}")
+        self.geometry(f"{max(640, self.winfo_reqwidth())}x{max(420, self.winfo_reqheight())}")
 
     def _render_stats(self) -> None:
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

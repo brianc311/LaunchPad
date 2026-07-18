@@ -1,5 +1,7 @@
 from typing import Any
 
+from launchpad.flashsystem_parse import summarize_command_output
+
 
 def _pct(used: float, total: float) -> float:
     if total <= 0:
@@ -31,6 +33,21 @@ def enrich_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     enriched["disk_used_pct"] = _pct(disk_used, disk_total)
     enriched["disk_total_label"] = _gb(disk_total)
     return enriched
+
+
+def command_results_columns(results: list[dict]) -> tuple[list[str], list[str]]:
+    lines: list[str] = []
+    for item in results:
+        label = item.get("label", "Command")
+        if item.get("error"):
+            lines.append(f"{label}: FAIL")
+            continue
+        output = (item.get("output") or "").strip()
+        command = item.get("command", "")
+        summary = summarize_command_output(label, command, output)
+        lines.append(f"{label}:\n  {summary}")
+    midpoint = (len(lines) + 1) // 2
+    return lines[:midpoint], lines[midpoint:]
 
 
 def card_stats_columns(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:

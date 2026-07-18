@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "LaunchPad"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.6.19"
 DEFAULT_APP_NAME = APP_NAME
 
 APP_DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
@@ -12,5 +12,6 @@ BRANDING_DIR = APP_DATA_DIR / "branding"
 
 DEFAULT_GLOW_COLOR = "#FF6B00"
 DEFAULT_CATEGORY = "General"
+DEFAULT_SSH_PORT = 22
 
 CARD_TYPES = ("ssh", "rdp", "web")

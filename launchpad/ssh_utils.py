@@ -1,7 +1,9 @@
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from launchpad.config import TEMP_DIR
+from launchpad.command_format import resolve_card_commands
 from launchpad.crypto import decrypt_text
 from launchpad.database import Card
 from launchpad.ssh_keys import write_secure_private_key
@@ -52,3 +54,64 @@ def resolve_ssh_key(card: Card, crypto_key: bytes) -> str:
         return str(key_path)
 
     return ""
+
+
+@dataclass(frozen=True)
+class SshMetricsAuth:
+    password: str
+    key_path: str
+    key_passphrase: str
+
+    @property
+    def is_valid(self) -> bool:
+        return bool(self.password or self.key_path)
+
+
+def resolve_ssh_metrics_auth(card: Card, crypto_key: bytes) -> SshMetricsAuth:
+    try:
+        password = decrypt_text(crypto_key, card.encrypted_password)
+    except ValueError:
+        password = ""
+    try:
+        key_passphrase = decrypt_text(crypto_key, card.encrypted_key_passphrase)
+    except ValueError:
+        key_passphrase = ""
+
+    if password:
+        return SshMetricsAuth(password=password, key_path="", key_passphrase="")
+
+    try:
+        key_path = resolve_ssh_key(card, crypto_key)
+    except OSError:
+        key_path = ""
+
+    return SshMetricsAuth(password="", key_path=key_path, key_passphrase=key_passphrase)
+
+
+def ssh_stats_prereq_message(card: Card, crypto_key: bytes) -> str | None:
+    if resolve_card_commands(
+        card.device_profile,
+        card.custom_commands,
+        instance_id=getattr(card, "serial_number", "") or "",
+    ):
+        auth = resolve_ssh_metrics_auth(card, crypto_key)
+        if not auth.is_valid:
+            return "Add SSH Password or key\nin Admin to view stats"
+        return None
+
+    auth = resolve_ssh_metrics_auth(card, crypto_key)
+    if not auth.is_valid:
+        return "Add SSH Password or key\nin Admin to view stats"
+
+    if not auth.key_path:
+        return None
+
+    try:
+        key_content = Path(auth.key_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"Cannot read SSH key:\n{exc}"
+
+    if "ENCRYPTED" in key_content and not auth.key_passphrase:
+        return "Add SSH key passphrase\nin Admin to view stats"
+
+    return None
