@@ -9,8 +9,12 @@ from launchpad.contingency_groups_data import (
     normalize_groups,
     new_group_id,
     seed_contingency_groups,
+    snap_pairs,
     snap_volume_name,
+    source_volumes,
     upsert_group,
+    validate_wizard_step1,
+    validate_wizard_step2,
 )
 
 
@@ -135,6 +139,40 @@ def test_seeds_include_snap_rows():
     )
     houston = seeds["houston-tx"]
     assert any(v["name"].endswith("_snap") for v in houston["volumes"])
+
+
+def test_source_volumes_exclude_snaps():
+    hartford = next(g for g in seed_contingency_groups() if g["id"] == "hartford-ct")
+    sources = source_volumes(hartford)
+    assert sources
+    assert all(not str(v["name"]).endswith("_snap") for v in sources)
+    assert all(str(v.get("role") or "source") != "snap" for v in sources)
+
+
+def test_snap_pairs_link_source_to_target():
+    hartford = next(g for g in seed_contingency_groups() if g["id"] == "hartford-ct")
+    pairs = snap_pairs(hartford)
+    assert pairs
+    for pair in pairs:
+        assert pair["target"] is not None
+        assert pair["target"]["name"] == f"{pair['source']['name']}_snap"
+
+
+def test_validate_step1_requires_pool_capacity():
+    group = {
+        "volumes": [{"name": "V1", "role": "source", "pool": "", "capacity": ""}],
+        "maps": [],
+    }
+    warnings = validate_wizard_step1(group)
+    assert warnings
+
+
+def test_validate_step2_requires_targets():
+    group = {
+        "volumes": [{"name": "V1", "role": "source", "pool": "P0", "capacity": "4.00 TiB"}],
+        "maps": [],
+    }
+    assert validate_wizard_step2(group)
 
 
 def test_filter_fc_card_keeps_mapping_when_host_matches_by_wwpn_only():

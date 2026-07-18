@@ -235,6 +235,100 @@ def generate_snap_rows(group: dict) -> dict:
     return normalize_group(g) or g
 
 
+def is_snap_volume(vol: dict) -> bool:
+    if not isinstance(vol, dict):
+        return False
+    role = str(vol.get("role") or "source").lower()
+    name = str(vol.get("name") or "")
+    return role == "snap" or name.endswith(SNAP_SUFFIX)
+
+
+def source_volumes(group: dict) -> list[dict]:
+    out: list[dict] = []
+    for vol in group.get("volumes") or []:
+        if isinstance(vol, dict) and not is_snap_volume(vol):
+            out.append(vol)
+    return out
+
+
+def source_maps_for_volume(group: dict, volume_name: str) -> list[dict]:
+    target = str(volume_name or "").strip()
+    if not target:
+        return []
+    out: list[dict] = []
+    for mapping in group.get("maps") or []:
+        if not isinstance(mapping, dict):
+            continue
+        if str(mapping.get("volume") or "") != target:
+            continue
+        if str(mapping.get("role") or "source").lower() == "snap":
+            continue
+        out.append(mapping)
+    return out
+
+
+def snap_pairs(group: dict) -> list[dict]:
+    pairs: list[dict] = []
+    volumes = group.get("volumes") or []
+    maps = group.get("maps") or []
+    by_name = {
+        str(vol.get("name") or ""): vol
+        for vol in volumes
+        if isinstance(vol, dict) and str(vol.get("name") or "")
+    }
+    for source in source_volumes(group):
+        source_name = str(source.get("name") or "")
+        target_name = snap_volume_name(source_name)
+        target = by_name.get(target_name)
+        snap_maps = [
+            mapping
+            for mapping in maps
+            if isinstance(mapping, dict)
+            and str(mapping.get("volume") or "") == target_name
+            and str(mapping.get("role") or "").lower() == "snap"
+        ]
+        pairs.append({"source": source, "target": target, "maps": snap_maps})
+    return pairs
+
+
+def validate_wizard_step1(group: dict) -> list[str]:
+    warnings: list[str] = []
+    sources = source_volumes(group)
+    if not sources:
+        warnings.append("At least one source volume is required")
+        return warnings
+    for vol in sources:
+        name = str(vol.get("name") or "").strip()
+        if not name:
+            warnings.append("Source volume name is required")
+        pool = str(vol.get("pool") or "").strip()
+        if not pool:
+            warnings.append(f"Missing pool for source volume {name or '(unnamed)'}")
+        capacity = str(vol.get("capacity") or "").strip()
+        if not capacity:
+            warnings.append(
+                f"Missing or invalid size/capacity for source volume {name or '(unnamed)'}"
+            )
+    return warnings
+
+
+def validate_wizard_step2(group: dict) -> list[str]:
+    warnings: list[str] = []
+    volumes = group.get("volumes") or []
+    by_name = {
+        str(vol.get("name") or ""): vol
+        for vol in volumes
+        if isinstance(vol, dict) and str(vol.get("name") or "")
+    }
+    for source in source_volumes(group):
+        source_name = str(source.get("name") or "")
+        target_name = snap_volume_name(source_name)
+        target = by_name.get(target_name)
+        if target is None or not is_snap_volume(target):
+            warnings.append(f"Missing target volume for source {source_name}")
+    return warnings
+
+
 def _normalize_wwpn(value: str) -> str:
     return re.sub(r"[\s:]", "", str(value or "")).upper()
 

@@ -78,6 +78,95 @@ def test_fc_wwpn_filter_mappings_match_host_wwpns():
     assert "mapping.host_wwpns || \"\"" in FC_WWPN_REPORT_HTML
 
 
+def test_contingency_groups_snap_modal_stays_hidden_by_default():
+    assert 'id="snap-modal-backdrop" class="modal-backdrop" hidden>' in CONTINGENCY_GROUPS_HTML
+    assert ".modal-backdrop[hidden] { display:none !important; }" in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_page_exposes_wizard_shell():
+    for text in (
+        "1 Source",
+        "2 Target",
+        "3 Create & Map",
+        "wizard-step-1",
+        "advanced-panel",
+        "Advanced edit",
+        "wizardStep",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_wizard_exposes_source_only_editor():
+    for text in (
+        "Only source volumes are shown here.",
+        "Use the Storage hint above",
+        'id="wizard-source-volumes-body"',
+        'id="wizard-source-maps-body"',
+        'id="add-source-volume-btn"',
+        "Add source volume",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_wizard_exposes_source_target_pairs():
+    assert "<th>Source</th><th>Target</th><th>Pool</th><th>Capacity</th>" in (
+        CONTINGENCY_GROUPS_HTML
+    )
+    assert 'id="wizard-snap-pairs-body"' in CONTINGENCY_GROUPS_HTML
+    assert "source_volume" in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_wizard_places_snap_actions_in_their_steps():
+    hero = CONTINGENCY_GROUPS_HTML.split('<section class="hero">', 1)[1].split(
+        "</section>", 1
+    )[0]
+    step_two = CONTINGENCY_GROUPS_HTML.split('id="wizard-step-2"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    step_three = CONTINGENCY_GROUPS_HTML.split('id="wizard-step-3"', 1)[1].split(
+        "</section>", 1
+    )[0]
+
+    assert "generate-snaps-btn" not in hero
+    assert "snap-preview-btn" not in hero
+    assert "snap-create-btn" not in hero
+    assert 'id="generate-snaps-btn"' in step_two
+    assert 'id="snap-preview-btn"' in step_three
+    assert 'id="snap-create-btn"' in step_three
+
+
+def test_contingency_groups_wizard_exposes_create_and_map_plan():
+    for text in (
+        "Create target volumes",
+        "Create FlashCopy (source → target)",
+        "Start FlashCopy",
+        "Map targets to hosts (same SCSI as source)",
+        "<th>Source</th><th>Target</th><th>Hosts / SCSI</th>",
+        'id="wizard-create-pairs-body"',
+        "Preview will mark each operation as create or skip",
+        'id="wizard-storage-warning"',
+        "Storage hint is required before Preview or Run Create.",
+        "renderWizardCreateStep",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_wizard_validates_and_generates_before_step_two():
+    for text in (
+        "At least one source volume is required",
+        "Source volume name is required",
+        "Missing pool for source volume",
+        "Missing target volume for source",
+        "await generateSnapRows()",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+
+
+def test_delete_group_resets_wizard_before_render():
+    reset = "wizardStep = 1;\n      showWizardErrors([]);\n      render();"
+    assert reset in CONTINGENCY_GROUPS_HTML
+
+
 def test_health_server_exposes_contingency_groups_url():
     server = HealthServer()
 
