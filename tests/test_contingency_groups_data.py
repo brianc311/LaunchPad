@@ -2,12 +2,14 @@ from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
     filter_fc_card,
+    generate_snap_rows,
     group_matches_host,
     group_matches_volume,
     normalize_group,
     normalize_groups,
     new_group_id,
     seed_contingency_groups,
+    snap_volume_name,
     upsert_group,
 )
 
@@ -22,14 +24,18 @@ def test_seeds_include_three_sites():
     assert ids == {"hartford-ct", "houston-tx", "windsor"}
     hartford = next(g for g in seeds if g["id"] == "hartford-ct")
     assert len(hartford["hosts"]) == 3
-    assert len(hartford["volumes"]) == 3
+    hartford_sources = [v for v in hartford["volumes"] if v.get("role") != "snap"]
+    assert len(hartford_sources) == 3
+    assert len(hartford["volumes"]) == 6
     assert any(m["scsi_id"] == "0" for m in hartford["maps"])
     houston = next(g for g in seeds if g["id"] == "houston-tx")
     assert {h["name"] for h in houston["hosts"]} == {
         "pen-houesx-vm03",
         "pen-houesx-vm04",
     }
-    assert len(houston["volumes"]) == 4
+    assert len(houston["volumes"]) == 8
+    houston_sources = [v for v in houston["volumes"] if v.get("role") != "snap"]
+    assert len(houston_sources) == 4
     assert all(volume["capacity"] == "" for volume in houston["volumes"])
     assert all(volume["pool"] == "" for volume in houston["volumes"])
     windsor = next(g for g in seeds if g["id"] == "windsor")
@@ -88,6 +94,47 @@ def test_new_group_id_unique():
     gid = new_group_id("Houston, TX", existing)
     assert gid != "houston-tx"
     assert gid
+
+
+def test_snap_volume_name():
+    assert snap_volume_name("HRDC_ESXI_DS01") == "HRDC_ESXI_DS01_snap"
+    assert snap_volume_name("HRDC_ESXI_DS01_snap") == "HRDC_ESXI_DS01_snap"
+
+
+def test_generate_snap_rows_idempotent():
+    group = normalize_group(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "hosts": [{"name": "h1"}],
+            "volumes": [{"name": "VOL1", "pool": "P0", "capacity": "4.00 TiB"}],
+            "maps": [{"volume": "VOL1", "host": "h1", "scsi_id": "0"}],
+        }
+    )
+    once = generate_snap_rows(group)
+    twice = generate_snap_rows(once)
+    snaps = [v for v in once["volumes"] if v.get("role") == "snap"]
+    assert len(snaps) == 1
+    assert snaps[0]["name"] == "VOL1_snap"
+    assert snaps[0]["source_volume"] == "VOL1"
+    assert snaps[0]["pool"] == "P0"
+    assert len([v for v in twice["volumes"] if v.get("role") == "snap"]) == 1
+    snap_maps = [m for m in once["maps"] if m.get("role") == "snap"]
+    assert snap_maps == [
+        {"volume": "VOL1_snap", "host": "h1", "scsi_id": "0", "role": "snap"}
+    ]
+
+
+def test_seeds_include_snap_rows():
+    seeds = {g["id"]: g for g in seed_contingency_groups()}
+    hartford = seeds["hartford-ct"]
+    assert any(v["name"] == "HRDC_ESXI_DS01_snap" for v in hartford["volumes"])
+    assert any(
+        m.get("role") == "snap" and m["volume"] == "HRDC_ESXI_DS01_snap"
+        for m in hartford["maps"]
+    )
+    houston = seeds["houston-tx"]
+    assert any(v["name"].endswith("_snap") for v in houston["volumes"])
 
 
 def test_filter_fc_card_keeps_mapping_when_host_matches_by_wwpn_only():

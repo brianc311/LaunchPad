@@ -2,7 +2,10 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-from launchpad.contingency_groups_data import seed_contingency_groups
+from launchpad.contingency_groups_data import (
+    SNAP_SUFFIX,
+    seed_contingency_groups,
+)
 from launchpad.contingency_groups_export import (
     build_contingency_groups_workbook,
     workbook_to_bytes,
@@ -17,6 +20,19 @@ def _windsor_group() -> dict:
         if group["id"] == "windsor":
             return group
     raise AssertionError("windsor seed missing")
+
+
+def _column_values(ws, header: str) -> list[str]:
+    col_index = None
+    for col in range(1, ws.max_column + 1):
+        if ws.cell(row=1, column=col).value == header:
+            col_index = col
+            break
+    assert col_index is not None, f"missing column {header!r}"
+    return [
+        str(ws.cell(row=r, column=col_index).value or "")
+        for r in range(2, ws.max_row + 1)
+    ]
 
 
 def _all_cell_texts(wb) -> list[str]:
@@ -68,6 +84,33 @@ def test_workbook_has_four_sheets_with_windsor_wwpn_and_uid():
         for r in range(2, volumes_ws.max_row + 1)
     ]
     assert WINDSOR_UID in uid_cells
+
+
+def test_seeded_groups_export_snap_role_on_volumes_and_maps():
+    wb = build_contingency_groups_workbook(seed_contingency_groups())
+
+    volumes_ws = wb["Volumes"]
+    roles = _column_values(volumes_ws, "Role")
+    source_volumes = _column_values(volumes_ws, "Source Volume")
+    volume_names = _column_values(volumes_ws, "Volume Name")
+
+    assert "snap" in roles
+    assert "source" in roles
+    snap_rows = [
+        (name, role, source)
+        for name, role, source in zip(volume_names, roles, source_volumes)
+        if role == "snap"
+    ]
+    assert snap_rows
+    for name, role, source in snap_rows:
+        assert name.endswith(SNAP_SUFFIX)
+        assert role == "snap"
+        assert source and not source.endswith(SNAP_SUFFIX)
+
+    maps_ws = wb["Maps"]
+    map_roles = _column_values(maps_ws, "Role")
+    assert "snap" in map_roles
+    assert "source" in map_roles
 
 
 def test_workbook_to_bytes_round_trip():

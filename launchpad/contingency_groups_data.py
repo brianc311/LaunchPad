@@ -8,6 +8,8 @@ from typing import Any
 
 CONTINGENCY_GROUPS_SETTING = "contingency_groups"
 
+SNAP_SUFFIX = "_snap"
+
 _SEED_UPDATED_AT = "2026-07-17T00:00:00Z"
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -35,6 +37,8 @@ def _volume(
     pool: str = "",
     uid: str = "",
     capacity: str = "4.00 TiB",
+    role: str = "source",
+    source_volume: str = "",
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -42,6 +46,8 @@ def _volume(
         "pool": pool,
         "uid": uid,
         "protocol": "SCSI",
+        "role": role,
+        "source_volume": source_volume,
     }
 
 
@@ -49,8 +55,13 @@ def _maps_all_hosts(
     volume: str,
     hosts: list[str],
     scsi_id: str,
+    *,
+    role: str = "source",
 ) -> list[dict[str, str]]:
-    return [{"volume": volume, "host": host, "scsi_id": scsi_id} for host in hosts]
+    return [
+        {"volume": volume, "host": host, "scsi_id": scsi_id, "role": role}
+        for host in hosts
+    ]
 
 
 def _hartford_ct() -> dict[str, Any]:
@@ -148,7 +159,80 @@ def _windsor() -> dict[str, Any]:
 
 
 def seed_contingency_groups() -> list[dict]:
-    return [_hartford_ct(), _houston_tx(), _windsor()]
+    return [
+        generate_snap_rows(_hartford_ct()),
+        generate_snap_rows(_houston_tx()),
+        generate_snap_rows(_windsor()),
+    ]
+
+
+def snap_volume_name(source_name: str) -> str:
+    name = str(source_name or "").strip()
+    if name.endswith(SNAP_SUFFIX):
+        return name
+    return f"{name}{SNAP_SUFFIX}"
+
+
+def generate_snap_rows(group: dict) -> dict:
+    g = normalize_group(group) or {
+        "id": "",
+        "name": "",
+        "location": "",
+        "storage_hint": "",
+        "notes": "",
+        "updated_at": "",
+        "hosts": [],
+        "volumes": [],
+        "maps": [],
+    }
+    volumes = list(g["volumes"])
+    maps = list(g["maps"])
+    by_name = {str(v.get("name") or ""): v for v in volumes}
+    for vol in list(volumes):
+        role = str(vol.get("role") or "source").lower()
+        name = str(vol.get("name") or "")
+        if role == "snap" or name.endswith(SNAP_SUFFIX):
+            continue
+        target = snap_volume_name(name)
+        if target not in by_name:
+            snap = {
+                "name": target,
+                "capacity": vol.get("capacity") or "",
+                "pool": vol.get("pool") or "",
+                "uid": "",
+                "protocol": vol.get("protocol") or "SCSI",
+                "role": "snap",
+                "source_volume": name,
+            }
+            volumes.append(snap)
+            by_name[target] = snap
+        source_maps = [
+            m
+            for m in maps
+            if str(m.get("volume") or "") == name
+            and str(m.get("role") or "source") != "snap"
+        ]
+        existing_snap_map_keys = {
+            (str(m.get("volume")), str(m.get("host")), str(m.get("scsi_id")))
+            for m in maps
+            if str(m.get("role") or "") == "snap"
+        }
+        for m in source_maps:
+            key = (target, str(m.get("host") or ""), str(m.get("scsi_id") or ""))
+            if key in existing_snap_map_keys:
+                continue
+            maps.append(
+                {
+                    "volume": target,
+                    "host": str(m.get("host") or ""),
+                    "scsi_id": str(m.get("scsi_id") or ""),
+                    "role": "snap",
+                }
+            )
+            existing_snap_map_keys.add(key)
+    g["volumes"] = volumes
+    g["maps"] = maps
+    return normalize_group(g) or g
 
 
 def _normalize_wwpn(value: str) -> str:
@@ -192,12 +276,17 @@ def _normalize_volume(raw: Any) -> dict[str, Any] | None:
     name = str(raw.get("name") or "").strip()
     if not name:
         return None
+    role = str(raw.get("role") or "source").strip().lower()
+    if role not in ("source", "snap"):
+        role = "source"
     return {
         "name": name,
         "capacity": str(raw.get("capacity") or "").strip(),
         "pool": str(raw.get("pool") or "").strip(),
         "uid": str(raw.get("uid") or "").strip(),
         "protocol": str(raw.get("protocol") or "SCSI").strip() or "SCSI",
+        "role": role,
+        "source_volume": str(raw.get("source_volume") or "").strip(),
     }
 
 
@@ -210,7 +299,10 @@ def _normalize_map(raw: Any) -> dict[str, str] | None:
         return None
     scsi_raw = raw.get("scsi_id")
     scsi_id = str(scsi_raw).strip() if scsi_raw is not None else ""
-    return {"volume": volume, "host": host, "scsi_id": scsi_id}
+    role = str(raw.get("role") or "source").strip().lower()
+    if role not in ("source", "snap"):
+        role = "source"
+    return {"volume": volume, "host": host, "scsi_id": scsi_id, "role": role}
 
 
 def normalize_group(raw: Any) -> dict | None:

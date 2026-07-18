@@ -15,12 +15,20 @@ from launchpad.config import APP_VERSION
 from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
+    generate_snap_rows,
     normalize_group,
     normalize_groups,
     seed_contingency_groups,
     upsert_group,
 )
 from launchpad.contingency_groups import CONTINGENCY_GROUPS_HTML, CONTINGENCY_GROUPS_PATH
+from launchpad.contingency_snap_create import (
+    SnapStep,
+    build_snap_steps,
+    collect_inventory,
+    resolve_card_by_storage_hint,
+    run_snap_steps,
+)
 from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
 from launchpad.flashsystem_fc import analyze_fc_inventory
 from launchpad.flashsystem_health import analyze_health
@@ -31,7 +39,7 @@ from launchpad.snapshot_schedule_overrides import (
     normalize_override,
     normalize_overrides_map,
 )
-from launchpad.ssh_commands import run_remote_command_suite
+from launchpad.ssh_commands import run_remote_command_suite, run_remote_ssh_command
 from launchpad.ssh_launcher import _log
 from launchpad.storage_presets import DEVICE_PROFILES
 
@@ -1966,6 +1974,43 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"groups": groups, "persisted": True})
             return
+        if path in {
+            "/api/contingency-groups/generate-snaps",
+            "/api/contingency-groups/snap-preview",
+            "/api/contingency-groups/snap-create",
+        }:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict) or not payload.get("group_id"):
+                self._send_json(
+                    {"ok": False, "error": "group_id required"},
+                    status=400,
+                )
+                return
+            group_id = str(payload["group_id"])
+            try:
+                if path == "/api/contingency-groups/generate-snaps":
+                    result = server.generate_contingency_snaps(group_id)
+                elif path == "/api/contingency-groups/snap-preview":
+                    result = server.preview_contingency_snaps(group_id)
+                else:
+                    result = server.create_contingency_snaps(
+                        group_id,
+                        confirm=payload.get("confirm") is True,
+                    )
+            except RuntimeError as exc:
+                self._send_json(
+                    {"ok": False, "error": str(exc), "warnings": [], "log": []},
+                    status=503,
+                )
+                return
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
         if not path.startswith("/api/refresh/"):
             self.send_error(404)
             return
@@ -2078,6 +2123,138 @@ class HealthServer:
         return self.set_contingency_groups(
             delete_group(self.get_contingency_groups(), group_id)
         )
+
+    def find_card_by_hint(self, hint: str) -> HealthCard | None:
+        with self._lock:
+            cards = list(self._cards.values())
+        card = resolve_card_by_storage_hint(cards, hint)
+        return card if isinstance(card, HealthCard) else None
+
+    def _contingency_group_by_id(self, group_id: str) -> dict | None:
+        for group in self.get_contingency_groups():
+            if str(group.get("id") or "") == str(group_id):
+                return group
+        return None
+
+    @staticmethod
+    def _snap_steps_payload(steps: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "kind": step.kind,
+                "purpose": step.purpose,
+                "cmd": step.cmd,
+                "skip": step.skip,
+                "reason": step.reason,
+            }
+            for step in steps
+        ]
+
+    @staticmethod
+    def _snap_run_command(card: HealthCard) -> Callable[[str], str]:
+        return lambda command: run_remote_ssh_command(
+            card.host,
+            card.port,
+            card.username,
+            command,
+            key_path=card.key_path,
+            key_passphrase=card.key_passphrase,
+            password=card.password,
+            timeout=120,
+        )
+
+    def generate_contingency_snaps(self, group_id: str) -> dict[str, Any]:
+        group = self._contingency_group_by_id(group_id)
+        if group is None:
+            return {
+                "ok": False,
+                "warnings": [f"Unknown contingency group {group_id}"],
+                "log": [],
+            }
+        generated = generate_snap_rows(group)
+        groups = upsert_group(self.get_contingency_groups(), generated)
+        self.set_contingency_groups(groups)
+        return {"ok": True, "group": generated, "warnings": [], "log": []}
+
+    def preview_contingency_snaps(self, group_id: str) -> dict[str, Any]:
+        group = self._contingency_group_by_id(group_id)
+        if group is None:
+            return {
+                "ok": False,
+                "warnings": [f"Unknown contingency group {group_id}"],
+                "log": [],
+                "steps": [],
+            }
+        hint = str(group.get("storage_hint") or "").strip()
+        card = self.find_card_by_hint(hint)
+        if card is None:
+            return {
+                "ok": False,
+                "warnings": [f"No Health Card matches storage hint {hint or '(empty)'}"],
+                "log": [],
+                "steps": [],
+            }
+        try:
+            inventory = collect_inventory(self._snap_run_command(card))
+        except Exception as exc:
+            return {
+                "ok": False,
+                "warnings": [f"Unable to collect array inventory: {exc}"],
+                "log": [],
+                "steps": [],
+            }
+        steps, warnings = build_snap_steps(group, inventory=inventory)
+        return {
+            "ok": not warnings,
+            "warnings": warnings,
+            "log": [],
+            "steps": self._snap_steps_payload(steps),
+            "card": {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+            },
+        }
+
+    def create_contingency_snaps(
+        self,
+        group_id: str,
+        *,
+        confirm: bool,
+    ) -> dict[str, Any]:
+        if confirm is not True:
+            return {
+                "ok": False,
+                "warnings": ["confirm must be true before creating snap volumes"],
+                "log": [],
+            }
+        preview = self.preview_contingency_snaps(group_id)
+        if not preview["ok"]:
+            return {
+                "ok": False,
+                "warnings": preview["warnings"],
+                "log": preview["log"],
+            }
+        group = self._contingency_group_by_id(group_id)
+        card = self.find_card_by_hint(str(group.get("storage_hint") or "")) if group else None
+        if card is None:
+            return {
+                "ok": False,
+                "warnings": ["No Health Card matches the contingency group storage hint"],
+                "log": [],
+            }
+        steps = [
+            SnapStep(
+                kind=step["kind"],
+                purpose=step["purpose"],
+                cmd=step["cmd"],
+                skip=step["skip"],
+                reason=step["reason"],
+            )
+            for step in preview["steps"]
+        ]
+        result = run_snap_steps(steps, self._snap_run_command(card))
+        result["warnings"] = preview["warnings"]
+        return result
 
     def get_snapshot_notes(self) -> dict[str, str]:
         with self._lock:

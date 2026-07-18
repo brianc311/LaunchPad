@@ -40,6 +40,8 @@ VOLUME_HEADERS = (
     "Pool",
     "UID",
     "Protocol",
+    "Role",
+    "Source Volume",
 )
 
 MAP_HEADERS = (
@@ -48,6 +50,7 @@ MAP_HEADERS = (
     "Volume",
     "Host",
     "SCSI ID",
+    "Role",
 )
 
 
@@ -151,6 +154,8 @@ def build_contingency_groups_workbook(groups: list[dict]) -> Workbook:
                     vol.get("pool"),
                     vol.get("uid"),
                     vol.get("protocol"),
+                    vol.get("role") or "source",
+                    vol.get("source_volume") or "",
                 )
             )
 
@@ -164,6 +169,7 @@ def build_contingency_groups_workbook(groups: list[dict]) -> Workbook:
                     mapping.get("volume"),
                     mapping.get("host"),
                     mapping.get("scsi_id"),
+                    mapping.get("role") or "source",
                 )
             )
 

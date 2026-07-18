@@ -30,6 +30,29 @@ def test_save_as_new_keeps_source_group_in_client_logic():
     assert "item.id !== currentId" not in CONTINGENCY_GROUPS_HTML
 
 
+def test_contingency_groups_page_exposes_snap_copy_actions():
+    for text in (
+        "Generate _snap rows",
+        "Preview / Dry-run",
+        "Run Create",
+        "SNAP",
+        "/api/contingency-groups/generate-snaps",
+        "/api/contingency-groups/snap-preview",
+        "/api/contingency-groups/snap-create",
+        "window.__lastSnapPreviewOk",
+        "operator-initiated",
+        "persistCurrentGroupBeforeSnapOps",
+        "formatResolvedCard",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_hero_lede_describes_planning_and_create():
+    assert "never applied to a storage array" not in CONTINGENCY_GROUPS_HTML
+    assert "planning-only" in CONTINGENCY_GROUPS_HTML
+    assert "Run Create (after Preview)" in CONTINGENCY_GROUPS_HTML
+
+
 def test_fc_wwpn_report_links_to_contingency_groups():
     assert 'href="/contingency-groups">Contingency Groups</a>' in FC_WWPN_REPORT_HTML
 
