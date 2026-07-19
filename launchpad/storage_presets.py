@@ -259,6 +259,7 @@ DEVICE_PROFILES: dict[str, str] = {
     "flashsystem_9200": "IBM FlashSystem 9200",
     "flashsystem_9500": "IBM FlashSystem 9500",
     # IBM Storwize / SVC (Spectrum Virtualize CLI)
+    "ibm_storwize_v7000": "IBM Storwize V7000",
     "ibm_storwize_v7000_g2": "IBM Storwize V7000 G2",
     "ibm_storwize_v7000_g3": "IBM Storwize V7000 G3",
     "ibm_svc_2145": "IBM SAN Volume Controller (2145-SV1)",
@@ -303,6 +304,7 @@ SVC_PROFILES = frozenset(
         "flashsystem_7300",
         "flashsystem_9200",
         "flashsystem_9500",
+        "ibm_storwize_v7000",
         "ibm_storwize_v7000_g2",
         "ibm_storwize_v7000_g3",
         "ibm_svc_2145",

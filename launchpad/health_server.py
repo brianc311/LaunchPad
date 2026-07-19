@@ -1,7 +1,11 @@
+import base64
+import binascii
+import hashlib
 import json
 import re
 import socket
 import threading
+import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +37,26 @@ from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
 from launchpad.flashsystem_fc import analyze_fc_inventory
 from launchpad.flashsystem_health import analyze_health
 from launchpad.health_metrics import run_remote_metrics
+from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
+from launchpad.lun_builder_data import (
+    LUN_BUILDS_SETTING,
+    delete_build,
+    normalize_build,
+    normalize_builds,
+    supports_live_run,
+    upsert_build,
+    validate_build_for_preview,
+)
+from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
+from launchpad.lun_builder_export import (
+    export_lun_build_csv_zip,
+    export_lun_build_xlsx,
+)
+from launchpad.lun_builder_import import (
+    map_fc_hosts,
+    merge_hosts,
+    parse_lun_builder_upload,
+)
 from launchpad.snapshot_schedule import SNAPSHOT_SCHEDULE_HTML, SNAPSHOT_SCHEDULE_PATH
 from launchpad.snapshot_schedule_overrides import (
     SNAPSHOT_OVERRIDES_SETTING,
@@ -41,7 +65,11 @@ from launchpad.snapshot_schedule_overrides import (
 )
 from launchpad.ssh_commands import run_remote_command_suite, run_remote_ssh_command
 from launchpad.ssh_launcher import _log
-from launchpad.storage_presets import DEVICE_PROFILES
+from launchpad.storage_presets import (
+    DEVICE_PROFILES,
+    HPE_SHELL_PROFILES,
+    SVC_PROFILES,
+)
 
 DEFAULT_PORT = 18765
 PREFERRED_PORTS = (18765, 18766, 18767, 18768)
@@ -642,6 +670,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/capacity" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Capacity Report</a>
         <a class="btn secondary" href="/fc-wwpn" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">FC WWPN</a>
         <a class="btn secondary" href="/snapshot-schedule" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Snapshot Schedule</a>
+        <a class="btn secondary" href="/lun-builder" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">LUN Builder</a>
         <label class="toggle-row" for="monitor-all-toggle" title="Connect and monitor every site. Leave off to keep SSH sessions closed.">
           <input type="checkbox" id="monitor-all-toggle">
           All monitoring on
@@ -1699,6 +1728,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == CONTINGENCY_GROUPS_PATH:
             self._send_html(CONTINGENCY_GROUPS_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == LUN_BUILDER_PATH:
+            self._send_html(LUN_BUILDER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == FC_WWPN_REPORT_PATH:
             self._send_html(FC_WWPN_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
@@ -1732,6 +1764,61 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     "groups": server.get_contingency_groups() if persisted else [],
                     "persisted": persisted,
                 }
+            )
+            return
+        if path == "/api/lun-builds":
+            persisted = server.lun_builds_persist_available()
+            self._send_json(
+                {
+                    "builds": server.get_lun_builds() if persisted else [],
+                    "persisted": persisted,
+                }
+            )
+            return
+        if path == "/api/lun-builds-export":
+            query = parse_qs(parsed.query)
+            build_id = (query.get("id") or [""])[0].strip()
+            export_format = (query.get("format") or [""])[0].strip().lower()
+            if not build_id:
+                self._send_json({"error": "LUN build id is required."}, status=400)
+                return
+            if export_format not in {"xlsx", "csv"}:
+                self._send_json(
+                    {"error": "Export format must be xlsx or csv."},
+                    status=400,
+                )
+                return
+            build = next(
+                (
+                    item
+                    for item in server.get_lun_builds()
+                    if str(item.get("id") or "").strip() == build_id
+                ),
+                None,
+            )
+            if build is None:
+                self._send_json({"error": "LUN build not found."}, status=404)
+                return
+            try:
+                if export_format == "xlsx":
+                    body = export_lun_build_xlsx(build)
+                    content_type = (
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    )
+                else:
+                    body = export_lun_build_csv_zip(build)
+                    content_type = "application/zip"
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            safe_id = re.sub(r"[^\w\-]+", "_", build_id).strip("_") or "build"
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+            extension = "xlsx" if export_format == "xlsx" else "zip"
+            self._send_bytes(
+                body,
+                content_type=content_type,
+                filename=f"LUN_Builder_{safe_id}_{stamp}.{extension}",
             )
             return
         if path == "/api/contingency-groups-export":
@@ -1974,6 +2061,110 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"groups": groups, "persisted": True})
             return
+        if path == "/api/lun-builds":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                if "builds" in payload:
+                    if not isinstance(payload["builds"], list):
+                        raise ValueError("builds must be a list")
+                    builds = server.set_lun_builds(payload["builds"])
+                elif "build" in payload:
+                    if not isinstance(payload["build"], dict):
+                        raise ValueError("build must be an object")
+                    builds = server.upsert_lun_build(payload["build"])
+                elif "delete_id" in payload:
+                    builds = server.delete_lun_build(str(payload["delete_id"]))
+                else:
+                    raise ValueError("builds, build, or delete_id required")
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc), "persisted": False}, status=503)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            self._send_json({"builds": builds, "persisted": True})
+            return
+        if path in {"/api/lun-builds/import", "/api/lun-builds/pull-fc"}:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            build_id = str(payload.get("build_id") or "").strip()
+            if not build_id:
+                self._send_json({"error": "build_id required"}, status=400)
+                return
+            try:
+                if path == "/api/lun-builds/import":
+                    filename = str(payload.get("filename") or "").strip()
+                    content_base64 = payload.get("content_base64")
+                    if not filename or not isinstance(content_base64, str):
+                        raise ValueError("filename and content_base64 required")
+                    try:
+                        content = base64.b64decode(content_base64, validate=True)
+                    except (binascii.Error, ValueError) as exc:
+                        raise ValueError("content_base64 is invalid") from exc
+                    result = server.import_lun_build_upload(
+                        filename,
+                        content,
+                        mode=str(payload.get("mode") or "merge"),
+                        build_id=build_id,
+                    )
+                else:
+                    card_name = str(payload.get("card_name") or "").strip() or None
+                    result = server.pull_fc_hosts(build_id, card_name=card_name)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc), "persisted": False}, status=503)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            self._send_json({**result, "persisted": True})
+            return
+        if path in {"/api/lun-builds/preview", "/api/lun-builds/create"}:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict) or not payload.get("build_id"):
+                self._send_json(
+                    {"ok": False, "error": "build_id required"},
+                    status=400,
+                )
+                return
+            try:
+                if path == "/api/lun-builds/preview":
+                    result = server.preview_lun_build(str(payload["build_id"]))
+                else:
+                    result = server.create_lun_build(
+                        str(payload["build_id"]),
+                        confirm=payload.get("confirm") is True,
+                    )
+            except RuntimeError as exc:
+                self._send_json(
+                    {"ok": False, "error": str(exc), "warnings": [], "log": []},
+                    status=503,
+                )
+                return
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
         if path in {
             "/api/contingency-groups/generate-snaps",
             "/api/contingency-groups/snap-preview",
@@ -2063,6 +2254,7 @@ class HealthServer:
         self._get_setting: Callable[[str, str], str] | None = None
         self._set_setting: Callable[[str, str], None] | None = None
         self._monitor_enabled: dict[int, bool] = {}
+        self._lun_preview_session: dict[str, Any] | None = None
 
     def set_sync_provider(self, provider: Callable[[], int] | None) -> None:
         with self._lock:
@@ -2084,6 +2276,301 @@ class HealthServer:
     def contingency_groups_persist_available(self) -> bool:
         with self._lock:
             return self._get_setting is not None
+
+    def lun_builds_persist_available(self) -> bool:
+        with self._lock:
+            return self._get_setting is not None
+
+    def get_lun_builds(self) -> list[dict]:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return []
+        raw = getter(LUN_BUILDS_SETTING, "[]") or "[]"
+        try:
+            return normalize_builds(json.loads(raw))
+        except json.JSONDecodeError:
+            return []
+
+    def set_lun_builds(self, builds: list[dict]) -> list[dict]:
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError("LaunchPad must be unlocked to save LUN builds.")
+        cleaned = normalize_builds(builds)
+        setter(LUN_BUILDS_SETTING, json.dumps(cleaned))
+        return cleaned
+
+    def upsert_lun_build(self, build: dict) -> list[dict]:
+        cleaned = normalize_build(build)
+        if cleaned is None:
+            raise ValueError("Invalid LUN build")
+        return self.set_lun_builds(upsert_build(self.get_lun_builds(), cleaned))
+
+    def delete_lun_build(self, build_id: str) -> list[dict]:
+        return self.set_lun_builds(
+            delete_build(self.get_lun_builds(), build_id)
+        )
+
+    def _find_lun_build(self, build_id: str) -> dict:
+        target = str(build_id or "").strip()
+        build = next(
+            (
+                item
+                for item in self.get_lun_builds()
+                if str(item.get("id") or "").strip() == target
+            ),
+            None,
+        )
+        if build is None:
+            raise ValueError("LUN build not found.")
+        return build
+
+    def import_lun_build_upload(
+        self,
+        filename: str,
+        content: bytes,
+        *,
+        mode: str,
+        build_id: str,
+    ) -> dict:
+        import_mode = str(mode or "").strip().lower()
+        if import_mode not in {"merge", "replace"}:
+            raise ValueError("mode must be merge or replace")
+        build = self._find_lun_build(build_id)
+        parsed = parse_lun_builder_upload(filename, content)
+        if import_mode == "replace":
+            build["hosts"] = parsed["hosts"]
+            build["luns"] = parsed["luns"]
+        else:
+            build["hosts"] = merge_hosts(build.get("hosts") or [], parsed["hosts"])
+            build["luns"] = list(build.get("luns") or []) + parsed["luns"]
+        builds = self.upsert_lun_build(build)
+        saved = next(item for item in builds if item["id"] == build["id"])
+        return {
+            "build": saved,
+            "builds": builds,
+            "warnings": parsed["warnings"],
+        }
+
+    def pull_fc_hosts(self, build_id: str, *, card_name: str | None = None) -> dict:
+        build = self._find_lun_build(build_id)
+        self.sync_from_app()
+        cards = self.list_cards(allow_sync=False)
+        incoming, warnings = map_fc_hosts(
+            cards,
+            card_name=card_name,
+            include_warnings=True,
+        )
+        build["hosts"] = merge_hosts(build.get("hosts") or [], incoming)
+        builds = self.upsert_lun_build(build)
+        saved = next(item for item in builds if item["id"] == build["id"])
+        return {
+            "build": saved,
+            "builds": builds,
+            "warnings": warnings,
+            "pulled": len(incoming),
+        }
+
+    @staticmethod
+    def _lun_run_command(card: HealthCard) -> Callable[[str], str]:
+        return lambda command: run_remote_ssh_command(
+            card.host,
+            card.port,
+            card.username,
+            command,
+            key_path=card.key_path,
+            key_passphrase=card.key_passphrase,
+            password=card.password,
+            timeout=120,
+        )
+
+    @staticmethod
+    def _lun_build_content_hash(build: dict[str, Any]) -> str:
+        normalized = normalize_build(build)
+        if normalized is None:
+            raise ValueError("Invalid LUN build")
+        content = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(content).hexdigest()
+
+    @staticmethod
+    def _lun_card_profile_warning(profile: str, card: HealthCard) -> str | None:
+        card_profile = str(card.device_profile or "").strip()
+        if not card_profile:
+            return None
+        expected_family = (
+            "Spectrum Virtualize"
+            if profile in SVC_PROFILES
+            else "HPE"
+            if profile in HPE_SHELL_PROFILES
+            else ""
+        )
+        mismatch = (
+            profile in SVC_PROFILES and card_profile in HPE_SHELL_PROFILES
+        ) or (
+            profile in HPE_SHELL_PROFILES and card_profile in SVC_PROFILES
+        )
+        if not mismatch:
+            return None
+        return (
+            f"{expected_family} build profile {profile} conflicts with "
+            f"Health Card {card.name} profile {card_profile}"
+        )
+
+    def _prepare_lun_build_preview(self, build: dict[str, Any]) -> dict[str, Any]:
+        warnings = validate_build_for_preview(build)
+        inventory_by_card: dict[str, dict[str, Any]] = {}
+        cards: dict[str, HealthCard] = {}
+        svc_hints: set[str] = set()
+        for lun in build.get("luns") or []:
+            profile = str(lun.get("storage_profile") or "").strip()
+            if not supports_live_run(profile):
+                continue
+            hint = str(lun.get("card_hint") or "").strip()
+            card = self.find_card_by_hint(hint)
+            if card is None:
+                warnings.append(
+                    f"No Health Card matches storage hint {hint or '(empty)'}"
+                )
+                continue
+            cards[hint] = card
+            profile_warning = self._lun_card_profile_warning(profile, card)
+            if profile_warning and profile_warning not in warnings:
+                warnings.append(profile_warning)
+            if profile in SVC_PROFILES:
+                svc_hints.add(hint)
+
+        for hint, card in cards.items():
+            if hint in svc_hints:
+                try:
+                    inventory_by_card[hint] = collect_inventory(
+                        self._lun_run_command(card)
+                    )
+                except Exception as exc:
+                    warnings.append(
+                        f"Unable to collect inventory from {card.name}: {exc}"
+                    )
+
+        try:
+            steps = build_lun_steps(build, inventory_by_card)
+        except ValueError as exc:
+            warnings.append(str(exc))
+            steps = []
+        live_steps = [step for step in steps if step["live"]]
+        runnable = any(not step["skip"] for step in live_steps)
+        plan_only = bool(steps) and not live_steps
+        if live_steps and not runnable:
+            warnings.append("No runnable live create steps remain.")
+        return {
+            "ok": not warnings and (runnable or plan_only),
+            "warnings": warnings,
+            "steps": steps,
+            "log": [],
+            "plan_only": plan_only,
+            "runnable": runnable,
+            "cards": [
+                {"id": card.card_id, "name": card.name, "host": card.host}
+                for card in cards.values()
+            ],
+        }
+
+    def preview_lun_build(self, build_id: str) -> dict[str, Any]:
+        try:
+            build = self._find_lun_build(build_id)
+        except ValueError as exc:
+            result = {
+                "ok": False,
+                "warnings": [str(exc)],
+                "steps": [],
+                "log": [],
+                "plan_only": False,
+                "runnable": False,
+            }
+        else:
+            result = self._prepare_lun_build_preview(build)
+
+        with self._lock:
+            self._lun_preview_session = None
+            if result["ok"]:
+                self._lun_preview_session = {
+                    "build_id": str(build_id or "").strip(),
+                    "content_hash": self._lun_build_content_hash(build),
+                    "runnable": bool(result["runnable"]),
+                    "expires_at": time.monotonic() + 300,
+                }
+        return result
+
+    def create_lun_build(
+        self,
+        build_id: str,
+        *,
+        confirm: bool,
+    ) -> dict[str, Any]:
+        if confirm is not True:
+            return {
+                "ok": False,
+                "warnings": ["confirm must be true before creating LUNs"],
+                "log": [],
+            }
+        try:
+            build = self._find_lun_build(build_id)
+            content_hash = self._lun_build_content_hash(build)
+        except ValueError:
+            build = {}
+            content_hash = ""
+        target = str(build_id or "").strip()
+        now = time.monotonic()
+        with self._lock:
+            session = self._lun_preview_session
+            session_matches = bool(
+                session
+                and session.get("build_id") == target
+                and session.get("content_hash") == content_hash
+                and session.get("runnable") is True
+                and float(session.get("expires_at") or 0) > now
+            )
+            if not session_matches:
+                self._lun_preview_session = None
+        if not session_matches:
+            return {
+                "ok": False,
+                "warnings": [
+                    "Preview must be run again before creating this LUN build."
+                ],
+                "log": [],
+            }
+
+        preview = self._prepare_lun_build_preview(build)
+        if not preview["ok"]:
+            return {
+                "ok": False,
+                "warnings": preview["warnings"],
+                "log": [],
+            }
+
+        def run_for_card(card_hint: str, command: str) -> str:
+            card = self.find_card_by_hint(card_hint)
+            if card is None:
+                raise RuntimeError(
+                    f"No Health Card matches storage hint {card_hint or '(empty)'}"
+                )
+            return self._lun_run_command(card)(command)
+
+        log = run_lun_steps(preview["steps"], run_for_card)
+        ok = not any(entry["status"] == "failed" for entry in log)
+        if ok:
+            with self._lock:
+                self._lun_preview_session = None
+        return {
+            "ok": ok,
+            "warnings": preview["warnings"],
+            "log": log,
+            "plan_only": preview["plan_only"],
+        }
 
     def get_contingency_groups(self) -> list[dict]:
         with self._lock:
@@ -2400,6 +2887,10 @@ class HealthServer:
     def contingency_groups_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{CONTINGENCY_GROUPS_PATH}"
 
+    @property
+    def lun_builder_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{LUN_BUILDER_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -2613,6 +3104,13 @@ class HealthServer:
         webbrowser.open(self.contingency_groups_url)
         _log(f"Opened contingency groups in browser: {self.contingency_groups_url}")
         return self.contingency_groups_url
+
+    def open_lun_builder(self) -> str:
+        """Open the LUN build planning page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.lun_builder_url)
+        _log(f"Opened LUN Builder in browser: {self.lun_builder_url}")
+        return self.lun_builder_url
 
 
 _instance: HealthServer | None = None
