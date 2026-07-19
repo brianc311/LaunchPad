@@ -53,31 +53,38 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     th, td { padding:7px; text-align:left; vertical-align:top; border:1px solid var(--border); }
     th { color:var(--muted); background:#0f141d; font-size:.76rem; text-transform:uppercase; }
     td input, td select { min-width:100px; }
-    .lun-table { min-width:1780px; }
+    .lun-table { min-width:1840px; }
     .lun-table td input, .lun-table td select { min-width:0; width:100%; }
-    .lun-table th:nth-child(1) { min-width:150px; }   /* Purpose */
-    .lun-table th:nth-child(2) { min-width:70px; }    /* Count */
-    .lun-table th:nth-child(3) { min-width:220px; }   /* Volume names */
-    .lun-table th:nth-child(4) { min-width:90px; }    /* Size */
-    .lun-table th:nth-child(5) { min-width:64px; }    /* Shared */
-    .lun-table th:nth-child(6) { min-width:210px; }   /* Storage profile */
-    .lun-table th:nth-child(7) { min-width:130px; }   /* Pool / CPG */
-    .lun-table th:nth-child(8) { min-width:260px; }   /* Host names */
-    .lun-table th:nth-child(9) { min-width:110px; }   /* SCSI / LUN ID */
-    .lun-table th:nth-child(10) { min-width:170px; }  /* Card hint */
-    .lun-table th:nth-child(11) { min-width:100px; }  /* Cluster */
+    .lun-table th:nth-child(1) { min-width:52px; }    /* Done */
+    .lun-table th:nth-child(2) { min-width:150px; }   /* Purpose */
+    .lun-table th:nth-child(3) { min-width:70px; }    /* Count */
+    .lun-table th:nth-child(4) { min-width:220px; }   /* Volume names */
+    .lun-table th:nth-child(5) { min-width:90px; }    /* Size */
+    .lun-table th:nth-child(6) { min-width:64px; }    /* Shared */
+    .lun-table th:nth-child(7) { min-width:210px; }   /* Storage profile */
+    .lun-table th:nth-child(8) { min-width:130px; }   /* Pool / CPG */
+    .lun-table th:nth-child(9) { min-width:260px; }   /* Host names */
+    .lun-table th:nth-child(10) { min-width:110px; }  /* SCSI / LUN ID */
+    .lun-table th:nth-child(11) { min-width:170px; }  /* Card hint */
+    .lun-table th:nth-child(12) { min-width:100px; }  /* Cluster */
     .volume-names { color:var(--accent2); font-size:.82rem; line-height:1.35; word-break:break-word; }
     .plan-table { min-width:1100px; }
     .plan-table th:nth-child(1) { min-width:220px; }
-    .host-table { min-width:1280px; }
+    .host-table { min-width:1340px; }
     .host-table td input { min-width:0; width:100%; }
-    .host-table th:nth-child(1) { min-width:150px; }  /* LPAR name */
-    .host-table th:nth-child(2) { min-width:70px; }   /* Slot */
-    .host-table th:nth-child(3) { min-width:90px; }   /* State */
-    .host-table th:nth-child(6), .host-table th:nth-child(7) { min-width:180px; } /* WWPNs */
-    .host-table th:nth-child(8) { min-width:200px; }  /* Notes */
+    .host-table th:nth-child(1) { min-width:52px; }   /* Done */
+    .host-table th:nth-child(2) { min-width:150px; }  /* LPAR name */
+    .host-table th:nth-child(3) { min-width:70px; }   /* Slot */
+    .host-table th:nth-child(4) { min-width:90px; }   /* State */
+    .host-table th:nth-child(7), .host-table th:nth-child(8) { min-width:180px; } /* WWPNs */
+    .host-table th:nth-child(9) { min-width:200px; }  /* Notes */
     .remove { min-height:30px; padding:0 10px; color:#fecaca; background:#32151a; border:1px solid #7f1d1d; }
     .empty { padding:14px; color:var(--muted); }
+    .done-cell { width:44px; text-align:center; vertical-align:middle; }
+    .done-cell input[type="checkbox"] { width:18px; height:18px; min-width:18px; cursor:pointer; accent-color:#22c55e; }
+    tr.row-done td { background:#14532d; }
+    tr.row-done input, tr.row-done select { background:#166534; border-color:#22c55e; }
+    tr.row-done .volume-names { color:#bbf7d0; }
     .modal-backdrop { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:20px; background:rgba(0,0,0,.72); }
     .modal-backdrop[hidden] { display:none !important; }
     .modal { width:min(850px,100%); max-height:85vh; overflow:auto; padding:20px; border:1px solid var(--border); border-radius:14px; background:var(--panel); }
@@ -142,12 +149,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     </details>
     <details class="section" id="section-hosts" open>
       <summary class="section-head"><h2>Hosts</h2><button type="button" class="secondary" id="add-host-btn">Add host</button></summary>
-      <div class="table-wrap"><table class="host-table"><thead><tr><th>LPAR name</th><th>Slot</th><th>State</th><th>Required</th><th>Type</th><th>WWPN 1</th><th>WWPN 2</th><th>Notes</th><th></th></tr></thead><tbody id="hosts-body"></tbody></table></div>
+      <div class="table-wrap"><table class="host-table"><thead><tr><th>Done</th><th>LPAR name</th><th>Slot</th><th>State</th><th>Required</th><th>Type</th><th>WWPN 1</th><th>WWPN 2</th><th>Notes</th><th></th></tr></thead><tbody id="hosts-body"></tbody></table></div>
     </details>
     <details class="section" id="section-luns" open>
       <summary class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></summary>
       <p class="hint">Each row expands into named volumes (shown in Volume names and LUN Plan). Edit Purpose/Count/Hosts here; names update automatically.</p>
-      <div class="table-wrap"><table class="lun-table"><thead><tr><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
+      <div class="table-wrap"><table class="lun-table"><thead><tr><th>Done</th><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
     </details>
     <details class="section" id="section-plan" open>
       <summary class="section-head"><h2>LUN Plan</h2></summary>
@@ -326,15 +333,17 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       document.getElementById("default-storage-profile").value = build.default_storage_profile || "";
       document.getElementById("default-pool-or-cpg").value = build.default_pool_or_cpg || "";
       document.getElementById("default-card-hint").value = build.default_card_hint || "";
-      hostsBody.innerHTML = (build.hosts || []).length ? build.hosts.map((host, index) => `<tr>
+      hostsBody.innerHTML = (build.hosts || []).length ? build.hosts.map((host, index) => `<tr class="${host.done ? "row-done" : ""}">
+        <td class="done-cell"><input type="checkbox" data-kind="hosts" data-index="${index}" data-key="done" title="Mark row done" ${host.done ? "checked" : ""}></td>
         <td>${input("lpar_name", host.lpar_name, index, "hosts")}</td><td>${input("slot", host.slot, index, "hosts")}</td>
         <td>${input("state", host.state, index, "hosts")}</td><td><input type="checkbox" data-kind="hosts" data-index="${index}" data-key="required" ${host.required ? "checked" : ""}></td>
         <td>${input("type", host.type, index, "hosts")}</td><td>${input("wwpn1", host.wwpn1, index, "hosts")}</td>
         <td>${input("wwpn2", host.wwpn2, index, "hosts")}</td><td>${input("notes", host.notes, index, "hosts")}</td>
-        <td><button type="button" class="remove" data-remove="hosts" data-index="${index}">Remove</button></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No hosts yet.</td></tr>';
+        <td><button type="button" class="remove" data-remove="hosts" data-index="${index}">Remove</button></td></tr>`).join("") : '<tr><td colspan="10" class="empty">No hosts yet.</td></tr>';
       lunsBody.innerHTML = (build.luns || []).length ? build.luns.map((lun, index) => {
         const volumeNames = expandLunBatch(lun);
-        return `<tr>
+        return `<tr class="${lun.done ? "row-done" : ""}">
+        <td class="done-cell"><input type="checkbox" data-kind="luns" data-index="${index}" data-key="done" title="Mark row done" ${lun.done ? "checked" : ""}></td>
         <td>${input("purpose", lun.purpose, index, "luns")}</td><td>${input("count", lun.count || 1, index, "luns", "number")}</td>
         <td class="volume-names">${esc(volumeNames.join(", "))}</td>
         <td>${input("size", lun.size, index, "luns")}</td><td><input type="checkbox" data-kind="luns" data-index="${index}" data-key="shared" ${lun.shared ? "checked" : ""}></td>
@@ -342,7 +351,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td>${input("pool_or_cpg", lun.pool_or_cpg, index, "luns")}</td><td>${input("host_names", (lun.host_names || []).join(", "), index, "luns")}</td>
         <td>${input("scsi_or_lun_id", lun.scsi_or_lun_id, index, "luns")}</td><td>${input("card_hint", lun.card_hint, index, "luns")}</td>
         <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`;
-      }).join("") : '<tr><td colspan="12" class="empty">No LUN specs yet.</td></tr>';
+      }).join("") : '<tr><td colspan="13" class="empty">No LUN specs yet.</td></tr>';
       (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
       const planBody = document.getElementById("plan-body");
       const planRows = (build.luns || []).flatMap((lun) => {
@@ -408,14 +417,14 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     function addRow(kind) {
       const build = activeBuild();
       build[kind].push(kind === "hosts"
-        ? { lpar_name:"", slot:"", state:"", required:false, type:"", wwpn1:"", wwpn2:"", notes:"" }
+        ? { lpar_name:"", slot:"", state:"", required:false, type:"", wwpn1:"", wwpn2:"", notes:"", done:false }
         : {
             purpose:"", count:1, size:"", shared:false,
             storage_profile: build.default_storage_profile || "",
             pool_or_cpg: build.default_pool_or_cpg || "",
             host_names:[], scsi_or_lun_id:"",
             card_hint: build.default_card_hint || "",
-            cluster:"",
+            cluster:"", done:false,
           });
       invalidatePreview();
       render();
@@ -426,6 +435,11 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!item || !target.dataset.key) return;
       const value = target.type === "checkbox" ? target.checked : target.value;
       item[target.dataset.key] = target.dataset.key === "host_names" ? String(value).split(",").map((name) => name.trim()).filter(Boolean) : value;
+      if (target.dataset.key === "done") {
+        const row = target.closest("tr");
+        if (row) row.classList.toggle("row-done", Boolean(value));
+        return;
+      }
       invalidatePreview();
       document.getElementById("run-btn").disabled = true;
       if (target.dataset.kind === "luns") refreshExpandedNames();

@@ -103,6 +103,7 @@ def normalize_host_row(raw: Any) -> dict | None:
             raw.get("managed_system_serial") or ""
         ).strip(),
         "notes": str(raw.get("notes") or "").strip(),
+        "done": _as_bool(raw.get("done")),
     }
 
 
@@ -122,6 +123,7 @@ def normalize_lun_row(raw: Any) -> dict | None:
         "card_hint": str(raw.get("card_hint") or "").strip(),
         "cluster": str(raw.get("cluster") or raw.get("group") or "").strip(),
         "name_prefix": str(raw.get("name_prefix") or "").strip().rstrip("_"),
+        "done": _as_bool(raw.get("done")),
     }
 
 

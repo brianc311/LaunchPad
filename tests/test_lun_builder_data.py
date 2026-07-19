@@ -134,6 +134,19 @@ def test_normalize_build_keeps_default_fields():
     assert build["default_card_hint"] == "cardA"
 
 
+def test_normalize_keeps_done_flags():
+    build = normalize_build(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "hosts": [{"lpar_name": "h1", "done": True}],
+            "luns": [{"purpose": "root", "count": 1, "size": "50GB", "done": True}],
+        }
+    )
+    assert build["hosts"][0]["done"] is True
+    assert build["luns"][0]["done"] is True
+
+
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
     assert len(templates) == 1
