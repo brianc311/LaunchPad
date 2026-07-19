@@ -43,6 +43,7 @@ from launchpad.lun_builder_data import (
     delete_build,
     normalize_build,
     normalize_builds,
+    seed_lun_builder_templates,
     supports_live_run,
     upsert_build,
     validate_build_for_preview,
@@ -1771,6 +1772,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "builds": server.get_lun_builds() if persisted else [],
+                    "templates": seed_lun_builder_templates(),
                     "persisted": persisted,
                 }
             )
@@ -2297,7 +2299,12 @@ class HealthServer:
             setter = self._set_setting
         if not setter:
             raise RuntimeError("LaunchPad must be unlocked to save LUN builds.")
-        cleaned = normalize_builds(builds)
+        cleaned = [
+            build
+            for build in normalize_builds(builds)
+            if not str(build.get("id") or "").strip().startswith("template-")
+            and not build.get("is_template")
+        ]
         setter(LUN_BUILDS_SETTING, json.dumps(cleaned))
         return cleaned
 
@@ -2305,9 +2312,15 @@ class HealthServer:
         cleaned = normalize_build(build)
         if cleaned is None:
             raise ValueError("Invalid LUN build")
+        if str(cleaned["id"]).startswith("template-") or cleaned["is_template"]:
+            raise ValueError(
+                "Cannot overwrite a built-in template; use Save as new."
+            )
         return self.set_lun_builds(upsert_build(self.get_lun_builds(), cleaned))
 
     def delete_lun_build(self, build_id: str) -> list[dict]:
+        if str(build_id or "").strip().startswith("template-"):
+            raise ValueError("Cannot delete a built-in template.")
         return self.set_lun_builds(
             delete_build(self.get_lun_builds(), build_id)
         )

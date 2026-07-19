@@ -30,6 +30,8 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .picker, .actions, .section-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
     .picker, .actions { margin-top:16px; }
     .section-head { justify-content:space-between; margin-bottom:12px; }
+    .template-banner { margin:12px 0 0; padding:10px 12px; color:#fed7aa; background:#431407; border:1px solid #9a3412; border-radius:10px; }
+    .template-banner[hidden] { display:none; }
     button, .btn { min-height:34px; padding:0 14px; border:0; border-radius:10px; background:var(--accent); color:#111; font:inherit; font-weight:600; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
     button.secondary, .btn.secondary { color:var(--text); background:#0f141d; border:1px solid var(--border); }
     button.danger { color:#fff; background:#b91c1c; }
@@ -72,6 +74,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <button type="button" class="secondary" id="new-btn">New</button>
         <span class="status" id="status" aria-live="polite"></span>
       </div>
+      <p class="template-banner" id="template-banner" hidden>Template — use Save as new to keep an editable copy.</p>
       <div class="actions">
         <button type="button" id="save-btn">Save</button>
         <button type="button" class="secondary" id="save-new-btn">Save as new</button>
@@ -131,6 +134,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     const PROFILE_OPTIONS = `{{PROFILE_OPTIONS}}`;
     const picker = document.getElementById("build-picker");
     const statusEl = document.getElementById("status");
+    const templateBanner = document.getElementById("template-banner");
     const hostsBody = document.getElementById("hosts-body");
     const lunsBody = document.getElementById("luns-body");
     const modal = document.getElementById("result-modal");
@@ -142,6 +146,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       { title:"Review safely", copy:"Save, then use Preview / Dry-run to review sanitized CLI. Run Create remains gated until a valid preview succeeds." },
     ];
     let builds = [];
+    let templates = [];
     let currentId = "";
     let persisted = false;
     let previewRequestId = 0;
@@ -172,15 +177,24 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!wizardDone) { wizardStep = 0; renderWizard(); wizard.hidden = false; }
     }
     function esc(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"); }
-    function emptyBuild() { return { id:"", name:"", location:"", notes:"", hosts:[], luns:[] }; }
-    function activeBuild() { return builds.find((build) => String(build.id) === currentId) || emptyBuild(); }
+    function emptyBuild() { return { id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false }; }
+    function activeBuild() {
+      return builds.find((build) => String(build.id) === currentId)
+        || templates.find((template) => String(template.id) === currentId)
+        || emptyBuild();
+    }
     function loadLocal() { try { const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); return Array.isArray(value) ? value : []; } catch (_err) { return []; } }
     function saveLocal() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(builds)); } catch (_err) { /* memory-only fallback */ } }
     function input(key, value, index, kind, type="text") { return `<input type="${type}" data-kind="${kind}" data-index="${index}" data-key="${key}" value="${esc(value)}">`; }
     function render() {
       const build = activeBuild();
-      picker.innerHTML = builds.length ? builds.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`).join("") : '<option value="">New build</option>';
+      const templateOptions = templates.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`).join("");
+      const buildOptions = builds.length
+        ? builds.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`).join("")
+        : '<option value="">New build</option>';
+      picker.innerHTML = `<optgroup label="Templates">${templateOptions}</optgroup><optgroup label="Saved builds">${buildOptions}</optgroup>`;
       picker.value = currentId;
+      templateBanner.hidden = !build.is_template;
       document.getElementById("build-name").value = build.name || "";
       document.getElementById("build-location").value = build.location || "";
       document.getElementById("build-notes").value = build.notes || "";
@@ -198,9 +212,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td>${input("scsi_or_lun_id", lun.scsi_or_lun_id, index, "luns")}</td><td>${input("card_hint", lun.card_hint, index, "luns")}</td>
         <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`).join("") : '<tr><td colspan="11" class="empty">No LUN specs yet.</td></tr>';
       (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
-      document.getElementById("delete-btn").disabled = !currentId;
-      document.getElementById("export-excel-btn").disabled = !currentId;
-      document.getElementById("export-csv-btn").disabled = !currentId;
+      document.getElementById("delete-btn").disabled = !currentId || Boolean(build.is_template);
+      document.getElementById("export-excel-btn").disabled = !currentId || Boolean(build.is_template);
+      document.getElementById("export-csv-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("run-btn").disabled = !window.__lastLunPreviewOk || !window.__lastLunHasRunnableSteps;
     }
     function readSummary(build) {
@@ -213,6 +227,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       let id = base; let suffix = 2;
       while (builds.some((build) => build.id === id)) id = `${base}-${suffix++}`;
       return id;
+    }
+    function templateCopyName(name) {
+      return String(name || "").replace(" (Template)", "").trim();
     }
     function addRow(kind) {
       const build = activeBuild();
@@ -235,9 +252,11 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       let build = activeBuild();
       readSummary(build);
       if (!build.name) { statusEl.textContent = "Enter a build name before saving."; return; }
-      if (!build.id || saveAsNew) {
+      if (!build.id || saveAsNew || build.is_template) {
         build = JSON.parse(JSON.stringify(build));
+        if (build.is_template) build.name = templateCopyName(build.name);
         build.id = makeId(build.name);
+        build.is_template = false;
         builds.push(build);
         currentId = build.id;
         invalidatePreview();
@@ -252,7 +271,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       } catch (error) { persisted = false; statusEl.textContent = `Saved locally only: ${error.message || error}`; }
     }
     async function removeBuild() {
-      if (!currentId || !window.confirm("Delete this LUN build?")) return;
+      if (!currentId || activeBuild().is_template || !window.confirm("Delete this LUN build?")) return;
       const deleting = currentId;
       builds = builds.filter((build) => build.id !== deleting);
       currentId = builds[0]?.id || "";
@@ -343,6 +362,10 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     }
     function exportBuild(format) {
       if (!currentId) { statusEl.textContent = "Save the build before exporting."; return; }
+      if (activeBuild().is_template) {
+        statusEl.textContent = "Save as new before exporting a template.";
+        return;
+      }
       const suffix = format === "xlsx" ? "&format=xlsx" : "&format=csv";
       window.location.assign(`/api/lun-builds-export?id=${encodeURIComponent(currentId)}${suffix}`);
     }
@@ -405,8 +428,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         const response = await fetch("/api/lun-builds");
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json(); persisted = Boolean(data.persisted);
-        if (Array.isArray(data.builds) && data.builds.length) builds = data.builds;
-        currentId = builds[0]?.id || ""; saveLocal();
+        builds = Array.isArray(data.builds) ? data.builds : local;
+        templates = Array.isArray(data.templates) ? data.templates : [];
+        currentId = builds[0]?.id || templates[0]?.id || ""; saveLocal();
         statusEl.textContent = persisted ? "Loaded from LaunchPad." : "Browser-only until LaunchPad is unlocked.";
       } catch (_error) { persisted = false; statusEl.textContent = "Browser-only until LaunchPad is unlocked."; }
       render();

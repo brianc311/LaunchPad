@@ -49,6 +49,24 @@ def test_lun_builder_wizard_overlay():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_exposes_template_picker_ux():
+    for text in (
+        "Templates",
+        "Saved builds",
+        "template-banner",
+        "Save as new",
+        "is_template",
+        "templates",
+    ):
+        assert text in LUN_BUILDER_HTML
+    assert (
+        'document.getElementById("export-excel-btn").disabled = !currentId || Boolean(build.is_template);'
+        in LUN_BUILDER_HTML
+    )
+    assert "builds[0]?.id || templates[0]?.id" in LUN_BUILDER_HTML
+    assert "Save as new before exporting a template." in LUN_BUILDER_HTML
+
+
 def test_lun_builder_page_wires_preview_and_confirmed_create():
     for text in (
         "/api/lun-builds/preview",

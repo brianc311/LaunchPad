@@ -1,4 +1,5 @@
 import inspect
+import io
 import json
 
 import pytest
@@ -18,6 +19,29 @@ def _settings_backend(initial: dict[str, str] | None = None):
         settings[key] = value
 
     return settings, get_setting, set_setting
+
+
+def _call_lun_builds_api(
+    monkeypatch,
+    server: HealthServer,
+    method: str,
+    payload: dict | None = None,
+) -> tuple[int, dict]:
+    body = json.dumps(payload or {}).encode()
+    handler = object.__new__(_HealthHandler)
+    handler.path = "/api/lun-builds"
+    handler.headers = {"Content-Length": str(len(body))}
+    handler.rfile = io.BytesIO(body)
+    responses: list[tuple[int, dict]] = []
+    handler._send_json = lambda data, status=200: responses.append((status, data))
+    monkeypatch.setattr(
+        "launchpad.health_server.get_health_server",
+        lambda: server,
+    )
+
+    getattr(handler, f"do_{method}")()
+
+    return responses[0]
 
 
 def test_health_server_exposes_lun_builder_url():
@@ -54,6 +78,7 @@ def test_lun_builds_replace_upsert_and_delete_persist():
             "location": "",
             "notes": "",
             "updated_at": "",
+            "is_template": False,
             "hosts": [],
             "luns": [],
         }
@@ -65,6 +90,101 @@ def test_lun_builds_replace_upsert_and_delete_persist():
     builds = server.delete_lun_build("first")
 
     assert [build["id"] for build in builds] == ["second"]
+    assert json.loads(settings[LUN_BUILDS_SETTING]) == builds
+
+
+def test_api_get_lun_builds_includes_hartford_template(monkeypatch):
+    settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+
+    status, payload = _call_lun_builds_api(monkeypatch, server, "GET")
+
+    assert status == 200
+    assert payload["templates"][0]["id"] == "template-hartford-ct"
+    assert all(
+        build["id"] != "template-hartford-ct" for build in payload["builds"]
+    )
+    assert LUN_BUILDS_SETTING not in settings
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        {
+            "id": "template-hartford-ct",
+            "name": "Overwrite",
+            "hosts": [],
+            "luns": [],
+        },
+        {
+            "id": "copied-template",
+            "name": "Copied template",
+            "is_template": True,
+            "hosts": [],
+            "luns": [],
+        },
+    ],
+)
+def test_api_rejects_template_upsert(monkeypatch, build):
+    settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+
+    status, payload = _call_lun_builds_api(
+        monkeypatch,
+        server,
+        "POST",
+        {"build": build},
+    )
+
+    assert status == 400
+    assert payload["error"] == (
+        "Cannot overwrite a built-in template; use Save as new."
+    )
+    assert LUN_BUILDS_SETTING not in settings
+
+
+def test_api_rejects_template_delete(monkeypatch):
+    settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+
+    status, payload = _call_lun_builds_api(
+        monkeypatch,
+        server,
+        "POST",
+        {"delete_id": "template-hartford-ct"},
+    )
+
+    assert status == 400
+    assert payload["error"] == "Cannot delete a built-in template."
+    assert LUN_BUILDS_SETTING not in settings
+
+
+def test_set_lun_builds_does_not_persist_templates():
+    settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+
+    builds = server.set_lun_builds(
+        [
+            {
+                "id": "template-injected",
+                "name": "Injected",
+                "hosts": [],
+                "luns": [],
+            },
+            {
+                "id": "saved",
+                "name": "Saved",
+                "hosts": [],
+                "luns": [],
+            },
+        ]
+    )
+
+    assert [build["id"] for build in builds] == ["saved"]
     assert json.loads(settings[LUN_BUILDS_SETTING]) == builds
 
 

@@ -148,6 +148,7 @@ def normalize_build(raw: Any) -> dict | None:
         "location": str(raw.get("location") or "").strip(),
         "notes": str(raw.get("notes") or "").strip(),
         "updated_at": str(raw.get("updated_at") or "").strip(),
+        "is_template": _as_bool(raw.get("is_template")),
         "hosts": hosts,
         "luns": luns,
     }
@@ -162,6 +163,119 @@ def normalize_builds(raw: Any) -> list[dict]:
         if cleaned is not None:
             out.append(cleaned)
     return out
+
+
+def _hartford_host(
+    lpar_name: str,
+    slot: int,
+    remote_lpar: str,
+    remote_slot: int,
+    wwpn1: str,
+    wwpn2: str,
+    physical_fc_slot: str,
+    managed_system_name: str,
+    managed_system_serial: str,
+) -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": str(slot),
+        "state": "Off",
+        "required": False,
+        "type": "client",
+        "remote_lpar": remote_lpar,
+        "remote_slot": str(remote_slot),
+        "wwpn1": wwpn1,
+        "wwpn2": wwpn2,
+        "physical_fc_slot": physical_fc_slot,
+        "managed_system_name": managed_system_name,
+        "managed_system_serial": managed_system_serial,
+        "notes": "",
+    }
+
+
+def _lun_batch(
+    purpose: str,
+    count: int,
+    size: str,
+    shared: bool,
+    host_names: list[str],
+    cluster: str,
+) -> dict:
+    return {
+        "purpose": purpose,
+        "count": count,
+        "size": size,
+        "shared": shared,
+        "storage_profile": "",
+        "pool_or_cpg": "",
+        "host_names": host_names,
+        "scsi_or_lun_id": "",
+        "card_hint": "",
+        "cluster": cluster,
+    }
+
+
+def seed_lun_builder_templates() -> list[dict]:
+    hosts = [
+        _hartford_host("pconsps3", 5, "pconvio01b", 17, "c050760c9594000e", "c050760c9594000f", "U78DA.ND0.WZS05WT-P0-C7-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconsps3", 4, "pconvio01a", 14, "c050760c9594000c", "c050760c9594000d", "U78DA.ND0.WZS05WT-P0-C1-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconsps3", 3, "pconvio01b", 16, "c050760c9594000a", "c050760c9594000b", "U78DA.ND0.WZS05WT-P0-C7-T1", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconsps3", 2, "pconvio01a", 10, "c050760c95940008", "c050760c95940009", "U78DA.ND0.WZS05WT-P0-C1-T1", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconsps4", 5, "pconvio10b", 22, "c050760c95750012", "c050760c95750013", "U78DA.ND0.WZS05WS-P0-C7-T0", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconsps4", 4, "pconvio10a", 16, "c050760c95750010", "c050760c95750011", "U78DA.ND0.WZS05WS-P0-C1-T1", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconsps4", 3, "pconvio10b", 21, "c050760c9575000e", "c050760c9575000f", "U78DA.ND0.WZS05WS-P0-C7-T1", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconsps4", 2, "pconvio10a", 15, "c050760c9575000c", "c050760c9575000d", "U78DA.ND0.WZS05WS-P0-C1-T0", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconmfs3", 5, "pconvio02a", 10, "c050760c95930006", "c050760c95930007", "U78DA.ND0.WZS05T5-P0-C1-T0", "F_PCONSLS4-9105-22A-78A9FA1", "78A9FA1"),
+        _hartford_host("pconmfs3", 4, "pconvio02b", 10, "c050760c95930004", "c050760c95930005", "U78DA.ND0.WZS05T5-P0-C7-T0", "F_PCONSLS4-9105-22A-78A9FA1", "78A9FA1"),
+        _hartford_host("pconmfs3", 3, "pconvio02a", 9, "c050760c95930002", "c050760c95930003", "U78DA.ND0.WZS05T5-P0-C1-T1", "F_PCONSLS4-9105-22A-78A9FA1", "78A9FA1"),
+        _hartford_host("pconmfs3", 2, "pconvio02b", 9, "c050760c95930000", "c050760c95930001", "U78DA.ND0.WZS05T5-P0-C7-T1", "F_PCONSLS4-9105-22A-78A9FA1", "78A9FA1"),
+        _hartford_host("pconmfs4", 5, "pconvio09a", 4, "c050760aea77003e", "c050760aea77003f", "U78D3.001.WZS04TS-P1-C2-T1", "F_PCONSLS2-9009-22A-783CDF0", "783CDF0"),
+        _hartford_host("pconmfs4", 4, "pconvio09b", 4, "c050760aea77003c", "c050760aea77003d", "U78D3.001.WZS04TS-P1-C8-T1", "F_PCONSLS2-9009-22A-783CDF0", "783CDF0"),
+        _hartford_host("pconmfs4", 3, "pconvio09a", 3, "c050760aea77003a", "c050760aea77003b", "U78D3.001.WZS04TS-P1-C2-T2", "F_PCONSLS2-9009-22A-783CDF0", "783CDF0"),
+        _hartford_host("pconmfs4", 2, "pconvio09b", 3, "c050760aea770038", "c050760aea770039", "U78D3.001.WZS04TS-P1-C8-T2", "F_PCONSLS2-9009-22A-783CDF0", "783CDF0"),
+        _hartford_host("pconbt3", 6, "pconvio10b", 17, "c050760c9575000a", "c050760c9575000b", "U78DA.ND0.WZS05WS-P0-C7-T3", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconbt3", 5, "pconvio10a", 14, "c050760c95750008", "c050760c95750009", "U78DA.ND0.WZS05WS-P0-C1-T1", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconbt3", 4, "pconvio10b", 16, "c050760c95750006", "c050760c95750007", "U78DA.ND0.WZS05WS-P0-C7-T1", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconbt3", 3, "pconvio10a", 2, "c050760c95750004", "c050760c95750005", "U78DA.ND0.WZS05WS-P0-C1-T0", "F_PCONSLS5-9105-22A-78A9F71", "78A9F71"),
+        _hartford_host("pconbt4", 5, "pconvio01b", 15, "c050760c95940006", "c050760c95940007", "U78DA.ND0.WZS05WT-P0-C7-T1", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconbt4", 4, "pconvio01a", 9, "c050760c95940004", "c050760c95940005", "U78DA.ND0.WZS05WT-P0-C1-T1", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconbt4", 3, "pconvio01b", 10, "c050760c95940002", "c050760c95940003", "U78DA.ND0.WZS05WT-P0-C7-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+        _hartford_host("pconbt4", 2, "pconvio01a", 8, "c050760c95940000", "c050760c95940001", "U78DA.ND0.WZS05WT-P0-C1-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
+    ]
+    luns: list[dict] = []
+    cluster_specs = (
+        ("SPS", ["pconsps3", "pconsps4"], 7, 2, "200GB", "sps1redovg1", "sps1redovg2"),
+        ("MFS", ["pconmfs3", "pconmfs4"], 7, 1, "200GB", "mfs1redovg1", "mfs1redovg2"),
+        ("BT", ["pconbt3", "pconbt4"], 14, 2, "100GB", "btfs1redovg1", "btfs2redovg2"),
+    )
+    for cluster, host_names, ora_count, arch_count, arch_size, redo1, redo2 in cluster_specs:
+        luns.extend(
+            _lun_batch("root", 3, "50GB", False, [host_name], cluster)
+            for host_name in host_names
+        )
+        luns.extend(
+            [
+                _lun_batch("ora1vg", ora_count, "100GB", True, host_names, cluster),
+                _lun_batch("archvg", arch_count, arch_size, True, host_names, cluster),
+                _lun_batch(redo1, 1, "100GB", True, host_names, cluster),
+                _lun_batch(redo2, 1, "100GB", True, host_names, cluster),
+                _lun_batch("caavg_private", 1, "10GB", True, host_names, cluster),
+            ]
+        )
+    return [
+        {
+            "id": "template-hartford-ct",
+            "name": "Hartford, CT (Template)",
+            "location": "Hartford, CT",
+            "notes": (
+                "Seeded from Connecticut New Hosts / WWPN planning sheet. "
+                "Set storage profile and pool/CPG before Preview or Run Create."
+            ),
+            "is_template": True,
+            "hosts": hosts,
+            "luns": luns,
+        }
+    ]
 
 
 def upsert_build(builds: list[dict], build: dict) -> list[dict]:
