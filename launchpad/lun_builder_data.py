@@ -337,9 +337,8 @@ def _infer_site_prefix(host_names: list[str]) -> str:
 def _volume_name_base(lun: dict, purpose: str) -> str | None:
     """Build a unique stem for expanded volume names.
 
-    Examples:
-      non-shared host pconsps3 + root → pcon_sps3_root
-      shared cluster SPS + ora1vg → pcon_sps_ora1vg
+    Site prefix and host/cluster qualifier are joined without an underscore
+    (pconsps3_root, pconmfs_ora1vg), then purpose is appended with ``_``.
     Returns None only when there is no host/cluster/prefix context.
     """
     host_names = _normalize_str_list(lun.get("host_names"))
@@ -348,22 +347,23 @@ def _volume_name_base(lun: dict, purpose: str) -> str | None:
         prefix = _infer_site_prefix(host_names)
     cluster = str(lun.get("cluster") or "").strip().lower()
     shared = _as_bool(lun.get("shared"))
-    parts: list[str] = []
-    if prefix:
-        parts.append(prefix)
+    head = ""
     if not shared and len(host_names) == 1:
         host = host_names[0]
         if prefix and host.lower().startswith(prefix.lower()):
             short = host[len(prefix) :].lstrip("_-")
-            parts.append(short or host)
+            head = f"{prefix}{short}" if short else host
+        elif prefix:
+            head = f"{prefix}{host}"
         else:
-            parts.append(host)
+            head = host
     elif cluster:
-        parts.append(cluster)
-    elif not prefix:
+        head = f"{prefix}{cluster}" if prefix else cluster
+    elif prefix:
+        head = prefix
+    else:
         return None
-    parts.append(purpose)
-    return "_".join(parts)
+    return f"{head}_{purpose}"
 
 
 def expand_lun_batch(lun: dict) -> list[dict]:

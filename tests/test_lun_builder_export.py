@@ -51,8 +51,8 @@ def test_xlsx_has_styled_hosts_and_expanded_lun_sheets():
     assert workbook["Hosts"]["A2"].value == "pconsps3"
     assert workbook["LUN Plan"].max_row == 3
     assert [workbook["LUN Plan"].cell(row, 1).value for row in (2, 3)] == [
-        "pcon_sps_ora1vg_1",
-        "pcon_sps_ora1vg_2",
+        "pconsps_ora1vg_1",
+        "pconsps_ora1vg_2",
     ]
     assert workbook["By System"].max_row == 3
 
@@ -66,5 +66,5 @@ def test_csv_zip_contains_hosts_and_expanded_luns():
             luns = list(csv.DictReader(TextIOWrapper(raw, encoding="utf-8-sig")))
 
     assert hosts[0]["LPAR Name"] == "pconsps3"
-    assert [row["Volume Name"] for row in luns] == ["pcon_sps_ora1vg_1", "pcon_sps_ora1vg_2"]
+    assert [row["Volume Name"] for row in luns] == ["pconsps_ora1vg_1", "pconsps_ora1vg_2"]
     assert all(row["Storage Profile"] == "flashsystem_5200" for row in luns)

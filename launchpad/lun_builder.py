@@ -274,23 +274,25 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!prefix) prefix = inferSitePrefix(hostNames);
       const cluster = String(lun.cluster || "").trim().toLowerCase();
       const shared = Boolean(lun.shared);
-      const parts = [];
-      if (prefix) parts.push(prefix);
+      let head = "";
       if (!shared && hostNames.length === 1) {
         const host = String(hostNames[0]);
         if (prefix && host.toLowerCase().startsWith(prefix.toLowerCase())) {
           const short = host.slice(prefix.length).replace(/^[_-]+/, "");
-          parts.push(short || host);
+          head = short ? `${prefix}${short}` : host;
+        } else if (prefix) {
+          head = `${prefix}${host}`;
         } else {
-          parts.push(host);
+          head = host;
         }
       } else if (cluster) {
-        parts.push(cluster);
-      } else if (!prefix) {
+        head = prefix ? `${prefix}${cluster}` : cluster;
+      } else if (prefix) {
+        head = prefix;
+      } else {
         return null;
       }
-      parts.push(purpose);
-      return parts.join("_");
+      return `${head}_${purpose}`;
     }
     function expandLunBatch(lun) {
       const purpose = String(lun.purpose || "").trim();

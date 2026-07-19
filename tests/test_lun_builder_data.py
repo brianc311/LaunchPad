@@ -54,9 +54,9 @@ def test_expand_infers_pcon_prefix_from_host():
         }
     )
     assert [r["name"] for r in rows] == [
-        "pcon_sps3_root_1",
-        "pcon_sps3_root_2",
-        "pcon_sps3_root_3",
+        "pconsps3_root_1",
+        "pconsps3_root_2",
+        "pconsps3_root_3",
     ]
 
 
@@ -75,9 +75,9 @@ def test_expand_prefixed_host_root_names():
         }
     )
     assert [r["name"] for r in rows] == [
-        "pcon_sps3_root_1",
-        "pcon_sps3_root_2",
-        "pcon_sps3_root_3",
+        "pconsps3_root_1",
+        "pconsps3_root_2",
+        "pconsps3_root_3",
     ]
 
 
@@ -95,7 +95,7 @@ def test_expand_prefixed_shared_cluster_names():
             "name_prefix": "pcon",
         }
     )
-    assert [r["name"] for r in rows] == ["pcon_sps_ora1vg_1", "pcon_sps_ora1vg_2"]
+    assert [r["name"] for r in rows] == ["pconsps_ora1vg_1", "pconsps_ora1vg_2"]
 
 
 def test_supports_live_run_families():
@@ -190,7 +190,7 @@ def test_hartford_lun_batches_and_blank_profile_pool():
     }
     expanded = [name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))]
     assert len(expanded) == len(set(expanded))
-    assert "pcon_sps3_root_1" in expanded
-    assert "pcon_sps_ora1vg_1" in expanded
-    assert "pcon_mfs_ora1vg_1" in expanded
-    assert "pcon_bt_ora1vg_1" in expanded
+    assert "pconsps3_root_1" in expanded
+    assert "pconsps_ora1vg_1" in expanded
+    assert "pconmfs_ora1vg_1" in expanded
+    assert "pconbt_ora1vg_1" in expanded
