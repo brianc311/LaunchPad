@@ -36,7 +36,7 @@ LUN_HEADERS = (
     "Shared",
     "Storage Profile",
     "Pool / CPG",
-    "Host Names",
+    "Host Name Mappings",
     "SCSI / LUN ID",
     "Card Hint",
     "Cluster",

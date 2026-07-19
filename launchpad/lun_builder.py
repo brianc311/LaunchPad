@@ -146,7 +146,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     <section class="section">
       <div class="section-head"><h2>LUN Plan</h2></div>
       <p class="hint">Expanded volumes that Preview, Run, and Excel export will use — one row per volume.</p>
-      <div class="table-wrap"><table class="plan-table"><thead><tr><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host names</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
+      <div class="table-wrap"><table class="plan-table"><thead><tr><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host Name Mappings</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
     </section>
     <section class="section">
       <details class="cli-panel" id="cli-panel">
