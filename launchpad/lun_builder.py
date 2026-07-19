@@ -68,8 +68,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .lun-table th:nth-child(11) { min-width:170px; }  /* Card hint */
     .lun-table th:nth-child(12) { min-width:100px; }  /* Cluster */
     .volume-names { color:var(--accent2); font-size:.82rem; line-height:1.35; word-break:break-word; }
-    .plan-table { min-width:1100px; }
-    .plan-table th:nth-child(1) { min-width:220px; }
+    .plan-table { min-width:1150px; }
+    .plan-table th:nth-child(1) { min-width:52px; }   /* Done */
+    .plan-table th:nth-child(2) { min-width:220px; }  /* Volume name */
     .host-table { min-width:1340px; }
     .host-table td input { min-width:0; width:100%; }
     .host-table th:nth-child(1) { min-width:52px; }   /* Done */
@@ -159,7 +160,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     <details class="section" id="section-plan" open>
       <summary class="section-head"><h2>LUN Plan</h2></summary>
       <p class="hint">Expanded volumes that Preview, Run, and Excel export will use — one row per volume.</p>
-      <div class="table-wrap"><table class="plan-table"><thead><tr><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host Name Mappings</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
+      <div class="table-wrap"><table class="plan-table"><thead><tr><th>Done</th><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host Name Mappings</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
     </details>
     <section class="section">
       <details class="cli-panel" id="cli-panel">
@@ -310,6 +311,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       return {
         id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false,
         default_storage_profile:"", default_pool_or_cpg:"", default_card_hint:"",
+        plan_done:{},
       };
     }
     function activeBuild() {
@@ -355,27 +357,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`;
       }).join("") : '<tr><td colspan="13" class="empty">No LUN specs yet.</td></tr>';
       (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
-      const planBody = document.getElementById("plan-body");
-      const planRows = (build.luns || []).flatMap((lun) => {
-        const names = expandLunBatch(lun);
-        return names.map((name) => ({
-          name,
-          purpose: lun.purpose || "",
-          size: lun.size || "",
-          shared: Boolean(lun.shared),
-          pool: lun.pool_or_cpg || "",
-          hosts: (lun.host_names || []).join("; "),
-          card: lun.card_hint || "",
-          cluster: lun.cluster || "",
-        }));
-      });
-      planBody.innerHTML = planRows.length
-        ? planRows.map((row) => `<tr>
-            <td>${esc(row.name)}</td><td>${esc(row.purpose)}</td><td>${esc(row.size)}</td>
-            <td>${row.shared ? "Yes" : "No"}</td><td>${esc(row.pool)}</td>
-            <td>${esc(row.hosts)}</td><td>${esc(row.card)}</td><td>${esc(row.cluster)}</td>
-          </tr>`).join("")
-        : '<tr><td colspan="8" class="empty">No expanded volumes yet.</td></tr>';
+      renderPlanTable(build);
       document.getElementById("delete-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-excel-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-csv-btn").disabled = !currentId || Boolean(build.is_template);
@@ -452,12 +434,17 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         const cell = lunsBody.querySelector(`tr:nth-child(${index + 1}) td.volume-names`);
         if (cell) cell.textContent = expandLunBatch(lun).join(", ");
       });
+      renderPlanTable(build);
+    }
+    function renderPlanTable(build) {
       const planBody = document.getElementById("plan-body");
       if (!planBody) return;
+      const planDone = build.plan_done || {};
       const planRows = (build.luns || []).flatMap((lun) => {
         const names = expandLunBatch(lun);
         return names.map((name) => ({
           name,
+          done: Boolean(planDone[name]),
           purpose: lun.purpose || "",
           size: lun.size || "",
           shared: Boolean(lun.shared),
@@ -468,12 +455,13 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         }));
       });
       planBody.innerHTML = planRows.length
-        ? planRows.map((row) => `<tr>
+        ? planRows.map((row) => `<tr class="${row.done ? "row-done" : ""}">
+            <td class="done-cell"><input type="checkbox" data-plan-name="${esc(row.name)}" title="Mark volume done" ${row.done ? "checked" : ""}></td>
             <td>${esc(row.name)}</td><td>${esc(row.purpose)}</td><td>${esc(row.size)}</td>
             <td>${row.shared ? "Yes" : "No"}</td><td>${esc(row.pool)}</td>
             <td>${esc(row.hosts)}</td><td>${esc(row.card)}</td><td>${esc(row.cluster)}</td>
           </tr>`).join("")
-        : '<tr><td colspan="8" class="empty">No expanded volumes yet.</td></tr>';
+        : '<tr><td colspan="9" class="empty">No expanded volumes yet.</td></tr>';
     }
     async function save(saveAsNew) {
       let build = activeBuild();
@@ -692,6 +680,17 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     [hostsBody, lunsBody].forEach((body) => {
       body.addEventListener("input", updateField); body.addEventListener("change", updateField);
       body.addEventListener("click", (event) => { const button = event.target.closest("[data-remove]"); if (!button) return; activeBuild()[button.dataset.remove].splice(Number(button.dataset.index), 1); invalidatePreview(); render(); });
+    });
+    document.getElementById("plan-body").addEventListener("change", (event) => {
+      const target = event.target;
+      const name = target?.dataset?.planName;
+      if (!name) return;
+      const build = activeBuild();
+      if (!build.plan_done || typeof build.plan_done !== "object") build.plan_done = {};
+      if (target.checked) build.plan_done[name] = true;
+      else delete build.plan_done[name];
+      const row = target.closest("tr");
+      if (row) row.classList.toggle("row-done", target.checked);
     });
     ["build-name", "build-location", "build-notes"].forEach((id) => document.getElementById(id).addEventListener("input", () => { invalidatePreview(); document.getElementById("run-btn").disabled = true; }));
     document.getElementById("default-storage-profile").addEventListener("change", onBuildDefaultsChanged);

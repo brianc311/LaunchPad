@@ -147,6 +147,19 @@ def test_normalize_keeps_done_flags():
     assert build["luns"][0]["done"] is True
 
 
+def test_normalize_keeps_plan_done_map():
+    build = normalize_build(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "hosts": [],
+            "luns": [],
+            "plan_done": {"pconsps3_root_1": True, "pconsps3_root_2": False, "": True},
+        }
+    )
+    assert build["plan_done"] == {"pconsps3_root_1": True}
+
+
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
     assert len(templates) == 1
