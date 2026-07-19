@@ -217,6 +217,43 @@ def _lun_id(
     return lun_id
 
 
+def command_group_signature(volume_name: str, commands: list[str]) -> str:
+    name = str(volume_name or "").strip()
+    cmds = [str(cmd).strip() for cmd in commands if str(cmd or "").strip()]
+    return name + ("\n" if name or cmds else "") + "\n".join(cmds)
+
+
+def group_lun_steps_by_volume(steps: list[dict]) -> list[dict]:
+    groups: list[dict] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        volume_name = str(step.get("volume_name") or "").strip()
+        cmd = str(step.get("cmd") or "").strip()
+        solo = not volume_name
+        if (
+            not solo
+            and groups
+            and groups[-1]["volume_name"] == volume_name
+        ):
+            group = groups[-1]
+        else:
+            group = {
+                "volume_name": volume_name,
+                "commands": [],
+                "steps": [],
+                "signature": "",
+            }
+            groups.append(group)
+        group["steps"].append(step)
+        if cmd:
+            group["commands"].append(cmd)
+        group["signature"] = command_group_signature(
+            group["volume_name"], group["commands"]
+        )
+    return groups
+
+
 def run_lun_steps(
     steps: list[dict],
     run_cmd_for_card: Callable[[str, str], str],

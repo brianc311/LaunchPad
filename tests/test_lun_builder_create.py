@@ -1,6 +1,11 @@
 import pytest
 
-from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
+from launchpad.lun_builder_create import (
+    build_lun_steps,
+    command_group_signature,
+    group_lun_steps_by_volume,
+    run_lun_steps,
+)
 from launchpad.lun_builder_data import normalize_build
 
 
@@ -207,6 +212,41 @@ def test_explicit_lun_id_collision_for_same_host_is_rejected():
 
     with pytest.raises(ValueError, match="LUN ID 3.*host1"):
         build_lun_steps(build, None)
+
+
+def test_command_group_signature_joins_volume_and_commands():
+    assert command_group_signature(
+        "pconsps3_root_1",
+        [
+            "svctask mkvdisk -name pconsps3_root_1 -mdiskgrp pcon_pool1 -size 50 -unit gb",
+            "svctask mkvdiskhostmap -host pconsps3 -scsi 0 pconsps3_root_1",
+        ],
+    ) == (
+        "pconsps3_root_1\n"
+        "svctask mkvdisk -name pconsps3_root_1 -mdiskgrp pcon_pool1 -size 50 -unit gb\n"
+        "svctask mkvdiskhostmap -host pconsps3 -scsi 0 pconsps3_root_1"
+    )
+
+
+def test_group_lun_steps_by_volume_keeps_create_and_maps_together():
+    steps = [
+        {"volume_name": "vol_a", "cmd": "create a", "kind": "mkvdisk"},
+        {"volume_name": "vol_a", "cmd": "map a1", "kind": "mkvdiskhostmap"},
+        {"volume_name": "vol_a", "cmd": "map a2", "kind": "mkvdiskhostmap"},
+        {"volume_name": "vol_b", "cmd": "create b", "kind": "mkvdisk"},
+        {"volume_name": "vol_b", "cmd": "map b1", "kind": "mkvdiskhostmap"},
+        {"volume_name": "", "cmd": "orphan", "kind": "plan"},
+        {"volume_name": "", "cmd": "orphan2", "kind": "plan"},
+    ]
+    groups = group_lun_steps_by_volume(steps)
+    assert [g["volume_name"] for g in groups] == ["vol_a", "vol_b", "", ""]
+    assert groups[0]["commands"] == ["create a", "map a1", "map a2"]
+    assert groups[1]["commands"] == ["create b", "map b1"]
+    assert groups[2]["commands"] == ["orphan"]
+    assert groups[3]["commands"] == ["orphan2"]
+    assert groups[0]["signature"] == command_group_signature(
+        "vol_a", ["create a", "map a1", "map a2"]
+    )
 
 
 def test_run_executes_only_live_non_skipped_steps():
