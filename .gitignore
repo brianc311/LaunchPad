@@ -13,3 +13,6 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Isolated feature worktrees
+.worktrees/
