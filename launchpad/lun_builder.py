@@ -81,6 +81,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .host-table th:nth-child(9) { min-width:200px; }  /* Notes */
     .remove { min-height:30px; padding:0 10px; color:#fecaca; background:#32151a; border:1px solid #7f1d1d; }
     .empty { padding:14px; color:var(--muted); }
+    .plan-summary { margin:0 0 10px; padding:8px 12px; border-radius:8px; background:#0f2540; border:1px solid #1e3a5f; font-size:13px; line-height:1.6; }
+    .plan-summary strong { color:#7dd3fc; }
+    .plan-breakdown { color:var(--muted); font-size:12px; }
     .done-cell { width:44px; text-align:center; vertical-align:middle; }
     .done-cell input[type="checkbox"] { width:18px; height:18px; min-width:18px; cursor:pointer; accent-color:#22c55e; }
     tr.row-done td { background:#14532d; }
@@ -171,6 +174,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     <details class="section" id="section-plan" open>
       <summary class="section-head"><h2>LUN Plan</h2></summary>
       <p class="hint">Expanded volumes that Preview, Run, and Excel export will use — one row per volume.</p>
+      <p class="plan-summary" id="plan-summary"></p>
       <div class="table-wrap"><table class="plan-table"><thead><tr><th>Done</th><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host Name Mappings</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
     </details>
     <section class="section">
@@ -545,6 +549,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       const planDone = build.plan_done || {};
       const planRows = (build.luns || []).flatMap((lun) => {
         const names = expandLunBatch(lun);
+        const hostCount = (lun.host_names || []).filter(Boolean).length;
         return names.map((name) => ({
           name,
           done: Boolean(planDone[name]),
@@ -553,6 +558,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
           shared: Boolean(lun.shared),
           pool: lun.pool_or_cpg || "",
           hosts: (lun.host_names || []).join("; "),
+          hostCount,
           card: lun.card_hint || "",
           cluster: lun.cluster || "",
         }));
@@ -565,6 +571,22 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
             <td>${esc(row.hosts)}</td><td>${esc(row.card)}</td><td>${esc(row.cluster)}</td>
           </tr>`).join("")
         : '<tr><td colspan="9" class="empty">No expanded volumes yet.</td></tr>';
+      renderPlanSummary(build, planRows);
+    }
+    function renderPlanSummary(build, planRows) {
+      const summaryEl = document.getElementById("plan-summary");
+      if (!summaryEl) return;
+      if (!planRows.length) { summaryEl.textContent = ""; return; }
+      const hostTotal = (build.hosts || []).length;
+      const volumeTotal = planRows.length;
+      const mappingTotal = planRows.reduce((sum, row) => sum + row.hostCount, 0);
+      const byPurpose = new Map();
+      planRows.forEach((row) => {
+        const key = row.purpose || "(unnamed)";
+        byPurpose.set(key, (byPurpose.get(key) || 0) + 1);
+      });
+      const breakdown = [...byPurpose.entries()].map(([name, count]) => `${esc(name)}: ${count}`).join(" | ");
+      summaryEl.innerHTML = `<strong>${hostTotal}</strong> hosts &middot; <strong>${volumeTotal}</strong> LUNs &middot; <strong>${mappingTotal}</strong> mappings` + (breakdown ? `<br><span class="plan-breakdown">${breakdown}</span>` : "");
     }
     async function save(saveAsNew) {
       let build = activeBuild();
