@@ -1,7 +1,101 @@
+import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
 from launchpad.lun_builder_data import LUN_BUILDER_PROFILES
+
+
+def _run_completion_sync(build: dict) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to execute the embedded JavaScript helper")
+
+    helpers = LUN_BUILDER_HTML.split("const SITE_HOST_RE =", 1)[1].split(
+        "function emptyBuild()", 1
+    )[0]
+    script = (
+        "const SITE_HOST_RE ="
+        + helpers
+        + f"\nconst build = {json.dumps(build)};"
+        + "\nsyncCompletionFromPlan(build);"
+        + "\nprocess.stdout.write(JSON.stringify(build));"
+    )
+    result = subprocess.run(
+        [node, "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def _completion_build() -> dict:
+    return {
+        "plan_done": {
+            "pconsps_root_1": True,
+            "pconsps_root_2": True,
+            "pconsps_data": True,
+        },
+        "hosts": [
+            {"lpar_name": "PCONSPS3", "done": False},
+            {"lpar_name": "unmapped", "done": True},
+        ],
+        "luns": [
+            {
+                "purpose": "root",
+                "count": 2,
+                "shared": True,
+                "cluster": "sps",
+                "name_prefix": "pcon",
+                "host_names": [" pconsps3 "],
+                "done": False,
+            },
+            {
+                "purpose": "data",
+                "count": 1,
+                "shared": True,
+                "cluster": "sps",
+                "name_prefix": "pcon",
+                "host_names": ["PCONSPS3"],
+                "done": False,
+            },
+        ],
+    }
+
+
+def test_completion_sync_marks_complete_luns_and_mapped_hosts_done():
+    build = _run_completion_sync(_completion_build())
+
+    assert [lun["done"] for lun in build["luns"]] == [True, True]
+    assert build["hosts"][0]["done"] is True
+    assert build["hosts"][1]["done"] is True
+
+
+def test_completion_sync_reverses_lun_and_host_when_one_volume_is_incomplete():
+    build = _completion_build()
+    del build["plan_done"]["pconsps_root_2"]
+
+    synced = _run_completion_sync(build)
+
+    assert [lun["done"] for lun in synced["luns"]] == [False, True]
+    assert synced["hosts"][0]["done"] is False
+    assert synced["hosts"][1]["done"] is True
+
+
+def test_plan_done_handler_synchronizes_before_rendering():
+    handler = LUN_BUILDER_HTML.split(
+        'document.getElementById("plan-body").addEventListener("change"', 1
+    )[1].split(
+        'document.getElementById("cli-checklist").addEventListener("change"', 1
+    )[0]
+
+    assert "syncCompletionFromPlan(build);" in handler
+    assert "render();" in handler
+    assert handler.index("syncCompletionFromPlan(build);") < handler.index("render();")
 
 
 def test_lun_builder_path():

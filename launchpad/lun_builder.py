@@ -414,6 +414,36 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       }
       return names;
     }
+    function normalizeHostName(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+    function syncCompletionFromPlan(build) {
+      const planDone = build.plan_done && typeof build.plan_done === "object"
+        ? build.plan_done
+        : {};
+      const luns = Array.isArray(build.luns) ? build.luns : [];
+      const hosts = Array.isArray(build.hosts) ? build.hosts : [];
+      const volumeNamesByLun = luns.map((lun) => expandLunBatch(lun));
+
+      luns.forEach((lun, index) => {
+        lun.done = volumeNamesByLun[index].every((name) => Boolean(planDone[name]));
+      });
+
+      hosts.forEach((host) => {
+        const hostName = normalizeHostName(host.lpar_name);
+        if (!hostName) return;
+        const mappedNames = [];
+        luns.forEach((lun, index) => {
+          const hostNames = Array.isArray(lun.host_names) ? lun.host_names : [];
+          if (hostNames.some((name) => normalizeHostName(name) === hostName)) {
+            mappedNames.push(...volumeNamesByLun[index]);
+          }
+        });
+        if (mappedNames.length) {
+          host.done = mappedNames.every((name) => Boolean(planDone[name]));
+        }
+      });
+    }
     function emptyBuild() {
       return {
         id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false,
@@ -826,8 +856,8 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!build.plan_done || typeof build.plan_done !== "object") build.plan_done = {};
       if (target.checked) build.plan_done[name] = true;
       else delete build.plan_done[name];
-      const row = target.closest("tr");
-      if (row) row.classList.toggle("row-done", target.checked);
+      syncCompletionFromPlan(build);
+      render();
     });
     document.getElementById("cli-checklist").addEventListener("change", (event) => {
       const target = event.target;
