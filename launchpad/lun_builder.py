@@ -48,18 +48,22 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     th, td { padding:7px; text-align:left; vertical-align:top; border:1px solid var(--border); }
     th { color:var(--muted); background:#0f141d; font-size:.76rem; text-transform:uppercase; }
     td input, td select { min-width:100px; }
-    .lun-table { min-width:1560px; }
+    .lun-table { min-width:1780px; }
     .lun-table td input, .lun-table td select { min-width:0; width:100%; }
     .lun-table th:nth-child(1) { min-width:150px; }   /* Purpose */
     .lun-table th:nth-child(2) { min-width:70px; }    /* Count */
-    .lun-table th:nth-child(3) { min-width:90px; }    /* Size */
-    .lun-table th:nth-child(4) { min-width:64px; }    /* Shared */
-    .lun-table th:nth-child(5) { min-width:210px; }   /* Storage profile */
-    .lun-table th:nth-child(6) { min-width:130px; }   /* Pool / CPG */
-    .lun-table th:nth-child(7) { min-width:260px; }   /* Host names */
-    .lun-table th:nth-child(8) { min-width:110px; }   /* SCSI / LUN ID */
-    .lun-table th:nth-child(9) { min-width:170px; }   /* Card hint */
-    .lun-table th:nth-child(10) { min-width:100px; }  /* Cluster */
+    .lun-table th:nth-child(3) { min-width:220px; }   /* Volume names */
+    .lun-table th:nth-child(4) { min-width:90px; }    /* Size */
+    .lun-table th:nth-child(5) { min-width:64px; }    /* Shared */
+    .lun-table th:nth-child(6) { min-width:210px; }   /* Storage profile */
+    .lun-table th:nth-child(7) { min-width:130px; }   /* Pool / CPG */
+    .lun-table th:nth-child(8) { min-width:260px; }   /* Host names */
+    .lun-table th:nth-child(9) { min-width:110px; }   /* SCSI / LUN ID */
+    .lun-table th:nth-child(10) { min-width:170px; }  /* Card hint */
+    .lun-table th:nth-child(11) { min-width:100px; }  /* Cluster */
+    .volume-names { color:var(--accent2); font-size:.82rem; line-height:1.35; word-break:break-word; }
+    .plan-table { min-width:1100px; }
+    .plan-table th:nth-child(1) { min-width:220px; }
     .host-table { min-width:1280px; }
     .host-table td input { min-width:0; width:100%; }
     .host-table th:nth-child(1) { min-width:150px; }  /* LPAR name */
@@ -136,8 +140,13 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     </section>
     <section class="section">
       <div class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></div>
-      <p class="hint">Each row can expand into one or more LUNs during preview.</p>
-      <div class="table-wrap"><table class="lun-table"><thead><tr><th>Purpose</th><th>Count</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
+      <p class="hint">Each row expands into named volumes (shown in Volume names and LUN Plan). Edit Purpose/Count/Hosts here; names update automatically.</p>
+      <div class="table-wrap"><table class="lun-table"><thead><tr><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
+    </section>
+    <section class="section">
+      <div class="section-head"><h2>LUN Plan</h2></div>
+      <p class="hint">Expanded volumes that Preview, Run, and Excel export will use — one row per volume.</p>
+      <div class="table-wrap"><table class="plan-table"><thead><tr><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host names</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
     </section>
     <section class="section">
       <details class="cli-panel" id="cli-panel">
@@ -238,6 +247,50 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!wizardDone) { wizardStep = 0; renderWizard(); wizard.hidden = false; }
     }
     function esc(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"); }
+    const SITE_HOST_RE = /^([A-Za-z]{3,4})([A-Za-z]{2,}\\d+.*)$/;
+    function inferSitePrefix(hostNames) {
+      for (const host of hostNames || []) {
+        const match = String(host || "").match(SITE_HOST_RE);
+        if (match) return match[1].toLowerCase();
+      }
+      return "";
+    }
+    function volumeNameBase(lun, purpose) {
+      const hostNames = Array.isArray(lun.host_names) ? lun.host_names.filter(Boolean) : [];
+      let prefix = String(lun.name_prefix || "").trim().replace(/_+$/, "");
+      if (!prefix) prefix = inferSitePrefix(hostNames);
+      const cluster = String(lun.cluster || "").trim().toLowerCase();
+      const shared = Boolean(lun.shared);
+      const parts = [];
+      if (prefix) parts.push(prefix);
+      if (!shared && hostNames.length === 1) {
+        const host = String(hostNames[0]);
+        if (prefix && host.toLowerCase().startsWith(prefix.toLowerCase())) {
+          const short = host.slice(prefix.length).replace(/^[_-]+/, "");
+          parts.push(short || host);
+        } else {
+          parts.push(host);
+        }
+      } else if (cluster) {
+        parts.push(cluster);
+      } else if (!prefix) {
+        return null;
+      }
+      parts.push(purpose);
+      return parts.join("_");
+    }
+    function expandLunBatch(lun) {
+      const purpose = String(lun.purpose || "").trim();
+      let count = Number(lun.count);
+      if (!Number.isFinite(count) || count < 1) count = 1;
+      const base = volumeNameBase(lun, purpose);
+      const names = [];
+      for (let index = 0; index < count; index += 1) {
+        if (base) names.push(count === 1 ? base : `${base}_${index + 1}`);
+        else names.push(count === 1 ? purpose : `${purpose}_${index + 1}`);
+      }
+      return names;
+    }
     function emptyBuild() {
       return {
         id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false,
@@ -273,14 +326,39 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td>${input("type", host.type, index, "hosts")}</td><td>${input("wwpn1", host.wwpn1, index, "hosts")}</td>
         <td>${input("wwpn2", host.wwpn2, index, "hosts")}</td><td>${input("notes", host.notes, index, "hosts")}</td>
         <td><button type="button" class="remove" data-remove="hosts" data-index="${index}">Remove</button></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No hosts yet.</td></tr>';
-      lunsBody.innerHTML = (build.luns || []).length ? build.luns.map((lun, index) => `<tr>
+      lunsBody.innerHTML = (build.luns || []).length ? build.luns.map((lun, index) => {
+        const volumeNames = expandLunBatch(lun);
+        return `<tr>
         <td>${input("purpose", lun.purpose, index, "luns")}</td><td>${input("count", lun.count || 1, index, "luns", "number")}</td>
+        <td class="volume-names">${esc(volumeNames.join(", "))}</td>
         <td>${input("size", lun.size, index, "luns")}</td><td><input type="checkbox" data-kind="luns" data-index="${index}" data-key="shared" ${lun.shared ? "checked" : ""}></td>
         <td><select data-kind="luns" data-index="${index}" data-key="storage_profile"><option value="">Select profile</option>${PROFILE_OPTIONS}</select></td>
         <td>${input("pool_or_cpg", lun.pool_or_cpg, index, "luns")}</td><td>${input("host_names", (lun.host_names || []).join(", "), index, "luns")}</td>
         <td>${input("scsi_or_lun_id", lun.scsi_or_lun_id, index, "luns")}</td><td>${input("card_hint", lun.card_hint, index, "luns")}</td>
-        <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`).join("") : '<tr><td colspan="11" class="empty">No LUN specs yet.</td></tr>';
+        <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`;
+      }).join("") : '<tr><td colspan="12" class="empty">No LUN specs yet.</td></tr>';
       (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
+      const planBody = document.getElementById("plan-body");
+      const planRows = (build.luns || []).flatMap((lun) => {
+        const names = expandLunBatch(lun);
+        return names.map((name) => ({
+          name,
+          purpose: lun.purpose || "",
+          size: lun.size || "",
+          shared: Boolean(lun.shared),
+          pool: lun.pool_or_cpg || "",
+          hosts: (lun.host_names || []).join("; "),
+          card: lun.card_hint || "",
+          cluster: lun.cluster || "",
+        }));
+      });
+      planBody.innerHTML = planRows.length
+        ? planRows.map((row) => `<tr>
+            <td>${esc(row.name)}</td><td>${esc(row.purpose)}</td><td>${esc(row.size)}</td>
+            <td>${row.shared ? "Yes" : "No"}</td><td>${esc(row.pool)}</td>
+            <td>${esc(row.hosts)}</td><td>${esc(row.card)}</td><td>${esc(row.cluster)}</td>
+          </tr>`).join("")
+        : '<tr><td colspan="8" class="empty">No expanded volumes yet.</td></tr>';
       document.getElementById("delete-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-excel-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-csv-btn").disabled = !currentId || Boolean(build.is_template);
@@ -344,6 +422,36 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       item[target.dataset.key] = target.dataset.key === "host_names" ? String(value).split(",").map((name) => name.trim()).filter(Boolean) : value;
       invalidatePreview();
       document.getElementById("run-btn").disabled = true;
+      if (target.dataset.kind === "luns") refreshExpandedNames();
+    }
+    function refreshExpandedNames() {
+      const build = activeBuild();
+      (build.luns || []).forEach((lun, index) => {
+        const cell = lunsBody.querySelector(`tr:nth-child(${index + 1}) td.volume-names`);
+        if (cell) cell.textContent = expandLunBatch(lun).join(", ");
+      });
+      const planBody = document.getElementById("plan-body");
+      if (!planBody) return;
+      const planRows = (build.luns || []).flatMap((lun) => {
+        const names = expandLunBatch(lun);
+        return names.map((name) => ({
+          name,
+          purpose: lun.purpose || "",
+          size: lun.size || "",
+          shared: Boolean(lun.shared),
+          pool: lun.pool_or_cpg || "",
+          hosts: (lun.host_names || []).join("; "),
+          card: lun.card_hint || "",
+          cluster: lun.cluster || "",
+        }));
+      });
+      planBody.innerHTML = planRows.length
+        ? planRows.map((row) => `<tr>
+            <td>${esc(row.name)}</td><td>${esc(row.purpose)}</td><td>${esc(row.size)}</td>
+            <td>${row.shared ? "Yes" : "No"}</td><td>${esc(row.pool)}</td>
+            <td>${esc(row.hosts)}</td><td>${esc(row.card)}</td><td>${esc(row.cluster)}</td>
+          </tr>`).join("")
+        : '<tr><td colspan="8" class="empty">No expanded volumes yet.</td></tr>';
     }
     async function save(saveAsNew) {
       let build = activeBuild();

@@ -24,7 +24,7 @@ def test_expand_lun_batch_names():
             "shared": True,
         }
     )
-    assert [r["name"] for r in rows] == ["ora1vg_01", "ora1vg_02", "ora1vg_03"]
+    assert [r["name"] for r in rows] == ["ora1vg_1", "ora1vg_2", "ora1vg_3"]
 
 
 def test_expand_single_keeps_purpose_name():
@@ -38,6 +38,26 @@ def test_expand_single_keeps_purpose_name():
         }
     )
     assert rows[0]["name"] == "caavg_private"
+
+
+def test_expand_infers_pcon_prefix_from_host():
+    rows = expand_lun_batch(
+        {
+            "purpose": "root",
+            "count": 3,
+            "size": "50GB",
+            "pool_or_cpg": "P0",
+            "storage_profile": "flashsystem_5200",
+            "host_names": ["pconsps3"],
+            "shared": False,
+            "cluster": "SPS",
+        }
+    )
+    assert [r["name"] for r in rows] == [
+        "pcon_sps3_root_1",
+        "pcon_sps3_root_2",
+        "pcon_sps3_root_3",
+    ]
 
 
 def test_expand_prefixed_host_root_names():

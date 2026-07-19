@@ -39,7 +39,7 @@ def test_svc_steps_include_create_and_host_map():
         step["kind"] == "mkvdiskhostmap" and step["live"] for step in steps
     )
     assert steps[0]["cmd"] == (
-        "svctask mkvdisk -name vol -mdiskgrp Pool0 -size 10 -unit gb"
+        "svctask mkvdisk -name host1_vol -mdiskgrp Pool0 -size 10 -unit gb"
     )
 
 
@@ -79,7 +79,7 @@ def test_threepar_createvv_uses_parsed_lowercase_g_size():
     )
 
     createvv = next(step for step in steps if step["kind"] == "createvv")
-    assert createvv["cmd"] == "createvv FC_r6 data 100g"
+    assert createvv["cmd"] == "createvv FC_r6 host1_data 100g"
     assert "100GB" not in createvv["cmd"]
 
 
@@ -103,8 +103,8 @@ def test_threepar_steps_use_auto_incrementing_lun_ids_per_host():
         step["cmd"] for step in steps if step["kind"] == "createvlun"
     ]
     assert map_commands == [
-        "createvlun data_01 0 host1",
-        "createvlun data_02 1 host1",
+        "createvlun host1_data_1 0 host1",
+        "createvlun host1_data_2 1 host1",
     ]
 
 
@@ -161,7 +161,7 @@ def test_leading_dash_command_tokens_are_rejected(field, value):
         "size": "10GB",
         "pool_or_cpg": "Pool0",
         "storage_profile": "flashsystem_5200",
-        "host_names": ["host1"],
+        "host_names": ["host1"] if field != "purpose" else [],
         "scsi_or_lun_id": "0",
         "card_hint": "cardA",
     }

@@ -40,6 +40,8 @@ _LIVE_RUN_PROFILES = frozenset(
 )
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+# pconsps3 → (pcon, sps3). Require 2+ letters before digits so host1 is not split.
+_SITE_HOST_RE = re.compile(r"^([A-Za-z]{3,4})([A-Za-z]{2,}\d+.*)$")
 
 
 def supports_live_run(profile_key: str) -> bool:
@@ -321,30 +323,43 @@ def new_build_id(name: str, existing: list[dict]) -> str:
     return candidate
 
 
-def _volume_name_base(lun: dict, purpose: str) -> str | None:
-    """Build a unique stem when name_prefix is set.
+def _infer_site_prefix(host_names: list[str]) -> str:
+    """Infer a short site prefix from host names (e.g. pconsps3 → pcon)."""
+    for host in host_names:
+        match = _SITE_HOST_RE.match(host)
+        if match:
+            return match.group(1).lower()
+    return ""
 
-    Examples (name_prefix=pcon):
+
+def _volume_name_base(lun: dict, purpose: str) -> str | None:
+    """Build a unique stem for expanded volume names.
+
+    Examples:
       non-shared host pconsps3 + root → pcon_sps3_root
       shared cluster SPS + ora1vg → pcon_sps_ora1vg
-    Returns None to keep legacy purpose / purpose_01 naming.
+    Returns None only when there is no host/cluster/prefix context.
     """
+    host_names = _normalize_str_list(lun.get("host_names"))
     prefix = str(lun.get("name_prefix") or "").strip().rstrip("_")
     if not prefix:
-        return None
+        prefix = _infer_site_prefix(host_names)
     cluster = str(lun.get("cluster") or "").strip().lower()
     shared = _as_bool(lun.get("shared"))
-    host_names = _normalize_str_list(lun.get("host_names"))
-    parts: list[str] = [prefix]
+    parts: list[str] = []
+    if prefix:
+        parts.append(prefix)
     if not shared and len(host_names) == 1:
         host = host_names[0]
-        if host.lower().startswith(prefix.lower()):
+        if prefix and host.lower().startswith(prefix.lower()):
             short = host[len(prefix) :].lstrip("_-")
             parts.append(short or host)
         else:
             parts.append(host)
     elif cluster:
         parts.append(cluster)
+    elif not prefix:
+        return None
     parts.append(purpose)
     return "_".join(parts)
 
@@ -373,7 +388,7 @@ def expand_lun_batch(lun: dict) -> list[dict]:
         elif count == 1:
             name = purpose
         else:
-            name = f"{purpose}_{index + 1:02d}"
+            name = f"{purpose}_{index + 1}"
         rows.append(
             {
                 "name": name,
