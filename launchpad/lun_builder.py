@@ -163,11 +163,11 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       </div>
     </details>
     <details class="section" id="section-hosts" open>
-      <summary class="section-head"><h2>Hosts</h2><button type="button" class="secondary" id="add-host-btn">Add host</button></summary>
+      <summary class="section-head"><h2 id="hosts-heading">Hosts (0/0 done)</h2><button type="button" class="secondary" id="add-host-btn">Add host</button></summary>
       <div class="table-wrap"><table class="host-table"><thead><tr><th>Done</th><th>LPAR name</th><th>Slot</th><th>State</th><th>Required</th><th>Type</th><th>WWPN 1</th><th>WWPN 2</th><th>Notes</th><th></th></tr></thead><tbody id="hosts-body"></tbody></table></div>
     </details>
     <details class="section" id="section-luns" open>
-      <summary class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></summary>
+      <summary class="section-head"><h2 id="luns-heading">LUN specs (0/0 done)</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></summary>
       <p class="hint">Each row expands into named volumes (shown in Volume names and LUN Plan). Edit Purpose/Count/Hosts here; names update automatically.</p>
       <div class="table-wrap"><table class="lun-table"><thead><tr><th>Done</th><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
     </details>
@@ -465,6 +465,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       }).join("") : '<tr><td colspan="13" class="empty">No LUN specs yet.</td></tr>';
       (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
       renderPlanTable(build);
+      updateSectionHeadings(build);
       document.getElementById("delete-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-excel-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-csv-btn").disabled = !currentId || Boolean(build.is_template);
@@ -572,6 +573,16 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
           </tr>`).join("")
         : '<tr><td colspan="9" class="empty">No expanded volumes yet.</td></tr>';
       renderPlanSummary(build, planRows);
+    }
+    function updateSectionHeadings(build) {
+      const hosts = build.hosts || [];
+      const luns = build.luns || [];
+      const hostsDone = hosts.filter((host) => host.done).length;
+      const lunsDone = luns.filter((lun) => lun.done).length;
+      const hostsHeading = document.getElementById("hosts-heading");
+      const lunsHeading = document.getElementById("luns-heading");
+      if (hostsHeading) hostsHeading.textContent = `Hosts (${hostsDone}/${hosts.length} done)`;
+      if (lunsHeading) lunsHeading.textContent = `LUN specs (${lunsDone}/${luns.length} done)`;
     }
     function renderPlanSummary(build, planRows) {
       const summaryEl = document.getElementById("plan-summary");

@@ -8,6 +8,17 @@ def test_lun_builder_path():
     assert LUN_BUILDER_PATH == "/lun-builder"
 
 
+def test_lun_builder_section_header_counts():
+    for text in (
+        'id="hosts-heading"',
+        'id="luns-heading"',
+        "Hosts (0/0 done)",
+        "LUN specs (0/0 done)",
+        "updateSectionHeadings",
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
 def test_lun_builder_page_contract():
     for text in (
         "LUN Builder",
