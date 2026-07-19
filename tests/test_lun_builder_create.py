@@ -41,6 +41,7 @@ def test_svc_steps_include_create_and_host_map():
     assert steps[0]["cmd"] == (
         "svctask mkvdisk -name host1_vol -mdiskgrp Pool0 -size 10 -unit gb"
     )
+    assert all(step.get("volume_name") == "host1_vol" for step in steps)
 
 
 def test_svc_existing_vdisk_is_skipped():
@@ -106,6 +107,7 @@ def test_threepar_steps_use_auto_incrementing_lun_ids_per_host():
         "createvlun host1_data_1 0 host1",
         "createvlun host1_data_2 1 host1",
     ]
+    assert {step["volume_name"] for step in steps} == {"host1_data_1", "host1_data_2"}
 
 
 def test_ds_steps_are_plan_only():

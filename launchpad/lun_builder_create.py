@@ -46,6 +46,7 @@ def _step(
     live: bool,
     skip: bool = False,
     reason: str = "",
+    volume_name: str = "",
 ) -> dict[str, Any]:
     return {
         "kind": kind,
@@ -56,6 +57,7 @@ def _step(
         "live": live,
         "skip": skip,
         "reason": reason,
+        "volume_name": str(volume_name or "").strip(),
     }
 
 
@@ -96,6 +98,7 @@ def build_lun_steps(
                         live=True,
                         skip=skip_create,
                         reason="volume already exists" if skip_create else "",
+                        volume_name=name,
                     )
                 )
                 existing_hostmaps = set(inventory.get("hostmaps") or [])
@@ -123,6 +126,7 @@ def build_lun_steps(
                             live=True,
                             skip=skip_map,
                             reason="host map already exists" if skip_map else "",
+                            volume_name=name,
                         )
                     )
                 continue
@@ -137,6 +141,7 @@ def build_lun_steps(
                         card_hint=card_hint,
                         profile=profile,
                         live=True,
+                        volume_name=name,
                     )
                 )
                 for host in row.get("host_names") or []:
@@ -156,6 +161,7 @@ def build_lun_steps(
                             card_hint=card_hint,
                             profile=profile,
                             live=True,
+                            volume_name=name,
                         )
                     )
                 continue
@@ -177,6 +183,7 @@ def build_lun_steps(
                     card_hint=card_hint,
                     profile=profile,
                     live=live,
+                    volume_name=name,
                 )
             )
 
