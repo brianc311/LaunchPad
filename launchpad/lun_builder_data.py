@@ -119,6 +119,7 @@ def normalize_lun_row(raw: Any) -> dict | None:
         "scsi_or_lun_id": str(raw.get("scsi_or_lun_id") or "").strip(),
         "card_hint": str(raw.get("card_hint") or "").strip(),
         "cluster": str(raw.get("cluster") or raw.get("group") or "").strip(),
+        "name_prefix": str(raw.get("name_prefix") or "").strip().rstrip("_"),
     }
 
 
@@ -203,6 +204,8 @@ def _lun_batch(
     shared: bool,
     host_names: list[str],
     cluster: str,
+    *,
+    name_prefix: str = "pcon",
 ) -> dict:
     return {
         "purpose": purpose,
@@ -215,6 +218,7 @@ def _lun_batch(
         "scsi_or_lun_id": "",
         "card_hint": "",
         "cluster": cluster,
+        "name_prefix": name_prefix,
     }
 
 
@@ -317,6 +321,34 @@ def new_build_id(name: str, existing: list[dict]) -> str:
     return candidate
 
 
+def _volume_name_base(lun: dict, purpose: str) -> str | None:
+    """Build a unique stem when name_prefix is set.
+
+    Examples (name_prefix=pcon):
+      non-shared host pconsps3 + root → pcon_sps3_root
+      shared cluster SPS + ora1vg → pcon_sps_ora1vg
+    Returns None to keep legacy purpose / purpose_01 naming.
+    """
+    prefix = str(lun.get("name_prefix") or "").strip().rstrip("_")
+    if not prefix:
+        return None
+    cluster = str(lun.get("cluster") or "").strip().lower()
+    shared = _as_bool(lun.get("shared"))
+    host_names = _normalize_str_list(lun.get("host_names"))
+    parts: list[str] = [prefix]
+    if not shared and len(host_names) == 1:
+        host = host_names[0]
+        if host.lower().startswith(prefix.lower()):
+            short = host[len(prefix) :].lstrip("_-")
+            parts.append(short or host)
+        else:
+            parts.append(host)
+    elif cluster:
+        parts.append(cluster)
+    parts.append(purpose)
+    return "_".join(parts)
+
+
 def expand_lun_batch(lun: dict) -> list[dict]:
     purpose = str(lun.get("purpose") or "").strip()
     count = _normalize_count(lun.get("count"))
@@ -330,9 +362,15 @@ def expand_lun_batch(lun: dict) -> list[dict]:
     scsi_or_lun_id = str(lun.get("scsi_or_lun_id") or "").strip()
     card_hint = str(lun.get("card_hint") or "").strip()
     cluster = str(lun.get("cluster") or "").strip()
+    base = _volume_name_base(lun, purpose)
     rows: list[dict] = []
     for index in range(count):
-        if count == 1:
+        if base is not None:
+            if count == 1:
+                name = base
+            else:
+                name = f"{base}_{index + 1}"
+        elif count == 1:
             name = purpose
         else:
             name = f"{purpose}_{index + 1:02d}"

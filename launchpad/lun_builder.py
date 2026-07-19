@@ -48,6 +48,25 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     th, td { padding:7px; text-align:left; vertical-align:top; border:1px solid var(--border); }
     th { color:var(--muted); background:#0f141d; font-size:.76rem; text-transform:uppercase; }
     td input, td select { min-width:100px; }
+    .lun-table { min-width:1560px; }
+    .lun-table td input, .lun-table td select { min-width:0; width:100%; }
+    .lun-table th:nth-child(1) { min-width:150px; }   /* Purpose */
+    .lun-table th:nth-child(2) { min-width:70px; }    /* Count */
+    .lun-table th:nth-child(3) { min-width:90px; }    /* Size */
+    .lun-table th:nth-child(4) { min-width:64px; }    /* Shared */
+    .lun-table th:nth-child(5) { min-width:210px; }   /* Storage profile */
+    .lun-table th:nth-child(6) { min-width:130px; }   /* Pool / CPG */
+    .lun-table th:nth-child(7) { min-width:260px; }   /* Host names */
+    .lun-table th:nth-child(8) { min-width:110px; }   /* SCSI / LUN ID */
+    .lun-table th:nth-child(9) { min-width:170px; }   /* Card hint */
+    .lun-table th:nth-child(10) { min-width:100px; }  /* Cluster */
+    .host-table { min-width:1280px; }
+    .host-table td input { min-width:0; width:100%; }
+    .host-table th:nth-child(1) { min-width:150px; }  /* LPAR name */
+    .host-table th:nth-child(2) { min-width:70px; }   /* Slot */
+    .host-table th:nth-child(3) { min-width:90px; }   /* State */
+    .host-table th:nth-child(6), .host-table th:nth-child(7) { min-width:180px; } /* WWPNs */
+    .host-table th:nth-child(8) { min-width:200px; }  /* Notes */
     .remove { min-height:30px; padding:0 10px; color:#fecaca; background:#32151a; border:1px solid #7f1d1d; }
     .empty { padding:14px; color:var(--muted); }
     .modal-backdrop { position:fixed; inset:0; z-index:10; display:grid; place-items:center; padding:20px; background:rgba(0,0,0,.72); }
@@ -113,12 +132,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     </section>
     <section class="section">
       <div class="section-head"><h2>Hosts</h2><button type="button" class="secondary" id="add-host-btn">Add host</button></div>
-      <div class="table-wrap"><table><thead><tr><th>LPAR name</th><th>Slot</th><th>State</th><th>Required</th><th>Type</th><th>WWPN 1</th><th>WWPN 2</th><th>Notes</th><th></th></tr></thead><tbody id="hosts-body"></tbody></table></div>
+      <div class="table-wrap"><table class="host-table"><thead><tr><th>LPAR name</th><th>Slot</th><th>State</th><th>Required</th><th>Type</th><th>WWPN 1</th><th>WWPN 2</th><th>Notes</th><th></th></tr></thead><tbody id="hosts-body"></tbody></table></div>
     </section>
     <section class="section">
       <div class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></div>
       <p class="hint">Each row can expand into one or more LUNs during preview.</p>
-      <div class="table-wrap"><table><thead><tr><th>Purpose</th><th>Count</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
+      <div class="table-wrap"><table class="lun-table"><thead><tr><th>Purpose</th><th>Count</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
     </section>
     <section class="section">
       <details class="cli-panel" id="cli-panel">

@@ -79,6 +79,9 @@ def test_lun_builds_replace_upsert_and_delete_persist():
             "notes": "",
             "updated_at": "",
             "is_template": False,
+            "default_storage_profile": "",
+            "default_pool_or_cpg": "",
+            "default_card_hint": "",
             "hosts": [],
             "luns": [],
         }

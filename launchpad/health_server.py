@@ -2446,9 +2446,11 @@ class HealthServer:
             hint = str(lun.get("card_hint") or "").strip()
             card = self.find_card_by_hint(hint)
             if card is None:
-                warnings.append(
+                msg = (
                     f"No Health Card matches storage hint {hint or '(empty)'}"
                 )
+                if msg not in warnings:
+                    warnings.append(msg)
                 continue
             cards[hint] = card
             profile_warning = self._lun_card_profile_warning(profile, card)

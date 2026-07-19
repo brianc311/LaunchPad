@@ -40,6 +40,44 @@ def test_expand_single_keeps_purpose_name():
     assert rows[0]["name"] == "caavg_private"
 
 
+def test_expand_prefixed_host_root_names():
+    rows = expand_lun_batch(
+        {
+            "purpose": "root",
+            "count": 3,
+            "size": "50GB",
+            "pool_or_cpg": "P0",
+            "storage_profile": "flashsystem_5200",
+            "host_names": ["pconsps3"],
+            "shared": False,
+            "cluster": "SPS",
+            "name_prefix": "pcon",
+        }
+    )
+    assert [r["name"] for r in rows] == [
+        "pcon_sps3_root_1",
+        "pcon_sps3_root_2",
+        "pcon_sps3_root_3",
+    ]
+
+
+def test_expand_prefixed_shared_cluster_names():
+    rows = expand_lun_batch(
+        {
+            "purpose": "ora1vg",
+            "count": 2,
+            "size": "100GB",
+            "pool_or_cpg": "P0",
+            "storage_profile": "flashsystem_5200",
+            "host_names": ["pconsps3", "pconsps4"],
+            "shared": True,
+            "cluster": "SPS",
+            "name_prefix": "pcon",
+        }
+    )
+    assert [r["name"] for r in rows] == ["pcon_sps_ora1vg_1", "pcon_sps_ora1vg_2"]
+
+
 def test_supports_live_run_families():
     assert supports_live_run("flashsystem_5200") is True
     assert supports_live_run("hpe_3par_8200") is True
@@ -110,9 +148,16 @@ def test_hartford_lun_batches_and_blank_profile_pool():
     assert len(luns) == 21  # 6 root batches + 15 shared batches
     assert all(not str(lun.get("storage_profile") or "").strip() for lun in luns)
     assert all(not str(lun.get("pool_or_cpg") or "").strip() for lun in luns)
+    assert all(lun.get("name_prefix") == "pcon" for lun in luns)
     ora = [lun for lun in luns if lun["purpose"] == "ora1vg"]
     assert {lun["cluster"]: lun["count"] for lun in ora} == {
         "SPS": 7,
         "MFS": 7,
         "BT": 14,
     }
+    expanded = [name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))]
+    assert len(expanded) == len(set(expanded))
+    assert "pcon_sps3_root_1" in expanded
+    assert "pcon_sps_ora1vg_1" in expanded
+    assert "pcon_mfs_ora1vg_1" in expanded
+    assert "pcon_bt_ora1vg_1" in expanded
