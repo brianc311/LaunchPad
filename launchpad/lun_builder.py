@@ -30,6 +30,11 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .picker, .actions, .section-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
     .picker, .actions { margin-top:16px; }
     .section-head { justify-content:space-between; margin-bottom:12px; }
+    details.section > summary.section-head { cursor:pointer; list-style:none; margin-bottom:0; }
+    details.section[open] > summary.section-head { margin-bottom:12px; }
+    details.section > summary.section-head::-webkit-details-marker { display:none; }
+    details.section > summary.section-head h2::before { content:"\\25B8  "; color:var(--muted); }
+    details.section[open] > summary.section-head h2::before { content:"\\25BE  "; }
     .template-banner { margin:12px 0 0; padding:10px 12px; color:#fed7aa; background:#431407; border:1px solid #9a3412; border-radius:10px; }
     .template-banner[hidden] { display:none; }
     button, .btn { min-height:34px; padding:0 14px; border:0; border-radius:10px; background:var(--accent); color:#111; font:inherit; font-weight:600; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
@@ -121,7 +126,8 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/">Health Dashboard</a>
       </div>
     </section>
-    <section class="section">
+    <details class="section" id="section-details" open>
+      <summary class="section-head"><h2>Build details</h2></summary>
       <div class="summary">
         <label>Name <input id="build-name" placeholder="Build name"></label>
         <label>Location <input id="build-location" placeholder="Site location"></label>
@@ -133,21 +139,21 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <p class="defaults-hint">Storage profile, Pool/CPG, and Card hint above fill every LUN row. Card hint is the LaunchPad SSH Health Card name (or unique part of it) for the target array — not the pool name. You can still edit individual rows.</p>
         <label class="notes">Notes <textarea id="build-notes" placeholder="Planning notes"></textarea></label>
       </div>
-    </section>
-    <section class="section">
-      <div class="section-head"><h2>Hosts</h2><button type="button" class="secondary" id="add-host-btn">Add host</button></div>
+    </details>
+    <details class="section" id="section-hosts" open>
+      <summary class="section-head"><h2>Hosts</h2><button type="button" class="secondary" id="add-host-btn">Add host</button></summary>
       <div class="table-wrap"><table class="host-table"><thead><tr><th>LPAR name</th><th>Slot</th><th>State</th><th>Required</th><th>Type</th><th>WWPN 1</th><th>WWPN 2</th><th>Notes</th><th></th></tr></thead><tbody id="hosts-body"></tbody></table></div>
-    </section>
-    <section class="section">
-      <div class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></div>
+    </details>
+    <details class="section" id="section-luns" open>
+      <summary class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></summary>
       <p class="hint">Each row expands into named volumes (shown in Volume names and LUN Plan). Edit Purpose/Count/Hosts here; names update automatically.</p>
       <div class="table-wrap"><table class="lun-table"><thead><tr><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
-    </section>
-    <section class="section">
-      <div class="section-head"><h2>LUN Plan</h2></div>
+    </details>
+    <details class="section" id="section-plan" open>
+      <summary class="section-head"><h2>LUN Plan</h2></summary>
       <p class="hint">Expanded volumes that Preview, Run, and Excel export will use — one row per volume.</p>
       <div class="table-wrap"><table class="plan-table"><thead><tr><th>Volume name</th><th>Source batch</th><th>Size</th><th>Shared</th><th>Pool / CPG</th><th>Host Name Mappings</th><th>Card hint</th><th>Cluster</th></tr></thead><tbody id="plan-body"></tbody></table></div>
-    </section>
+    </details>
     <section class="section">
       <details class="cli-panel" id="cli-panel">
         <summary>CLI commands (Preview)</summary>
@@ -658,8 +664,15 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     document.getElementById("import-btn").addEventListener("click", () => document.getElementById("import-file").click());
     document.getElementById("import-file").addEventListener("change", (event) => { const file = event.target.files?.[0]; if (file) importBuild(file); });
     document.getElementById("pull-fc-btn").addEventListener("click", pullFcHosts);
-    document.getElementById("add-host-btn").addEventListener("click", () => addRow("hosts"));
-    document.getElementById("add-lun-btn").addEventListener("click", () => addRow("luns"));
+    document.getElementById("add-host-btn").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); addRow("hosts"); });
+    document.getElementById("add-lun-btn").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); addRow("luns"); });
+    document.querySelectorAll("details.section").forEach((section) => {
+      const key = `launchpad.lunBuilder.section.${section.id}`;
+      try { const saved = localStorage.getItem(key); if (saved !== null) section.open = saved === "true"; } catch (_err) { /* default open */ }
+      section.addEventListener("toggle", () => {
+        try { localStorage.setItem(key, String(section.open)); } catch (_err) { /* memory-only */ }
+      });
+    });
     [hostsBody, lunsBody].forEach((body) => {
       body.addEventListener("input", updateField); body.addEventListener("change", updateField);
       body.addEventListener("click", (event) => { const button = event.target.closest("[data-remove]"); if (!button) return; activeBuild()[button.dataset.remove].splice(Number(button.dataset.index), 1); invalidatePreview(); render(); });
