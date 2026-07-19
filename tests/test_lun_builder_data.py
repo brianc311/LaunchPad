@@ -160,6 +160,23 @@ def test_normalize_keeps_plan_done_map():
     assert build["plan_done"] == {"pconsps3_root_1": True}
 
 
+def test_normalize_keeps_command_done_map():
+    build = normalize_build(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "hosts": [],
+            "luns": [],
+            "command_done": {
+                "vol_a\ncmd1\ncmd2": True,
+                "stale\ncmd": False,
+                "": True,
+            },
+        }
+    )
+    assert build["command_done"] == {"vol_a\ncmd1\ncmd2": True}
+
+
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
     assert len(templates) == 1

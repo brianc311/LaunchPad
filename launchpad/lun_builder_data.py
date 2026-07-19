@@ -137,6 +137,16 @@ def _normalize_plan_done(raw: Any) -> dict[str, bool]:
     }
 
 
+def _normalize_command_done(raw: Any) -> dict[str, bool]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): True
+        for key, value in raw.items()
+        if str(key) and _as_bool(value)
+    }
+
+
 def normalize_build(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -168,6 +178,7 @@ def normalize_build(raw: Any) -> dict | None:
         "default_pool_or_cpg": str(raw.get("default_pool_or_cpg") or "").strip(),
         "default_card_hint": str(raw.get("default_card_hint") or "").strip(),
         "plan_done": _normalize_plan_done(raw.get("plan_done")),
+        "command_done": _normalize_command_done(raw.get("command_done")),
         "hosts": hosts,
         "luns": luns,
     }

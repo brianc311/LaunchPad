@@ -83,6 +83,7 @@ def test_lun_builds_replace_upsert_and_delete_persist():
             "default_pool_or_cpg": "",
             "default_card_hint": "",
             "plan_done": {},
+            "command_done": {},
             "hosts": [],
             "luns": [],
         }
