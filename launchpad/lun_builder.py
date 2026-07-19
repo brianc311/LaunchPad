@@ -57,6 +57,13 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .wizard-backdrop[hidden] { display:none !important; }
     .wizard { width:min(560px,100%); padding:24px; border:1px solid var(--border); border-radius:16px; background:var(--panel); box-shadow:0 24px 80px rgba(0,0,0,.45); }
     .wizard-step { color:var(--accent2); font-size:.8rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+    .cli-panel { margin-top:18px; border:1px solid var(--border); border-radius:12px; background:#0f141d; }
+    .cli-panel > summary { cursor:pointer; list-style:none; padding:12px 14px; color:var(--accent2); font-weight:700; }
+    .cli-panel > summary::-webkit-details-marker { display:none; }
+    .cli-panel > summary::before { content:"▸ "; }
+    .cli-panel[open] > summary::before { content:"▾ "; }
+    .cli-panel pre { margin:0; padding:0 14px 14px; overflow:auto; color:#d8e3f2; white-space:pre-wrap; font-family:Consolas,monospace; font-size:.85rem; }
+    .cli-panel .cli-empty { padding:0 14px 14px; color:var(--muted); }
     .wizard h2 { margin-top:10px; font-size:1.35rem; }
     .wizard-copy { min-height:72px; color:var(--text); line-height:1.5; }
     .wizard-actions { display:flex; justify-content:space-between; gap:10px; margin-top:20px; }
@@ -105,6 +112,13 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       <div class="section-head"><h2>LUN specs</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></div>
       <p class="hint">Each row can expand into one or more LUNs during preview.</p>
       <div class="table-wrap"><table><thead><tr><th>Purpose</th><th>Count</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
+    </section>
+    <section class="section">
+      <details class="cli-panel" id="cli-panel">
+        <summary>CLI commands (Preview)</summary>
+        <p class="cli-empty" id="cli-empty">Run Preview / Dry-run to fill this panel. It stays collapsed until you expand it.</p>
+        <pre id="cli-commands" hidden></pre>
+      </details>
     </section>
     <p class="footer">LaunchPad LUN Builder v{{APP_VERSION}}</p>
   </main>
@@ -158,6 +172,27 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       previewRequestId += 1;
       window.__lastLunPreviewOk = false;
       window.__lastLunHasRunnableSteps = false;
+      clearCliPanel();
+    }
+    function clearCliPanel() {
+      const empty = document.getElementById("cli-empty");
+      const commands = document.getElementById("cli-commands");
+      const panel = document.getElementById("cli-panel");
+      if (!empty || !commands || !panel) return;
+      empty.hidden = false;
+      commands.hidden = true;
+      commands.textContent = "";
+      panel.open = false;
+    }
+    function fillCliPanel(text) {
+      const empty = document.getElementById("cli-empty");
+      const commands = document.getElementById("cli-commands");
+      if (!empty || !commands) return;
+      const body = String(text || "").trim();
+      if (!body) { clearCliPanel(); return; }
+      empty.hidden = true;
+      commands.hidden = false;
+      commands.textContent = body;
     }
     function renderWizard() {
       const step = wizardSteps[wizardStep];
@@ -336,7 +371,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         window.__lastLunPreviewOk = Boolean(data.ok);
         window.__lastLunHasRunnableSteps = Boolean(data.runnable);
         render();
-        showModal("Preview / Dry-run", formatLunResult(data));
+        const previewText = formatLunResult(data);
+        fillCliPanel(previewText);
+        showModal("Preview / Dry-run", previewText);
         statusEl.textContent = data.ok
           ? (data.plan_only ? "Plan-only preview succeeded; Run Create remains disabled." : "Preview succeeded; Run Create is enabled for this session.")
           : "Preview found blocking warnings; Run Create remains disabled.";
@@ -348,16 +385,22 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     }
     async function runLunCreate() {
       if (!window.__lastLunPreviewOk || !window.__lastLunHasRunnableSteps) return;
+      if (!(await persistCurrentBuildBeforeOps())) return;
       if (!window.confirm("This will create and map LUNs on the resolved storage cards. Existing hosts must already exist. Continue?")) return;
       statusEl.textContent = "Running LUN create...";
       try {
         const data = await postLunOperation("/api/lun-builds/create", { build_id:currentId, confirm:true });
-        showModal("Run Create", formatLunResult(data, true));
+        const resultText = formatLunResult(data, true);
+        fillCliPanel(resultText);
+        showModal("Run Create", resultText);
         statusEl.textContent = data.ok ? "LUN create completed." : "LUN create stopped after a failure.";
       } catch (error) {
         statusEl.textContent = `LUN create failed: ${error.message || error}`;
       } finally {
-        invalidatePreview(); render();
+        previewRequestId += 1;
+        window.__lastLunPreviewOk = false;
+        window.__lastLunHasRunnableSteps = false;
+        render();
       }
     }
     function exportBuild(format) {

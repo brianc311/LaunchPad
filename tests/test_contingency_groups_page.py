@@ -83,6 +83,16 @@ def test_contingency_groups_snap_modal_stays_hidden_by_default():
     assert ".modal-backdrop[hidden] { display:none !important; }" in CONTINGENCY_GROUPS_HTML
 
 
+def test_contingency_groups_exposes_collapsed_cli_panel():
+    for text in (
+        'id="cli-panel"',
+        "CLI commands (Preview)",
+        "fillCliPanel",
+        "clearCliPanel",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+
+
 def test_contingency_groups_page_exposes_wizard_shell():
     for text in (
         "1 Source",

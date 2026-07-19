@@ -61,6 +61,13 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     .skipped { color:var(--muted); text-decoration:line-through; }
     .warning { margin:8px 0; padding:9px 10px; border-left:3px solid var(--danger); background:#32151a; color:#fecaca; }
     .footer { margin:20px 0 0; font-size:.85rem; }
+    .cli-panel { margin-top:18px; border:1px solid var(--border); border-radius:12px; background:#0f141d; }
+    .cli-panel > summary { cursor:pointer; list-style:none; padding:12px 14px; color:var(--accent2); font-weight:700; }
+    .cli-panel > summary::-webkit-details-marker { display:none; }
+    .cli-panel > summary::before { content:"▸ "; }
+    .cli-panel[open] > summary::before { content:"▾ "; }
+    .cli-panel pre { margin:0; padding:0 14px 14px; overflow:auto; color:#d8e3f2; white-space:pre-wrap; font-family:Consolas,monospace; font-size:.85rem; }
+    .cli-panel .cli-empty { padding:0 14px 14px; color:var(--muted); }
     @media (max-width:720px) { .summary { grid-template-columns:1fr; } select { width:100%; } .notes { grid-column:auto; } }
   </style>
 </head>
@@ -152,6 +159,13 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         <div class="table-wrap"><table><thead><tr><th>Volume</th><th>Host</th><th>SCSI ID</th><th></th></tr></thead><tbody id="maps-body"></tbody></table></div>
       </section>
     </div>
+    <section class="section">
+      <details class="cli-panel" id="cli-panel">
+        <summary>CLI commands (Preview)</summary>
+        <p class="cli-empty" id="cli-empty">Run Preview / Dry-run to fill this panel. It stays collapsed until you expand it.</p>
+        <pre id="cli-commands" hidden></pre>
+      </details>
+    </section>
     <p class="footer">LaunchPad Contingency Groups v{{APP_VERSION}} · _snap creation is operator-initiated and only runs after confirmation.</p>
   </main>
   <div id="snap-modal-backdrop" class="modal-backdrop" hidden>
@@ -495,6 +509,26 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         return false;
       }
     }
+    function clearCliPanel() {
+      const empty = document.getElementById("cli-empty");
+      const commands = document.getElementById("cli-commands");
+      const panel = document.getElementById("cli-panel");
+      if (!empty || !commands || !panel) return;
+      empty.hidden = false;
+      commands.hidden = true;
+      commands.textContent = "";
+      panel.open = false;
+    }
+    function fillCliPanel(text) {
+      const empty = document.getElementById("cli-empty");
+      const commands = document.getElementById("cli-commands");
+      if (!empty || !commands) return;
+      const body = String(text || "").trim();
+      if (!body) { clearCliPanel(); return; }
+      empty.hidden = true;
+      commands.hidden = false;
+      commands.textContent = body;
+    }
     function formatResolvedCard(card, fallbackHint) {
       if (card && (card.name || card.host)) {
         const name = card.name || fallbackHint || "Resolved card";
@@ -539,6 +573,12 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         const stepHtml = steps.length
           ? `<ol class="step-list">${steps.map((step) => `<li class="${step.skip ? "skipped" : ""}"><strong>${escapeHtml(step.purpose || step.kind || "Step")}</strong>${step.skip ? ` — skipped: ${escapeHtml(step.reason || "already exists")}` : ""}<pre>${escapeHtml(step.cmd || "")}</pre></li>`).join("")}</ol>`
           : "<p class='hint'>No create steps were returned.</p>";
+        const cliText = steps.map((step) => {
+          const label = step.purpose || step.kind || "Step";
+          const state = step.skip ? "skipped" : "ready";
+          return `[${state}] ${label}${step.cmd ? String.fromCharCode(10) + step.cmd : ""}`;
+        }).join(String.fromCharCode(10));
+        fillCliPanel(cliText || "No create steps were returned.");
         showSnapModal(
           "Preview / Dry-run",
           `<p class="hint">Target card: <strong>${escapeHtml(formatResolvedCard(data.card, group.storage_hint))}</strong></p>${snapWarnings(warnings)}${stepHtml}<button type="button" class="secondary" id="copy-snap-preview">Copy commands</button>`,
@@ -568,6 +608,12 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         const logHtml = log.length
           ? `<ol class="step-list">${log.map((entry) => `<li><strong>${escapeHtml(entry.step || entry.kind || "Step")}</strong> — ${entry.ok ? "ok" : "failed"}<pre>${escapeHtml(entry.cmd || "")}${entry.output ? `\n${escapeHtml(entry.output)}` : ""}</pre></li>`).join("")}</ol>`
           : "<p class='hint'>No command log was returned.</p>";
+        const cliText = log.map((entry) => {
+          const label = entry.step || entry.kind || "Step";
+          const state = entry.ok ? "ok" : "failed";
+          return `[${state}] ${label}${entry.cmd ? String.fromCharCode(10) + entry.cmd : ""}${entry.output ? String.fromCharCode(10) + entry.output : ""}`;
+        }).join(String.fromCharCode(10));
+        fillCliPanel(cliText || "No command log was returned.");
         showSnapModal(data.ok ? "Create log" : "Create blocked or failed", `${snapWarnings(data.warnings)}${logHtml}`);
         statusEl.textContent = data.ok ? "Create completed; see the log for details." : "Create did not complete; see the log and warnings.";
       } catch (error) { statusEl.textContent = `Unable to run _snap create: ${error.message || error}`; }
@@ -603,8 +649,8 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       }
       render();
     }
-    picker.addEventListener("change", () => { currentId = picker.value; wizardStep = 1; showWizardErrors([]); window.__lastSnapPreviewOk = false; render(); });
-    document.getElementById("new-group-btn").addEventListener("click", () => { groups.push(emptyGroup()); currentId = ""; wizardStep = 1; showWizardErrors([]); window.__lastSnapPreviewOk = false; render(); });
+    picker.addEventListener("change", () => { currentId = picker.value; wizardStep = 1; showWizardErrors([]); window.__lastSnapPreviewOk = false; clearCliPanel(); render(); });
+    document.getElementById("new-group-btn").addEventListener("click", () => { groups.push(emptyGroup()); currentId = ""; wizardStep = 1; showWizardErrors([]); window.__lastSnapPreviewOk = false; clearCliPanel(); render(); });
     document.getElementById("add-host-btn").addEventListener("click", () => addRow("hosts"));
     document.getElementById("add-volume-btn").addEventListener("click", () => addRow("volumes"));
     document.getElementById("add-map-btn").addEventListener("click", () => addRow("maps"));

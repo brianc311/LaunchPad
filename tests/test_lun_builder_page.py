@@ -49,6 +49,16 @@ def test_lun_builder_wizard_overlay():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_exposes_collapsed_cli_panel():
+    for text in (
+        'id="cli-panel"',
+        "CLI commands (Preview)",
+        "fillCliPanel",
+        "clearCliPanel",
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
 def test_lun_builder_exposes_template_picker_ux():
     for text in (
         "Templates",
