@@ -52,9 +52,24 @@ def test_lun_builder_wizard_overlay():
 def test_lun_builder_exposes_collapsed_cli_panel():
     for text in (
         'id="cli-panel"',
-        "CLI commands (Preview)",
-        "fillCliPanel",
-        "clearCliPanel",
+        "Command checklist (Preview)",
+        "fillCliChecklist",
+        "clearCliChecklist",
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
+def test_lun_builder_command_checklist():
+    for text in (
+        "Command checklist",
+        "Copy All Remaining",
+        'id="cli-checklist"',
+        'id="cli-warnings"',
+        'id="copy-all-remaining-btn"',
+        "command_done",
+        "groupLunStepsByVolume",
+        "commandGroupSignature",
+        "fillCliChecklist",
     ):
         assert text in LUN_BUILDER_HTML
 

@@ -101,6 +101,17 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .cli-panel[open] > summary::before { content:"▾ "; }
     .cli-panel pre { margin:0; padding:0 14px 14px; overflow:auto; color:#d8e3f2; white-space:pre-wrap; font-family:Consolas,monospace; font-size:.85rem; }
     .cli-panel .cli-empty { padding:0 14px 14px; color:var(--muted); }
+    #cli-checklist-wrap { padding:0 14px 14px; }
+    .cli-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:10px; }
+    .cli-warnings { margin:0 0 10px; color:#fed7aa; white-space:pre-wrap; font-size:.85rem; }
+    .cli-warnings:empty { display:none; }
+    .cli-table { min-width:760px; }
+    .cli-table th:nth-child(1) { min-width:52px; }   /* Done */
+    .cli-table th:nth-child(2) { min-width:180px; }  /* Volume */
+    .cli-table th:nth-child(4) { min-width:90px; }   /* Copy */
+    .cli-table td pre { margin:0; overflow:auto; white-space:pre-wrap; color:#d8e3f2; font-family:Consolas,monospace; font-size:.85rem; }
+    .cli-table tr.row-done td { background:#14532d; }
+    .cli-table tr.row-done td pre { color:#bbf7d0; }
     .wizard h2 { margin-top:10px; font-size:1.35rem; }
     .wizard-copy { min-height:72px; color:var(--text); line-height:1.5; }
     .wizard-actions { display:flex; justify-content:space-between; gap:10px; margin-top:20px; }
@@ -164,8 +175,28 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     </details>
     <section class="section">
       <details class="cli-panel" id="cli-panel">
-        <summary>CLI commands (Preview)</summary>
-        <p class="cli-empty" id="cli-empty">Run Preview / Dry-run to fill this panel. It stays collapsed until you expand it.</p>
+        <summary>Command checklist (Preview)</summary>
+        <p class="cli-empty" id="cli-empty">Run Preview / Dry-run to fill this checklist.</p>
+        <div id="cli-checklist-wrap" hidden>
+          <div class="cli-toolbar">
+            <button type="button" class="secondary" id="copy-all-remaining-btn">Copy All Remaining</button>
+            <span class="status" id="cli-copy-status" aria-live="polite"></span>
+          </div>
+          <div id="cli-warnings" class="cli-warnings"></div>
+          <div class="table-wrap">
+            <table class="cli-table">
+              <thead>
+                <tr>
+                  <th>Done</th>
+                  <th>Volume</th>
+                  <th>Commands</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="cli-checklist"></tbody>
+            </table>
+          </div>
+        </div>
         <pre id="cli-commands" hidden></pre>
       </details>
     </section>
@@ -214,6 +245,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     let persisted = false;
     let previewRequestId = 0;
     let wizardStep = 0;
+    let cliChecklistGroups = [];
     window.__lastLunPreviewOk = false;
     window.__lastLunHasRunnableSteps = false;
 
@@ -221,27 +253,98 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       previewRequestId += 1;
       window.__lastLunPreviewOk = false;
       window.__lastLunHasRunnableSteps = false;
-      clearCliPanel();
+      clearCliChecklist();
     }
-    function clearCliPanel() {
+    function commandGroupSignature(volumeName, commands) {
+      const name = String(volumeName || "").trim();
+      const cmds = (commands || []).map((cmd) => String(cmd || "").trim()).filter(Boolean);
+      return name + ((name || cmds.length) ? "\\n" : "") + cmds.join("\\n");
+    }
+    function groupLunStepsByVolume(steps) {
+      const groups = [];
+      for (const step of steps || []) {
+        const volumeName = String(step.volume_name || "").trim();
+        const cmd = String(step.cmd || "").trim();
+        const solo = !volumeName;
+        let group;
+        if (!solo && groups.length && groups[groups.length - 1].volume_name === volumeName) {
+          group = groups[groups.length - 1];
+        } else {
+          group = { volume_name: volumeName, commands: [], steps: [], signature: "" };
+          groups.push(group);
+        }
+        group.steps.push(step);
+        if (cmd) group.commands.push(cmd);
+        group.signature = commandGroupSignature(group.volume_name, group.commands);
+      }
+      return groups;
+    }
+    function buildCommandDone(build) {
+      if (!build.command_done || typeof build.command_done !== "object") build.command_done = {};
+      return build.command_done;
+    }
+    async function copyText(text, statusMessage) {
+      try {
+        await navigator.clipboard.writeText(text);
+        document.getElementById("cli-copy-status").textContent = statusMessage;
+      } catch (_err) {
+        document.getElementById("cli-copy-status").textContent = "Copy failed — select commands manually.";
+      }
+    }
+    function updateCopyAllRemainingState() {
+      const copyAllBtn = document.getElementById("copy-all-remaining-btn");
+      if (!copyAllBtn) return;
+      const commandDone = buildCommandDone(activeBuild());
+      const hasRemaining = cliChecklistGroups.some((group) => group.commands.length && !commandDone[group.signature]);
+      copyAllBtn.disabled = !hasRemaining;
+    }
+    function clearCliChecklist() {
       const empty = document.getElementById("cli-empty");
-      const commands = document.getElementById("cli-commands");
+      const wrap = document.getElementById("cli-checklist-wrap");
+      const body = document.getElementById("cli-checklist");
+      const warningsEl = document.getElementById("cli-warnings");
+      const status = document.getElementById("cli-copy-status");
       const panel = document.getElementById("cli-panel");
-      if (!empty || !commands || !panel) return;
+      if (!empty || !wrap || !body || !warningsEl || !panel) return;
+      cliChecklistGroups = [];
       empty.hidden = false;
-      commands.hidden = true;
-      commands.textContent = "";
+      wrap.hidden = true;
+      body.innerHTML = "";
+      warningsEl.innerHTML = "";
+      if (status) status.textContent = "";
       panel.open = false;
+      updateCopyAllRemainingState();
     }
-    function fillCliPanel(text) {
+    function fillCliChecklist(data) {
       const empty = document.getElementById("cli-empty");
-      const commands = document.getElementById("cli-commands");
-      if (!empty || !commands) return;
-      const body = String(text || "").trim();
-      if (!body) { clearCliPanel(); return; }
+      const wrap = document.getElementById("cli-checklist-wrap");
+      const body = document.getElementById("cli-checklist");
+      const warningsEl = document.getElementById("cli-warnings");
+      if (!empty || !wrap || !body || !warningsEl) return;
+      const warnings = (Array.isArray(data?.warnings) ? data.warnings : []).filter(Boolean);
+      const rawSteps = Array.isArray(data?.steps) && data.steps.length
+        ? data.steps
+        : (Array.isArray(data?.log) ? data.log : []);
+      const groups = groupLunStepsByVolume(rawSteps);
+      if (!warnings.length && !groups.length) { clearCliChecklist(); return; }
+      cliChecklistGroups = groups;
       empty.hidden = true;
-      commands.hidden = false;
-      commands.textContent = body;
+      wrap.hidden = false;
+      warningsEl.innerHTML = warnings.map((warning) => `<div>WARNING: ${esc(warning)}</div>`).join("");
+      const commandDone = buildCommandDone(activeBuild());
+      body.innerHTML = groups.length
+        ? groups.map((group, index) => {
+            const done = Boolean(commandDone[group.signature]);
+            const hasCommands = group.commands.length > 0;
+            return `<tr class="${done ? "row-done" : ""}">
+              <td class="done-cell"><input type="checkbox" data-cli-done-index="${index}" title="Mark commands done" ${done ? "checked" : ""}></td>
+              <td>${esc(group.volume_name || "—")}</td>
+              <td><pre>${esc(group.commands.join("\\n"))}</pre></td>
+              <td><button type="button" class="secondary" data-cli-copy-index="${index}" ${hasCommands ? "" : "disabled"}>Copy</button></td>
+            </tr>`;
+          }).join("")
+        : '<tr><td colspan="4" class="empty">No commands to show.</td></tr>';
+      updateCopyAllRemainingState();
     }
     function renderWizard() {
       const step = wizardSteps[wizardStep];
@@ -311,7 +414,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       return {
         id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false,
         default_storage_profile:"", default_pool_or_cpg:"", default_card_hint:"",
-        plan_done:{},
+        plan_done:{}, command_done:{},
       };
     }
     function activeBuild() {
@@ -552,7 +655,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         window.__lastLunHasRunnableSteps = Boolean(data.runnable);
         render();
         const previewText = formatLunResult(data);
-        fillCliPanel(previewText);
+        fillCliChecklist(data);
         showModal("Preview / Dry-run", previewText);
         statusEl.textContent = data.ok
           ? (data.plan_only ? "Plan-only preview succeeded; Run Create remains disabled." : "Preview succeeded; Run Create is enabled for this session.")
@@ -571,7 +674,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       try {
         const data = await postLunOperation("/api/lun-builds/create", { build_id:currentId, confirm:true });
         const resultText = formatLunResult(data, true);
-        fillCliPanel(resultText);
+        fillCliChecklist(data);
         showModal("Run Create", resultText);
         statusEl.textContent = data.ok ? "LUN create completed." : "LUN create stopped after a failure.";
       } catch (error) {
@@ -691,6 +794,33 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       else delete build.plan_done[name];
       const row = target.closest("tr");
       if (row) row.classList.toggle("row-done", target.checked);
+    });
+    document.getElementById("cli-checklist").addEventListener("change", (event) => {
+      const target = event.target;
+      const indexAttr = target?.dataset?.cliDoneIndex;
+      if (indexAttr === undefined) return;
+      const group = cliChecklistGroups[Number(indexAttr)];
+      if (!group) return;
+      const commandDone = buildCommandDone(activeBuild());
+      if (target.checked) commandDone[group.signature] = true;
+      else delete commandDone[group.signature];
+      const row = target.closest("tr");
+      if (row) row.classList.toggle("row-done", target.checked);
+      updateCopyAllRemainingState();
+    });
+    document.getElementById("cli-checklist").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-cli-copy-index]");
+      if (!button) return;
+      const group = cliChecklistGroups[Number(button.dataset.cliCopyIndex)];
+      if (!group || !group.commands.length) return;
+      copyText(group.commands.join("\\n"), `Copied commands for ${group.volume_name || "this group"}.`);
+    });
+    document.getElementById("copy-all-remaining-btn").addEventListener("click", () => {
+      const commandDone = buildCommandDone(activeBuild());
+      const remaining = cliChecklistGroups.filter((group) => group.commands.length && !commandDone[group.signature]);
+      const text = remaining.flatMap((group) => group.commands).join("\\n");
+      if (!text) return;
+      copyText(text, `Copied commands for ${remaining.length} remaining volume(s).`);
     });
     ["build-name", "build-location", "build-notes"].forEach((id) => document.getElementById(id).addEventListener("input", () => { invalidatePreview(); document.getElementById("run-btn").disabled = true; }));
     document.getElementById("default-storage-profile").addEventListener("change", onBuildDefaultsChanged);
