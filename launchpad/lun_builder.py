@@ -530,6 +530,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (target.dataset.key === "done") {
         const row = target.closest("tr");
         if (row) row.classList.toggle("row-done", Boolean(value));
+        updateSectionHeadings(activeBuild());
         return;
       }
       invalidatePreview();
