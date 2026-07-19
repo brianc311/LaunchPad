@@ -40,8 +40,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     select, input, textarea { width:100%; padding:8px 9px; color:var(--text); background:#0f141d; border:1px solid var(--border); border-radius:8px; font:inherit; }
     .picker select { width:auto; min-width:240px; }
     textarea { min-height:70px; resize:vertical; }
-    .summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    .summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
     .notes { grid-column:1 / -1; }
+    .defaults-hint { grid-column:1 / -1; margin:0; color:var(--muted); font-size:.85rem; }
     .table-wrap { overflow-x:auto; }
     table { width:100%; min-width:980px; border-collapse:collapse; }
     th, td { padding:7px; text-align:left; vertical-align:top; border:1px solid var(--border); }
@@ -101,6 +102,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       <div class="summary">
         <label>Name <input id="build-name" placeholder="Build name"></label>
         <label>Location <input id="build-location" placeholder="Site location"></label>
+        <label>Storage profile
+          <select id="default-storage-profile"><option value="">Select profile</option>{{PROFILE_OPTIONS}}</select>
+        </label>
+        <label>Pool / CPG <input id="default-pool-or-cpg" placeholder="Apply to all LUN rows"></label>
+        <label>Card hint <input id="default-card-hint" placeholder="Health Card name for SSH" title="LaunchPad SSH Health Card name used for Preview/Run"></label>
+        <p class="defaults-hint">Storage profile, Pool/CPG, and Card hint above fill every LUN row. Card hint is the LaunchPad SSH Health Card name (or unique part of it) for the target array — not the pool name. You can still edit individual rows.</p>
         <label class="notes">Notes <textarea id="build-notes" placeholder="Planning notes"></textarea></label>
       </div>
     </section>
@@ -212,7 +219,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!wizardDone) { wizardStep = 0; renderWizard(); wizard.hidden = false; }
     }
     function esc(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"); }
-    function emptyBuild() { return { id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false }; }
+    function emptyBuild() {
+      return {
+        id:"", name:"", location:"", notes:"", hosts:[], luns:[], is_template:false,
+        default_storage_profile:"", default_pool_or_cpg:"", default_card_hint:"",
+      };
+    }
     function activeBuild() {
       return builds.find((build) => String(build.id) === currentId)
         || templates.find((template) => String(template.id) === currentId)
@@ -233,6 +245,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       document.getElementById("build-name").value = build.name || "";
       document.getElementById("build-location").value = build.location || "";
       document.getElementById("build-notes").value = build.notes || "";
+      document.getElementById("default-storage-profile").value = build.default_storage_profile || "";
+      document.getElementById("default-pool-or-cpg").value = build.default_pool_or_cpg || "";
+      document.getElementById("default-card-hint").value = build.default_card_hint || "";
       hostsBody.innerHTML = (build.hosts || []).length ? build.hosts.map((host, index) => `<tr>
         <td>${input("lpar_name", host.lpar_name, index, "hosts")}</td><td>${input("slot", host.slot, index, "hosts")}</td>
         <td>${input("state", host.state, index, "hosts")}</td><td><input type="checkbox" data-kind="hosts" data-index="${index}" data-key="required" ${host.required ? "checked" : ""}></td>
@@ -256,6 +271,27 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       build.name = document.getElementById("build-name").value.trim();
       build.location = document.getElementById("build-location").value.trim();
       build.notes = document.getElementById("build-notes").value.trim();
+      build.default_storage_profile = document.getElementById("default-storage-profile").value.trim();
+      build.default_pool_or_cpg = document.getElementById("default-pool-or-cpg").value.trim();
+      build.default_card_hint = document.getElementById("default-card-hint").value.trim();
+    }
+    function applyBuildDefaultsToLuns(build) {
+      const profile = String(build.default_storage_profile || "").trim();
+      const pool = String(build.default_pool_or_cpg || "").trim();
+      const cardHint = String(build.default_card_hint || "").trim();
+      (build.luns || []).forEach((lun) => {
+        if (profile) lun.storage_profile = profile;
+        if (pool) lun.pool_or_cpg = pool;
+        if (cardHint) lun.card_hint = cardHint;
+      });
+    }
+    function onBuildDefaultsChanged() {
+      const build = activeBuild();
+      readSummary(build);
+      applyBuildDefaultsToLuns(build);
+      invalidatePreview();
+      render();
+      statusEl.textContent = "Applied storage defaults to all LUN rows.";
     }
     function makeId(name) {
       const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "build";
@@ -270,7 +306,14 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       const build = activeBuild();
       build[kind].push(kind === "hosts"
         ? { lpar_name:"", slot:"", state:"", required:false, type:"", wwpn1:"", wwpn2:"", notes:"" }
-        : { purpose:"", count:1, size:"", shared:false, storage_profile:"", pool_or_cpg:"", host_names:[], scsi_or_lun_id:"", card_hint:"", cluster:"" });
+        : {
+            purpose:"", count:1, size:"", shared:false,
+            storage_profile: build.default_storage_profile || "",
+            pool_or_cpg: build.default_pool_or_cpg || "",
+            host_names:[], scsi_or_lun_id:"",
+            card_hint: build.default_card_hint || "",
+            cluster:"",
+          });
       invalidatePreview();
       render();
     }
@@ -495,6 +538,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       body.addEventListener("click", (event) => { const button = event.target.closest("[data-remove]"); if (!button) return; activeBuild()[button.dataset.remove].splice(Number(button.dataset.index), 1); invalidatePreview(); render(); });
     });
     ["build-name", "build-location", "build-notes"].forEach((id) => document.getElementById(id).addEventListener("input", () => { invalidatePreview(); document.getElementById("run-btn").disabled = true; }));
+    document.getElementById("default-storage-profile").addEventListener("change", onBuildDefaultsChanged);
+    document.getElementById("default-pool-or-cpg").addEventListener("change", onBuildDefaultsChanged);
+    document.getElementById("default-card-hint").addEventListener("change", onBuildDefaultsChanged);
     document.getElementById("preview-btn").addEventListener("click", previewLuns);
     document.getElementById("run-btn").addEventListener("click", runLunCreate);
     document.getElementById("modal-close").addEventListener("click", () => { modal.hidden = true; });

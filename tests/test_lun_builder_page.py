@@ -59,6 +59,18 @@ def test_lun_builder_exposes_collapsed_cli_panel():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_exposes_build_defaults_that_fill_luns():
+    for text in (
+        'id="default-storage-profile"',
+        'id="default-pool-or-cpg"',
+        'id="default-card-hint"',
+        "applyBuildDefaultsToLuns",
+        "onBuildDefaultsChanged",
+        "Card hint is the LaunchPad SSH Health Card name",
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
 def test_lun_builder_exposes_template_picker_ux():
     for text in (
         "Templates",

@@ -59,6 +59,23 @@ def test_validate_build_requires_lun_fields():
     assert validate_build_for_preview(build)
 
 
+def test_normalize_build_keeps_default_fields():
+    build = normalize_build(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "Pool0",
+            "default_card_hint": "cardA",
+            "hosts": [],
+            "luns": [],
+        }
+    )
+    assert build["default_storage_profile"] == "flashsystem_5200"
+    assert build["default_pool_or_cpg"] == "Pool0"
+    assert build["default_card_hint"] == "cardA"
+
+
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
     assert len(templates) == 1

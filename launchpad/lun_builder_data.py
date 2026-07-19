@@ -149,6 +149,9 @@ def normalize_build(raw: Any) -> dict | None:
         "notes": str(raw.get("notes") or "").strip(),
         "updated_at": str(raw.get("updated_at") or "").strip(),
         "is_template": _as_bool(raw.get("is_template")),
+        "default_storage_profile": str(raw.get("default_storage_profile") or "").strip(),
+        "default_pool_or_cpg": str(raw.get("default_pool_or_cpg") or "").strip(),
+        "default_card_hint": str(raw.get("default_card_hint") or "").strip(),
         "hosts": hosts,
         "luns": luns,
     }
