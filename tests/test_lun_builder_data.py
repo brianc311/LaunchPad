@@ -179,7 +179,7 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 2
+    assert len(templates) == 3
     hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
@@ -308,3 +308,65 @@ def test_jupiter_lun_batches_profile_and_names():
     assert "pjupmhcdb2_root_1" in expanded
     assert "pjupmhcdb2_data_1" in expanded
     assert "pjupres01_data_1" in expanded
+
+
+def _pendergrass_template() -> dict:
+    return next(
+        t for t in seed_lun_builder_templates() if t["id"] == "template-pendergrass-ga"
+    )
+
+
+def test_pendergrass_template_identity_and_defaults():
+    pen = _pendergrass_template()
+    assert pen["name"] == "Pendergrass, GA (Template)"
+    assert pen["location"] == "Pendergrass, GA"
+    assert pen["is_template"] is True
+    assert pen["default_storage_profile"] == "flashsystem_5200"
+    assert pen["default_pool_or_cpg"] == "G3_PEN_Pool1"
+    assert pen["default_card_hint"] == "Pendergrass, GA"
+    assert normalize_build(pen)["is_template"] is True
+
+
+def test_pendergrass_hosts_blank_wwpns():
+    pen = _pendergrass_template()
+    names = {h["lpar_name"] for h in pen["hosts"]}
+    assert names == {"pen_penesx_vm05", "pen_penesx_vm06"}
+    assert len(pen["hosts"]) == 2
+    assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in pen["hosts"])
+    assert all(h.get("type") == "Generic" for h in pen["hosts"])
+
+
+def test_pendergrass_lun_batches_shared_and_names():
+    pen = _pendergrass_template()
+    luns = pen["luns"]
+    both = ["pen_penesx_vm05", "pen_penesx_vm06"]
+    assert len(luns) == 3
+    assert all(lun.get("name_prefix") == "PEN" for lun in luns)
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "G3_PEN_Pool1" for lun in luns)
+    assert all(lun.get("card_hint") == "Pendergrass, GA" for lun in luns)
+    assert all(lun.get("shared") is True for lun in luns)
+    assert all(lun.get("cluster") == "esx" for lun in luns)
+    assert all(lun.get("host_names") == both for lun in luns)
+
+    vol_2tb = next(
+        lun for lun in luns if lun["purpose"] == "ESX_VOL" and lun["size"] == "2TB"
+    )
+    assert vol_2tb["count"] == 3
+    vol_4tb = next(
+        lun for lun in luns if lun["purpose"] == "ESX_VOL" and lun["size"] == "4TB"
+    )
+    assert vol_4tb["count"] == 1
+    coredump = next(lun for lun in luns if lun["purpose"] == "ESX_VOL_COREDUMP")
+    assert coredump["count"] == 1 and coredump["size"] == "100GB"
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert len(expanded) == 5
+    assert len(expanded) == len(set(expanded))
+    assert "PENesx_ESX_VOL_1" in expanded
+    assert "PENesx_ESX_VOL_2" in expanded
+    assert "PENesx_ESX_VOL_3" in expanded
+    assert "PENesx_ESX_VOL" in expanded  # single 4TB batch (count==1 uses base only)
+    assert "PENesx_ESX_VOL_COREDUMP" in expanded

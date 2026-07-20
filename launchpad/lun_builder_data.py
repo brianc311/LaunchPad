@@ -269,6 +269,24 @@ def _jupiter_host(lpar_name: str) -> dict:
     }
 
 
+def _pendergrass_host(lpar_name: str) -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": "",
+        "wwpn2": "",
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
+    }
+
+
 def seed_lun_builder_templates() -> list[dict]:
     hosts = [
         _hartford_host("pconsps3", 5, "pconvio01b", 17, "c050760c9594000e", "c050760c9594000f", "U78DA.ND0.WZS05WT-P0-C7-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
@@ -355,6 +373,23 @@ def seed_lun_builder_templates() -> list[dict]:
         jup_luns.append(_lun_batch("data", 9, "100GB", False, [db_host], "db", **jup_kwargs))
     jup_luns.append(_lun_batch("data", 5, "100GB", False, ["pjupres01"], "res", **jup_kwargs))
 
+    pen_hosts = [
+        _pendergrass_host(name)
+        for name in ("pen_penesx_vm05", "pen_penesx_vm06")
+    ]
+    pen_kwargs = {
+        "name_prefix": "PEN",
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "G3_PEN_Pool1",
+        "card_hint": "Pendergrass, GA",
+    }
+    pen_both = ["pen_penesx_vm05", "pen_penesx_vm06"]
+    pen_luns = [
+        _lun_batch("ESX_VOL", 3, "2TB", True, pen_both, "esx", **pen_kwargs),
+        _lun_batch("ESX_VOL", 1, "4TB", True, pen_both, "esx", **pen_kwargs),
+        _lun_batch("ESX_VOL_COREDUMP", 1, "100GB", True, pen_both, "esx", **pen_kwargs),
+    ]
+
     return [
         {
             "id": "template-hartford-ct",
@@ -383,6 +418,22 @@ def seed_lun_builder_templates() -> list[dict]:
             "default_card_hint": "Jupiter, FL",
             "hosts": jup_hosts,
             "luns": jup_luns,
+        },
+        {
+            "id": "template-pendergrass-ga",
+            "name": "Pendergrass, GA (Template)",
+            "location": "Pendergrass, GA",
+            "notes": (
+                "Seeded from Pendergrass FlashSystem 5200 inventory. "
+                "WWPNs are blank — set Port Definitions / Pull from FC WWPN before create. "
+                "Defaults use card hint Pendergrass, GA, profile flashsystem_5200, pool G3_PEN_Pool1."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "G3_PEN_Pool1",
+            "default_card_hint": "Pendergrass, GA",
+            "hosts": pen_hosts,
+            "luns": pen_luns,
         },
     ]
 

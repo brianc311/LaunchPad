@@ -107,7 +107,11 @@ def test_api_get_lun_builds_includes_site_templates(monkeypatch):
 
     assert status == 200
     template_ids = {t["id"] for t in payload["templates"]}
-    assert template_ids == {"template-hartford-ct", "template-jupiter-fl"}
+    assert template_ids == {
+        "template-hartford-ct",
+        "template-jupiter-fl",
+        "template-pendergrass-ga",
+    }
     assert all(
         build["id"] not in template_ids for build in payload["builds"]
     )
