@@ -179,8 +179,8 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 1
-    hartford = templates[0]
+    assert len(templates) == 2
+    hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
     assert hartford["is_template"] is True
@@ -189,7 +189,8 @@ def test_hartford_template_identity():
 
 
 def test_hartford_hosts_cover_six_lpars():
-    hartford = seed_lun_builder_templates()[0]
+    templates = seed_lun_builder_templates()
+    hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     names = {h["lpar_name"] for h in hartford["hosts"]}
     assert names == {
         "pconsps3",
@@ -206,7 +207,8 @@ def test_hartford_hosts_cover_six_lpars():
 
 
 def test_hartford_lun_batches_and_blank_profile_pool():
-    hartford = seed_lun_builder_templates()[0]
+    templates = seed_lun_builder_templates()
+    hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     luns = hartford["luns"]
     assert len(luns) == 21  # 6 root batches + 15 shared batches
     assert all(not str(lun.get("storage_profile") or "").strip() for lun in luns)
@@ -224,3 +226,85 @@ def test_hartford_lun_batches_and_blank_profile_pool():
     assert "pconsps_ora1vg_1" in expanded
     assert "pconmfs_ora1vg_1" in expanded
     assert "pconbt_ora1vg_1" in expanded
+
+
+def _jupiter_template() -> dict:
+    return next(
+        t for t in seed_lun_builder_templates() if t["id"] == "template-jupiter-fl"
+    )
+
+
+def test_jupiter_template_identity_and_defaults():
+    jup = _jupiter_template()
+    assert jup["name"] == "Jupiter, FL (Template)"
+    assert jup["location"] == "Jupiter, FL"
+    assert jup["is_template"] is True
+    assert jup["default_storage_profile"] == "flashsystem_5200"
+    assert jup["default_pool_or_cpg"] == "JUP_G3_Pool"
+    assert jup["default_card_hint"] == "Jupiter, FL"
+    assert normalize_build(jup)["is_template"] is True
+
+
+def test_jupiter_hosts_blank_wwpns():
+    jup = _jupiter_template()
+    names = {h["lpar_name"] for h in jup["hosts"]}
+    assert names == {
+        "pjupvio01a",
+        "pjupvio01b",
+        "pjupvio02a",
+        "pjupvio02b",
+        "pjupvio03a",
+        "pjupvio03b",
+        "pjupvio04a",
+        "pjupvio04b",
+        "pjupmhcdb2",
+        "pjupmhcdg2",
+        "pjupres01",
+    }
+    assert len(jup["hosts"]) == 11
+    assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in jup["hosts"])
+    assert all(h.get("type") == "Generic" for h in jup["hosts"])
+
+
+def test_jupiter_lun_batches_profile_and_names():
+    jup = _jupiter_template()
+    luns = jup["luns"]
+    # 8 vio root + 2 db root + 2 db data + 1 res data = 13
+    assert len(luns) == 13
+    assert all(lun.get("name_prefix") == "pjup" for lun in luns)
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "JUP_G3_Pool" for lun in luns)
+    assert all(lun.get("card_hint") == "Jupiter, FL" for lun in luns)
+
+    vio_roots = [
+        lun
+        for lun in luns
+        if lun["purpose"] == "root" and lun["host_names"][0].startswith("pjupvio")
+    ]
+    assert len(vio_roots) == 8
+    assert all(lun["count"] == 2 and lun["size"] == "100GB" for lun in vio_roots)
+
+    db2_root = next(
+        lun
+        for lun in luns
+        if lun["purpose"] == "root" and lun["host_names"] == ["pjupmhcdb2"]
+    )
+    assert db2_root["count"] == 3 and db2_root["size"] == "50GB"
+    db2_data = next(
+        lun
+        for lun in luns
+        if lun["purpose"] == "data" and lun["host_names"] == ["pjupmhcdb2"]
+    )
+    assert db2_data["count"] == 9 and db2_data["size"] == "100GB"
+
+    res = next(lun for lun in luns if lun["host_names"] == ["pjupres01"])
+    assert res["purpose"] == "data" and res["count"] == 5 and res["size"] == "100GB"
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert len(expanded) == len(set(expanded))
+    assert "pjupvio01a_root_1" in expanded
+    assert "pjupmhcdb2_root_1" in expanded
+    assert "pjupmhcdb2_data_1" in expanded
+    assert "pjupres01_data_1" in expanded

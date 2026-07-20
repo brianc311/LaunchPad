@@ -232,19 +232,40 @@ def _lun_batch(
     cluster: str,
     *,
     name_prefix: str = "pcon",
+    storage_profile: str = "",
+    pool_or_cpg: str = "",
+    card_hint: str = "",
 ) -> dict:
     return {
         "purpose": purpose,
         "count": count,
         "size": size,
         "shared": shared,
-        "storage_profile": "",
-        "pool_or_cpg": "",
+        "storage_profile": storage_profile,
+        "pool_or_cpg": pool_or_cpg,
         "host_names": host_names,
         "scsi_or_lun_id": "",
-        "card_hint": "",
+        "card_hint": card_hint,
         "cluster": cluster,
         "name_prefix": name_prefix,
+    }
+
+
+def _jupiter_host(lpar_name: str) -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": "",
+        "wwpn2": "",
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
     }
 
 
@@ -295,6 +316,45 @@ def seed_lun_builder_templates() -> list[dict]:
                 _lun_batch("caavg_private", 1, "10GB", True, host_names, cluster),
             ]
         )
+    jup_hosts = [
+        _jupiter_host(name)
+        for name in (
+            "pjupvio01a",
+            "pjupvio01b",
+            "pjupvio02a",
+            "pjupvio02b",
+            "pjupvio03a",
+            "pjupvio03b",
+            "pjupvio04a",
+            "pjupvio04b",
+            "pjupmhcdb2",
+            "pjupmhcdg2",
+            "pjupres01",
+        )
+    ]
+    jup_kwargs = {
+        "name_prefix": "pjup",
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "JUP_G3_Pool",
+        "card_hint": "Jupiter, FL",
+    }
+    jup_luns: list[dict] = []
+    for vio in (
+        "pjupvio01a",
+        "pjupvio01b",
+        "pjupvio02a",
+        "pjupvio02b",
+        "pjupvio03a",
+        "pjupvio03b",
+        "pjupvio04a",
+        "pjupvio04b",
+    ):
+        jup_luns.append(_lun_batch("root", 2, "100GB", False, [vio], "vio", **jup_kwargs))
+    for db_host in ("pjupmhcdb2", "pjupmhcdg2"):
+        jup_luns.append(_lun_batch("root", 3, "50GB", False, [db_host], "db", **jup_kwargs))
+        jup_luns.append(_lun_batch("data", 9, "100GB", False, [db_host], "db", **jup_kwargs))
+    jup_luns.append(_lun_batch("data", 5, "100GB", False, ["pjupres01"], "res", **jup_kwargs))
+
     return [
         {
             "id": "template-hartford-ct",
@@ -307,7 +367,23 @@ def seed_lun_builder_templates() -> list[dict]:
             "is_template": True,
             "hosts": hosts,
             "luns": luns,
-        }
+        },
+        {
+            "id": "template-jupiter-fl",
+            "name": "Jupiter, FL (Template)",
+            "location": "Jupiter, FL",
+            "notes": (
+                "Seeded from Jupiter FlashSystem 5200 inventory. "
+                "WWPNs are blank — set Port Definitions / Pull from FC WWPN before create. "
+                "Defaults use card hint Jupiter, FL, profile flashsystem_5200, pool JUP_G3_Pool."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "JUP_G3_Pool",
+            "default_card_hint": "Jupiter, FL",
+            "hosts": jup_hosts,
+            "luns": jup_luns,
+        },
     ]
 
 
