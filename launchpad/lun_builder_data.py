@@ -305,6 +305,24 @@ def _mount_vernon_host(lpar_name: str, wwpn1: str = "", wwpn2: str = "") -> dict
     }
 
 
+def _windsor_host(lpar_name: str, wwpn1: str = "", wwpn2: str = "") -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": wwpn1,
+        "wwpn2": wwpn2,
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
+    }
+
+
 def seed_lun_builder_templates() -> list[dict]:
     hosts = [
         _hartford_host("pconsps3", 5, "pconvio01b", 17, "c050760c9594000e", "c050760c9594000f", "U78DA.ND0.WZS05WT-P0-C7-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
@@ -451,6 +469,64 @@ def seed_lun_builder_templates() -> list[dict]:
         )
     )
 
+    win_hosts = [
+        _windsor_host("AWN1", "C050760B518B0000", "C050760B518B0002"),
+        _windsor_host("AWN1", "C050760B518B0004", "C050760B518B0006"),
+        _windsor_host("PEN_WINESX_VM01", "51402EC012CFD072", "51402EC012CFD2BE"),
+        _windsor_host("PEN_WINESX_VM02", "51402EC012CFD090", "51402EC012CFD2C4"),
+        _windsor_host("PEN_WINESX_VM03", "51402EC012C90280", "51402EC012C904A4"),
+        _windsor_host("pwinap01", "", ""),
+        _windsor_host("pwinmq01", "C050760B53990018", "C050760B5399001A"),
+        _windsor_host("pwinmq01", "C050760B5399001C", "C050760B5399001E"),
+        _windsor_host("pwinvio01a", "21000024FF86027C", "21000024FF86027D"),
+        _windsor_host("pwinvio01b", "21000024FF86025C", "21000024FF86025D"),
+        _windsor_host("pwinvio01b", "21000024FF86025E", ""),
+        _windsor_host("pwinvio02a", "21000024FF860A7C", "21000024FF860A7D"),
+        _windsor_host("pwinvio02b", "21000024FF86048C", "21000024FF86048D"),
+        _windsor_host("pwinvio02b", "21000024FF86048E", ""),
+    ]
+    win_kwargs = {
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "Windsor_G3_Pool0",
+        "card_hint": "Windsor, WI",
+    }
+    win_esx = ["PEN_WINESX_VM01", "PEN_WINESX_VM02", "PEN_WINESX_VM03"]
+    win_luns: list[dict] = [
+        _lun_batch(
+            "AWN1", 6, "500GB", True, ["AWN1"], "",
+            name_prefix="AS400", **win_kwargs,
+        ),
+        _lun_batch(
+            "ESX_DataStore", 3, "4TB", True, win_esx, "",
+            name_prefix="WIN", **win_kwargs,
+        ),
+        _lun_batch(
+            "root", 3, "50GB", False, ["pwinap01"], "app",
+            name_prefix="pwin", **win_kwargs,
+        ),
+        _lun_batch(
+            "data", 2, "100GB", False, ["pwinap01"], "app",
+            name_prefix="pwin", **win_kwargs,
+        ),
+        _lun_batch(
+            "root", 3, "50GB", False, ["pwinmq01"], "mq",
+            name_prefix="pwin", **win_kwargs,
+        ),
+    ]
+    for vio in ("pwinvio01a", "pwinvio02a", "pwinvio02b"):
+        win_luns.append(
+            _lun_batch(
+                "root", 2, "100GB", False, [vio], "vio",
+                name_prefix="pwin", **win_kwargs,
+            )
+        )
+    win_luns.append(
+        _lun_batch(
+            "root", 5, "100GB", False, ["pwinvio01b"], "vio",
+            name_prefix="pwin", **win_kwargs,
+        )
+    )
+
     return [
         {
             "id": "template-hartford-ct",
@@ -511,6 +587,23 @@ def seed_lun_builder_templates() -> list[dict]:
             "default_card_hint": "Mount Vernon, IL",
             "hosts": mtv_hosts,
             "luns": mtv_luns,
+        },
+        {
+            "id": "template-windsor-wi",
+            "name": "Windsor, WI (Template)",
+            "location": "Windsor, WI",
+            "notes": (
+                "Seeded from Windsor FlashSystem 5200 inventory (Windsor_Cluster site). "
+                "Active Port Definition WWPNs are filled except pwinap01 (blank). "
+                "Offline ports omitted. Defaults use card hint Windsor, WI, "
+                "profile flashsystem_5200, pool Windsor_G3_Pool0."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "Windsor_G3_Pool0",
+            "default_card_hint": "Windsor, WI",
+            "hosts": win_hosts,
+            "luns": win_luns,
         },
     ]
 

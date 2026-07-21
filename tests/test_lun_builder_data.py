@@ -179,7 +179,7 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 4
+    assert len(templates) == 5
     hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
@@ -479,3 +479,125 @@ def test_mount_vernon_lun_batches_and_names():
     assert len(expanded) == len(set(expanded))
     # 10 + 4 + 8 + 3 = 25
     assert len(expanded) == 25
+
+
+def _windsor_template() -> dict:
+    return next(
+        t for t in seed_lun_builder_templates() if t["id"] == "template-windsor-wi"
+    )
+
+
+def test_windsor_template_identity_and_defaults():
+    win = _windsor_template()
+    assert win["name"] == "Windsor, WI (Template)"
+    assert win["location"] == "Windsor, WI"
+    assert win["is_template"] is True
+    assert win["default_storage_profile"] == "flashsystem_5200"
+    assert win["default_pool_or_cpg"] == "Windsor_G3_Pool0"
+    assert win["default_card_hint"] == "Windsor, WI"
+    assert normalize_build(win)["is_template"] is True
+
+
+def test_windsor_hosts_and_active_wwpns():
+    win = _windsor_template()
+    hosts = win["hosts"]
+    assert len(hosts) == 14
+    names = [h["lpar_name"] for h in hosts]
+    assert names.count("AWN1") == 2
+    assert names.count("pwinmq01") == 2
+    assert names.count("pwinvio01b") == 2
+    assert names.count("pwinvio02b") == 2
+    assert set(names) == {
+        "AWN1",
+        "PEN_WINESX_VM01",
+        "PEN_WINESX_VM02",
+        "PEN_WINESX_VM03",
+        "pwinap01",
+        "pwinmq01",
+        "pwinvio01a",
+        "pwinvio01b",
+        "pwinvio02a",
+        "pwinvio02b",
+    }
+    assert all(h.get("type") == "Generic" for h in hosts)
+
+    ap01 = next(h for h in hosts if h["lpar_name"] == "pwinap01")
+    assert ap01["wwpn1"] == "" and ap01["wwpn2"] == ""
+
+    awn_rows = [h for h in hosts if h["lpar_name"] == "AWN1"]
+    assert {(r["wwpn1"], r["wwpn2"]) for r in awn_rows} == {
+        ("C050760B518B0000", "C050760B518B0002"),
+        ("C050760B518B0004", "C050760B518B0006"),
+    }
+    mq_rows = [h for h in hosts if h["lpar_name"] == "pwinmq01"]
+    assert {(r["wwpn1"], r["wwpn2"]) for r in mq_rows} == {
+        ("C050760B53990018", "C050760B5399001A"),
+        ("C050760B5399001C", "C050760B5399001E"),
+    }
+    esx01 = next(h for h in hosts if h["lpar_name"] == "PEN_WINESX_VM01")
+    assert esx01["wwpn1"] == "51402EC012CFD072"
+    assert esx01["wwpn2"] == "51402EC012CFD2BE"
+    vio01a = next(h for h in hosts if h["lpar_name"] == "pwinvio01a")
+    assert vio01a["wwpn1"] == "21000024FF86027C"
+    assert vio01a["wwpn2"] == "21000024FF86027D"
+
+
+def test_windsor_lun_batches_and_names():
+    win = _windsor_template()
+    luns = win["luns"]
+    # 1 AS400 + 1 ESX + 2 ap + 1 mq + 3 vio(01a/02a/02b) + 1 vio01b = 9
+    assert len(luns) == 9
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "Windsor_G3_Pool0" for lun in luns)
+    assert all(lun.get("card_hint") == "Windsor, WI" for lun in luns)
+
+    as400 = next(lun for lun in luns if lun["purpose"] == "AWN1")
+    assert as400["count"] == 6 and as400["size"] == "500GB"
+    assert as400["shared"] is True and as400["name_prefix"] == "AS400"
+    assert as400["host_names"] == ["AWN1"]
+
+    esx = next(lun for lun in luns if lun["purpose"] == "ESX_DataStore")
+    assert esx["count"] == 3 and esx["size"] == "4TB"
+    assert esx["shared"] is True and esx["name_prefix"] == "WIN"
+    assert esx["host_names"] == [
+        "PEN_WINESX_VM01",
+        "PEN_WINESX_VM02",
+        "PEN_WINESX_VM03",
+    ]
+
+    ap_root = next(
+        lun
+        for lun in luns
+        if lun["host_names"] == ["pwinap01"] and lun["purpose"] == "root"
+    )
+    assert ap_root["count"] == 3 and ap_root["size"] == "50GB"
+    ap_data = next(
+        lun
+        for lun in luns
+        if lun["host_names"] == ["pwinap01"] and lun["purpose"] == "data"
+    )
+    assert ap_data["count"] == 2 and ap_data["size"] == "100GB"
+
+    mq = next(lun for lun in luns if lun["host_names"] == ["pwinmq01"])
+    assert mq["purpose"] == "root" and mq["count"] == 3 and mq["size"] == "50GB"
+
+    vio01b = next(lun for lun in luns if lun["host_names"] == ["pwinvio01b"])
+    assert vio01b["count"] == 5 and vio01b["size"] == "100GB"
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert "AS400_AWN1_1" in expanded
+    assert "AS400_AWN1_6" in expanded
+    assert "WIN_ESX_DataStore_1" in expanded
+    assert "WIN_ESX_DataStore_3" in expanded
+    assert "pwinap01_root_1" in expanded
+    assert "pwinap01_data_1" in expanded
+    assert "pwinmq01_root_1" in expanded
+    assert "pwinvio01a_root_1" in expanded
+    assert "pwinvio01b_root_1" in expanded
+    assert "pwinvio01b_root_5" in expanded
+    assert "pwinvio02b_root_2" in expanded
+    assert len(expanded) == len(set(expanded))
+    # 6 + 3 + 3 + 2 + 3 + 2 + 2 + 2 + 5 = 28
+    assert len(expanded) == 28
