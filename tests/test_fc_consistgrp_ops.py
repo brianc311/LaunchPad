@@ -1,8 +1,11 @@
 from launchpad.fc_consistgrp_ops import (
+    ACTIONS,
+    build_fc_consistgrp_steps,
     enrich_group_map_counts,
     parse_lsfcconsistgrp,
     parse_lsfcmap_rows,
     partition_maps,
+    preview_ok,
 )
 
 CG_SAMPLE = """id:name:status:FC_mapping_count
@@ -39,3 +42,61 @@ def test_enrich_group_map_counts():
     enriched = enrich_group_map_counts(groups, maps)
     awd = next(g for g in enriched if g["name"] == "AWD1_AS400_CG")
     assert awd["map_count"] == 2  # from membership in sample
+
+
+def _inv():
+    return parse_lsfcconsistgrp(CG_SAMPLE), parse_lsfcmap_rows(MAP_SAMPLE)
+
+
+def test_create_group_skips_existing():
+    groups, maps = _inv()
+    steps, warnings = build_fc_consistgrp_steps(
+        "create_group", {"name": "AWD1_AS400_CG"}, groups=groups, maps=maps
+    )
+    assert len(steps) == 1 and steps[0].skip
+    assert "mkfcconsistgrp" in steps[0].cmd
+
+
+def test_assign_and_remove_and_start():
+    groups, maps = _inv()
+    steps, _ = build_fc_consistgrp_steps(
+        "assign_maps",
+        {"group_name": "AWD1_AS400_CG", "map_names": ["standalone1"]},
+        groups=groups,
+        maps=maps,
+    )
+    assert any("chfcmap -consistgrp AWD1_AS400_CG standalone1" in s.cmd for s in steps)
+    steps, _ = build_fc_consistgrp_steps(
+        "remove_maps", {"map_names": ["fcmap0"]}, groups=groups, maps=maps
+    )
+    assert any("chfcmap -consistgrp null fcmap0" in s.cmd for s in steps)
+    steps, _ = build_fc_consistgrp_steps(
+        "start_group", {"group_name": "AWD1_AS400_CG"}, groups=groups, maps=maps
+    )
+    assert [s.kind for s in steps] == ["prestartfcconsistgrp", "startfcconsistgrp"]
+
+
+def test_delete_non_empty_refused():
+    groups, maps = _inv()
+    steps, warnings = build_fc_consistgrp_steps(
+        "delete_group", {"group_name": "AWD1_AS400_CG"}, groups=groups, maps=maps
+    )
+    assert steps == []
+    assert any(w.startswith("ERROR:") for w in warnings)
+    assert not preview_ok(steps, warnings)
+
+
+def test_delete_empty_ok():
+    groups, maps = _inv()
+    steps, warnings = build_fc_consistgrp_steps(
+        "delete_group", {"group_name": "empty_cg"}, groups=groups, maps=maps
+    )
+    assert len(steps) == 1 and "rmfcconsistgrp empty_cg" in steps[0].cmd
+    assert not any(w.startswith("ERROR:") for w in warnings)
+    assert preview_ok(steps, warnings)
+
+
+def test_actions_constant():
+    assert ACTIONS == frozenset(
+        {"create_group", "assign_maps", "remove_maps", "start_group", "delete_group"}
+    )
