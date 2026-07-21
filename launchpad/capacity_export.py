@@ -273,6 +273,7 @@ def _pool_detail_rows_for_site(
 
 
 def _styled_workbook(
+    inventory_rows: list[tuple[str, ...]],
     inventory_fills: list[InventoryFill],
     extra_rows: list[ExtraRow],
     pool_detail_rows: list[PoolDetailRow],
@@ -297,7 +298,7 @@ def _styled_workbook(
         cell.border = border
 
     row_idx = 2
-    for inv_row, (capacity, pool_stats) in zip(INVENTORY_ROWS, inventory_fills, strict=True):
+    for inv_row, (capacity, pool_stats) in zip(inventory_rows, inventory_fills, strict=True):
         location, device_sn, ip_addr, device_name, serial, model = inv_row
         values = (
             location,
@@ -403,8 +404,17 @@ def export_storage_capacity_excel(
     output_path: Path,
     *,
     progress: ProgressCallback | None = None,
+    include_monitor_off: bool = True,
+    monitor_enabled: Mapping[int, bool] | None = None,
 ) -> ExportResult:
     entries = build_health_dashboard_entries(db, crypto_key)
+    monitor_map = monitor_enabled or {}
+    included = card_ids_included_for_export(
+        [e.card_id for e in entries],
+        include_monitor_off=include_monitor_off,
+        monitor_enabled=monitor_map,
+    )
+    entries = [e for e in entries if e.card_id in included]
     cards_by_id = {card.id: card for card in db.list_cards() if card.card_type == "ssh"}
     by_ip, by_serial, by_name = _build_card_lookups(cards_by_id)
 
@@ -429,6 +439,7 @@ def export_storage_capacity_excel(
             error_count += 1
 
     matched_card_ids: set[int] = set()
+    inventory_rows_exported: list[tuple[str, ...]] = []
     inventory_fills: list[InventoryFill] = []
     pool_detail_rows: list[PoolDetailRow] = []
     filled_count = 0
@@ -445,6 +456,12 @@ def export_storage_capacity_excel(
             by_name,
             matched_card_ids=matched_card_ids,
         )
+        if not keep_inventory_row(
+            matched_card_id=card_id,
+            included_card_ids=included,
+            include_monitor_off=include_monitor_off,
+        ):
+            continue
         if card_id is not None:
             matched_card_ids.add(card_id)
             capacity_text = capacity_by_card_id.get(card_id, "")
@@ -457,6 +474,7 @@ def export_storage_capacity_excel(
                 filled_count += 1
             if pool_stats_text:
                 pool_filled_count += 1
+        inventory_rows_exported.append(row)
         inventory_fills.append((capacity_text, pool_stats_text))
 
     extra_rows: list[ExtraRow] = []
@@ -486,7 +504,7 @@ def export_storage_capacity_excel(
     extra_rows.sort(key=lambda row: (row[0].lower(), row[1].lower()))
     pool_detail_rows.sort(key=lambda row: (row[0].lower(), row[1].lower(), row[3].lower()))
 
-    wb = _styled_workbook(inventory_fills, extra_rows, pool_detail_rows)
+    wb = _styled_workbook(inventory_rows_exported, inventory_fills, extra_rows, pool_detail_rows)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
@@ -538,7 +556,7 @@ def open_exported_workbook(path: Path) -> None:
 def export_blank_inventory(output_path: Path) -> Path:
     """Write inventory template with empty Capacity and Pool Stats columns."""
     empty_fills = [("", "") for _ in INVENTORY_ROWS]
-    wb = _styled_workbook(empty_fills, [], [])
+    wb = _styled_workbook(INVENTORY_ROWS, empty_fills, [], [])
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
