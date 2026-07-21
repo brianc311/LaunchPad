@@ -323,6 +323,24 @@ def _windsor_host(lpar_name: str, wwpn1: str = "", wwpn2: str = "") -> dict:
     }
 
 
+def _anderson_host(lpar_name: str, wwpn1: str = "", wwpn2: str = "") -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": wwpn1,
+        "wwpn2": wwpn2,
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
+    }
+
+
 def seed_lun_builder_templates() -> list[dict]:
     hosts = [
         _hartford_host("pconsps3", 5, "pconvio01b", 17, "c050760c9594000e", "c050760c9594000f", "U78DA.ND0.WZS05WT-P0-C7-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
@@ -527,6 +545,46 @@ def seed_lun_builder_templates() -> list[dict]:
         )
     )
 
+    and_kwargs = {
+        "storage_profile": "flashsystem_7200",
+        "pool_or_cpg": "G3_AND_Pool",
+        "card_hint": "Williamston (Anderson)",
+    }
+    and_host_names = sorted(
+        (
+            "AAN1", "AAN1C", "FC_AAN1",
+            "BIB_ADC_VM01", "BIB_ADC_VM02",
+            "pen_andesx_vm03", "pen_andesx_vm04",
+            "pla-wanoemcr01", "pla-wanoemcr02",
+            "pandvio01a", "pandvio01b", "pandvio02a", "pandvio02b",
+            "pandvio03a", "pandvio03b", "pandvio04a", "pandvio04b",
+            "pandvio05a", "pandvio05b", "pandvio06a", "pandvio06b",
+            "pandvio07a", "pandvio07b", "pandvio08a", "pandvio08b",
+            "pandvio09a", "pandvio09b", "pandvio10a", "pandvio10b",
+            "pandap01", "pandap02",
+            "pandbt1", "pandbt2", "pandbt3", "pandbt4", "pandbtdg1",
+            "panddb01", "panddb02",
+            "pandmfs1", "pandmfs2", "pandmfs3", "pandmfs4", "pandmfs10", "pandmfsdg1",
+            "pandnim01",
+            "pandps1", "pandps2", "pandps3", "pandps4", "pandpspdg1",
+            "pandpspa1", "pandpspa2",
+            "dandmfs1",
+            "tandbt1", "tandbt20",
+            "tandmfs1", "tandmfs2", "tandmfs20",
+            "tandsps1", "tandsps2",
+            "tandeps1", "tandeps2", "tandeps20", "tandeps21",
+            "tconbt20", "tconmfs20", "tconsps20", "tconsps21",
+            "TLA_WANMFS01", "TLA_WANMFS02",
+        )
+    )
+    and_hosts = [_anderson_host(name) for name in and_host_names]
+    and_luns: list[dict] = [
+        _lun_batch(
+            "placeholder", 1, "1GB", False, ["AAN1C"], "",
+            name_prefix="AAN1C", **and_kwargs,
+        ),
+    ]
+
     return [
         {
             "id": "template-hartford-ct",
@@ -604,6 +662,23 @@ def seed_lun_builder_templates() -> list[dict]:
             "default_card_hint": "Windsor, WI",
             "hosts": win_hosts,
             "luns": win_luns,
+        },
+        {
+            "id": "template-williamston-anderson",
+            "name": "Williamston (Anderson) (Template)",
+            "location": "Williamston (Anderson)",
+            "notes": (
+                "Seeded from Anderson FlashSystem 7200 inventory (v7kand-g3v1). "
+                "Active Port Definition WWPNs filled when known; Offline/missing blank. "
+                "Defaults use card hint Williamston (Anderson), profile flashsystem_7200, "
+                "pool G3_AND_Pool."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_7200",
+            "default_pool_or_cpg": "G3_AND_Pool",
+            "default_card_hint": "Williamston (Anderson)",
+            "hosts": and_hosts,
+            "luns": and_luns,
         },
     ]
 

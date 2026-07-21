@@ -179,7 +179,7 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 5
+    assert len(templates) == 6
     hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
@@ -601,3 +601,60 @@ def test_windsor_lun_batches_and_names():
     assert len(expanded) == len(set(expanded))
     # 6 + 3 + 3 + 2 + 3 + 2 + 2 + 2 + 5 = 28
     assert len(expanded) == 28
+
+
+ANDERSON_REQUIRED_HOSTS = frozenset({
+    "AAN1", "AAN1C", "FC_AAN1",
+    "BIB_ADC_VM01", "BIB_ADC_VM02",
+    "pen_andesx_vm03", "pen_andesx_vm04",
+    "pla-wanoemcr01", "pla-wanoemcr02",
+    "pandvio01a", "pandvio01b", "pandvio02a", "pandvio02b",
+    "pandvio03a", "pandvio03b", "pandvio04a", "pandvio04b",
+    "pandvio05a", "pandvio05b", "pandvio06a", "pandvio06b",
+    "pandvio07a", "pandvio07b", "pandvio08a", "pandvio08b",
+    "pandvio09a", "pandvio09b", "pandvio10a", "pandvio10b",
+    "pandap01", "pandap02",
+    "pandbt1", "pandbt2", "pandbt3", "pandbt4", "pandbtdg1",
+    "panddb01", "panddb02",
+    "pandmfs1", "pandmfs2", "pandmfs3", "pandmfs4", "pandmfs10", "pandmfsdg1",
+    "pandnim01",
+    "pandps1", "pandps2", "pandps3", "pandps4", "pandpspdg1",
+    "pandpspa1", "pandpspa2",
+    "dandmfs1",
+    "tandbt1", "tandbt20",
+    "tandmfs1", "tandmfs2", "tandmfs20",
+    "tandsps1", "tandsps2",
+    "tandeps1", "tandeps2", "tandeps20", "tandeps21",
+    "tconbt20", "tconmfs20", "tconsps20", "tconsps21",
+    "TLA_WANMFS01", "TLA_WANMFS02",
+})
+
+
+def _anderson_template() -> dict:
+    return next(
+        t
+        for t in seed_lun_builder_templates()
+        if t["id"] == "template-williamston-anderson"
+    )
+
+
+def test_anderson_template_identity_and_defaults():
+    and_ = _anderson_template()
+    assert and_["name"] == "Williamston (Anderson) (Template)"
+    assert and_["location"] == "Williamston (Anderson)"
+    assert and_["is_template"] is True
+    assert and_["default_storage_profile"] == "flashsystem_7200"
+    assert and_["default_pool_or_cpg"] == "G3_AND_Pool"
+    assert and_["default_card_hint"] == "Williamston (Anderson)"
+    assert normalize_build(and_)["is_template"] is True
+    assert "flashsystem_7200" in and_["notes"]
+    assert "G3_AND_Pool" in and_["notes"]
+
+
+def test_anderson_hosts_cover_required_catalog():
+    and_ = _anderson_template()
+    names = {h["lpar_name"] for h in and_["hosts"]}
+    assert names == ANDERSON_REQUIRED_HOSTS
+    assert all(h.get("type") == "Generic" for h in and_["hosts"])
+    # Task 1 leaves WWPNs blank; Task 2 fills Active ports
+    assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in and_["hosts"])
