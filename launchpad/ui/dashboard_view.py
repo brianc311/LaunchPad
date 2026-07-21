@@ -5,6 +5,9 @@ from pathlib import Path
 from tkinter import Menu, filedialog, messagebox
 
 from launchpad.branding import get_app_name, load_ctk_logo
+from launchpad.capacity_email_scheduler import is_capacity_email_due
+from launchpad.capacity_email_send import send_capacity_email
+from launchpad.capacity_email_settings import load_capacity_email_settings
 from launchpad.command_format import resolve_card_commands
 from launchpad.crypto import decrypt_text
 from launchpad.database import Card
@@ -33,6 +36,7 @@ from launchpad.ui.colors import normalize_color
 from launchpad.ui.theme import get_theme
 
 SSH_STATUS_INTERVAL_MS = 90_000
+CAPACITY_EMAIL_POLL_MS = 60_000
 
 
 class DashboardView(ctk.CTkFrame):
@@ -52,6 +56,8 @@ class DashboardView(ctk.CTkFrame):
         self._stats_in_flight: set[int] = set()
         self._ssh_status_in_flight: set[int] = set()
         self._ssh_status_timer: str | None = None
+        self._capacity_email_timer: str | None = None
+        self._capacity_email_send_in_flight = False
         self._visible_cards: dict[int, Card] = {}
         self._monitor_states: dict[int, bool] = {}
         self._cards_compact = self.db.get_setting("cards_compact", "true") == "true"
@@ -117,6 +123,7 @@ class DashboardView(ctk.CTkFrame):
 
         self.refresh_cards()
         self.after(200, self._register_health_cards_main_thread)
+        self._schedule_capacity_email_timer()
 
     def _register_health_cards_main_thread(self) -> None:
         try:
@@ -557,6 +564,73 @@ class DashboardView(ctk.CTkFrame):
         self._ssh_status_timer = None
         self._probe_all_ssh_status()
         self._schedule_ssh_status_checks()
+
+    def _schedule_capacity_email_timer(self) -> None:
+        if self._capacity_email_timer:
+            self.after_cancel(self._capacity_email_timer)
+        self._capacity_email_timer = self.after(
+            CAPACITY_EMAIL_POLL_MS, self._on_capacity_email_timer
+        )
+
+    def _on_capacity_email_timer(self) -> None:
+        self._capacity_email_timer = None
+        self._check_capacity_email_due()
+        self._schedule_capacity_email_timer()
+
+    def _check_capacity_email_due(self) -> None:
+        if self._capacity_email_send_in_flight:
+            return
+        try:
+            settings = load_capacity_email_settings(self.db)
+        except Exception:
+            return
+        if not is_capacity_email_due(settings):
+            return
+        self._run_capacity_email_send(settings, source="Scheduled")
+
+    def _email_capacity_now(self) -> None:
+        if self._capacity_email_send_in_flight:
+            self.status_label.configure(text="Capacity email already sending...")
+            return
+        settings = load_capacity_email_settings(self.db)
+        self._run_capacity_email_send(settings, source="Manual")
+
+    def _run_capacity_email_send(self, settings: dict, *, source: str) -> None:
+        from launchpad.ssh_launcher import _log
+
+        self._capacity_email_send_in_flight = True
+        self.status_label.configure(text=f"{source} capacity email sending...")
+
+        def progress(name: str, index: int, total: int) -> None:
+            self.after(
+                0,
+                lambda: self.status_label.configure(
+                    text=f"{source} capacity email ({index}/{total}): {name}..."
+                ),
+            )
+
+        def worker() -> None:
+            try:
+                result = send_capacity_email(
+                    self.db, self.crypto_key, settings, progress=progress
+                )
+            except Exception as exc:
+                result = {"ok": False, "settings": None, "path": "", "error": str(exc)}
+            self.after(0, lambda: self._on_capacity_email_send_done(result, source=source))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_capacity_email_send_done(self, result: dict, *, source: str) -> None:
+        from launchpad.ssh_launcher import _log
+
+        self._capacity_email_send_in_flight = False
+        if result.get("ok"):
+            text = f"{source} capacity email sent."
+            _log(text)
+        else:
+            text = f"{source} capacity email failed: {result.get('error', '')}"
+            _log(text)
+        self.status_label.configure(text=text)
 
     def _probe_all_ssh_status(self) -> None:
         cards = [card for card in self._ssh_cards if card.card_type == "ssh"]
@@ -1373,6 +1447,8 @@ class DashboardView(ctk.CTkFrame):
         menu.add_command(label="Capacity", command=self._export_capacity_excel)
         menu.add_command(label="FC WWPN", command=self._export_fc_wwpn_excel)
         menu.add_command(label="Snapshot Schedule", command=self._export_snapshot_schedule_excel)
+        menu.add_separator()
+        menu.add_command(label="Email Capacity Now", command=self._email_capacity_now)
         try:
             x = self.export_excel_btn.winfo_rootx()
             y = self.export_excel_btn.winfo_rooty() + self.export_excel_btn.winfo_height()

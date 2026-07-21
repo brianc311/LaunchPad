@@ -14,6 +14,14 @@ from launchpad.branding import (
     save_app_name,
     save_logo,
 )
+from launchpad.capacity_email_send import send_capacity_email
+from launchpad.capacity_email_settings import (
+    load_capacity_email_settings,
+    normalize_capacity_email_settings,
+    save_capacity_email_settings,
+    set_gmail_password,
+    validate_for_send,
+)
 from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, DEFAULT_SSH_PORT, APP_VERSION
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
 from launchpad.icons import ICON_CHOICES, resolve_icon
@@ -34,6 +42,9 @@ from launchpad.ui.theme import get_theme
 class AdminView(ctk.CTkFrame):
     _SECRET_ENTRY_KEYS = frozenset({"password", "key_passphrase"})
     _MASK_CHAR = "•"
+    _EMAIL_MODE_LABELS = {"daily": "Daily", "weekly": "Weekly", "every_n_days": "Every N days"}
+    _EMAIL_MODE_KEYS = {label: key for key, label in _EMAIL_MODE_LABELS.items()}
+    _EMAIL_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
     def __init__(self, master, db, crypto_key, on_back) -> None:
         super().__init__(master, fg_color="transparent")
@@ -49,6 +60,8 @@ class AdminView(ctk.CTkFrame):
         self._admin_ssh_leds: dict[int, ctk.CTkFrame] = {}
         self._admin_ssh_status_in_flight: set[int] = set()
         self._admin_ssh_status_timer: str | None = None
+        self._capacity_email_settings: dict | None = None
+        self._capacity_email_send_in_flight = False
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -149,9 +162,14 @@ class AdminView(ctk.CTkFrame):
         branding_tab.grid_columnconfigure(0, weight=1)
         branding_tab.grid_rowconfigure(0, weight=1)
 
+        email_tab = self.tabs.add("Capacity Email")
+        email_tab.grid_columnconfigure(0, weight=1)
+        email_tab.grid_rowconfigure(0, weight=1)
+
         self._build_card_list(connections_tab)
         self._build_card_form(connections_tab)
         self._build_branding_panel(branding_tab)
+        self._build_capacity_email_panel(email_tab)
         self.refresh_list()
 
         self.admin_status = ctk.CTkLabel(
@@ -319,6 +337,303 @@ class AdminView(ctk.CTkFrame):
             text=f"Branding saved. App name is now '{name}'. Return to dashboard to see changes.",
             text_color=self.theme["accent"],
         )
+
+    def _build_capacity_email_panel(self, parent) -> None:
+        panel = ctk.CTkFrame(parent, fg_color=self.theme["surface_alt"], corner_radius=16)
+        panel.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        panel.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            panel,
+            text="Capacity Report Email",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.theme["text"],
+        ).grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
+
+        ctk.CTkLabel(
+            panel,
+            text="Email the storage capacity report on a schedule via Gmail SMTP or local Outlook.",
+            font=ctk.CTkFont(size=12),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 16), sticky="w")
+
+        row = 2
+        ctk.CTkLabel(panel, text="Provider", text_color=self.theme["muted"]).grid(
+            row=row, column=0, padx=20, pady=8, sticky="w"
+        )
+        self.email_provider_var = ctk.StringVar(value="Gmail")
+        self.email_provider_menu = ctk.CTkOptionMenu(
+            panel,
+            variable=self.email_provider_var,
+            values=["Gmail", "Outlook"],
+            command=lambda _v: self._update_capacity_email_visibility(),
+        )
+        self.email_provider_menu.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        self.email_gmail_address_label = ctk.CTkLabel(
+            panel, text="Gmail Address", text_color=self.theme["muted"]
+        )
+        self.email_gmail_address_label.grid(row=row, column=0, padx=20, pady=8, sticky="w")
+        self.email_gmail_address_entry = ctk.CTkEntry(
+            panel, placeholder_text="you@gmail.com"
+        )
+        self.email_gmail_address_entry.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        self.email_gmail_password_label = ctk.CTkLabel(
+            panel, text="Gmail App Password", text_color=self.theme["muted"]
+        )
+        self.email_gmail_password_label.grid(row=row, column=0, padx=20, pady=8, sticky="w")
+        self.email_gmail_password_entry = ctk.CTkEntry(
+            panel,
+            placeholder_text="Leave blank to keep the saved password",
+            show=self._MASK_CHAR,
+        )
+        self.email_gmail_password_entry.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        ctk.CTkLabel(panel, text="To", text_color=self.theme["muted"]).grid(
+            row=row, column=0, padx=20, pady=8, sticky="w"
+        )
+        self.email_to_entry = ctk.CTkEntry(
+            panel, placeholder_text="ops@example.com; manager@example.com"
+        )
+        self.email_to_entry.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        ctk.CTkLabel(panel, text="Cc", text_color=self.theme["muted"]).grid(
+            row=row, column=0, padx=20, pady=8, sticky="w"
+        )
+        self.email_cc_entry = ctk.CTkEntry(
+            panel, placeholder_text="Optional, comma or semicolon separated"
+        )
+        self.email_cc_entry.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        ctk.CTkLabel(panel, text="Mode", text_color=self.theme["muted"]).grid(
+            row=row, column=0, padx=20, pady=8, sticky="w"
+        )
+        self.email_mode_var = ctk.StringVar(value="Weekly")
+        self.email_mode_menu = ctk.CTkOptionMenu(
+            panel,
+            variable=self.email_mode_var,
+            values=list(self._EMAIL_MODE_LABELS.values()),
+            command=lambda _v: self._update_capacity_email_visibility(),
+        )
+        self.email_mode_menu.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        self.email_weekday_label = ctk.CTkLabel(panel, text="Weekday", text_color=self.theme["muted"])
+        self.email_weekday_label.grid(row=row, column=0, padx=20, pady=8, sticky="w")
+        self.email_weekday_var = ctk.StringVar(value=self._EMAIL_WEEKDAY_LABELS[0])
+        self.email_weekday_menu = ctk.CTkOptionMenu(
+            panel,
+            variable=self.email_weekday_var,
+            values=self._EMAIL_WEEKDAY_LABELS,
+        )
+        self.email_weekday_menu.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        self.email_every_n_label = ctk.CTkLabel(
+            panel, text="Every N Days", text_color=self.theme["muted"]
+        )
+        self.email_every_n_label.grid(row=row, column=0, padx=20, pady=8, sticky="w")
+        self.email_every_n_entry = ctk.CTkEntry(panel, placeholder_text="7")
+        self.email_every_n_entry.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        ctk.CTkLabel(panel, text="Time (local, HH:MM)", text_color=self.theme["muted"]).grid(
+            row=row, column=0, padx=20, pady=8, sticky="w"
+        )
+        self.email_time_entry = ctk.CTkEntry(panel, placeholder_text="08:00")
+        self.email_time_entry.grid(row=row, column=1, padx=20, pady=8, sticky="ew")
+        row += 1
+
+        self.email_enabled_var = ctk.BooleanVar(value=False)
+        self.email_enabled_check = ctk.CTkCheckBox(
+            panel,
+            text="Enable schedule",
+            variable=self.email_enabled_var,
+        )
+        self.email_enabled_check.grid(row=row, column=0, columnspan=2, padx=20, pady=8, sticky="w")
+        row += 1
+
+        buttons = ctk.CTkFrame(panel, fg_color="transparent")
+        buttons.grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 8), sticky="w")
+
+        ctk.CTkButton(
+            buttons,
+            text="Save Capacity Email Settings",
+            fg_color=self.theme["accent"],
+            hover_color=self.theme["accent_soft"],
+            command=self._save_capacity_email_form,
+        ).grid(row=0, column=0, padx=(0, 8))
+
+        self.email_send_btn = ctk.CTkButton(
+            buttons,
+            text="Send Now",
+            fg_color=self.theme["surface"],
+            hover_color=self.theme["border"],
+            border_width=1,
+            border_color=self.theme["accent"],
+            command=self._send_capacity_email_now,
+        )
+        self.email_send_btn.grid(row=0, column=1, padx=(0, 8))
+        row += 1
+
+        self.email_last_sent_label = ctk.CTkLabel(
+            panel, text="Last sent: never", text_color=self.theme["muted"], font=ctk.CTkFont(size=11)
+        )
+        self.email_last_sent_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(4, 0), sticky="w")
+        row += 1
+
+        self.email_last_status_label = ctk.CTkLabel(
+            panel, text="Last status: —", text_color=self.theme["muted"], font=ctk.CTkFont(size=11)
+        )
+        self.email_last_status_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 0), sticky="w")
+        row += 1
+
+        self.email_last_error_label = ctk.CTkLabel(
+            panel,
+            text="Last error: —",
+            text_color=self.theme["muted"],
+            font=ctk.CTkFont(size=11),
+            wraplength=520,
+            justify="left",
+        )
+        self.email_last_error_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
+
+        self._load_capacity_email_form()
+
+    def _load_capacity_email_form(self) -> None:
+        settings = load_capacity_email_settings(self.db)
+        self._capacity_email_settings = settings
+        self._apply_capacity_email_form(settings)
+
+    def _apply_capacity_email_form(self, settings: dict) -> None:
+        self.email_provider_var.set("Outlook" if settings["provider"] == "outlook" else "Gmail")
+        self.email_gmail_address_entry.delete(0, "end")
+        self.email_gmail_address_entry.insert(0, settings["gmail_address"])
+        self.email_gmail_password_entry.delete(0, "end")
+        self.email_to_entry.delete(0, "end")
+        self.email_to_entry.insert(0, "; ".join(settings["to"]))
+        self.email_cc_entry.delete(0, "end")
+        self.email_cc_entry.insert(0, "; ".join(settings["cc"]))
+        self.email_mode_var.set(self._EMAIL_MODE_LABELS.get(settings["mode"], "Weekly"))
+        weekday_index = settings["weekday"] if 0 <= settings["weekday"] <= 6 else 0
+        self.email_weekday_var.set(self._EMAIL_WEEKDAY_LABELS[weekday_index])
+        self.email_every_n_entry.delete(0, "end")
+        self.email_every_n_entry.insert(0, str(settings["every_n_days"]))
+        self.email_time_entry.delete(0, "end")
+        self.email_time_entry.insert(0, settings["time_local"])
+        if settings["enabled"]:
+            self.email_enabled_check.select()
+        else:
+            self.email_enabled_check.deselect()
+        self._apply_capacity_email_status(settings)
+        self._update_capacity_email_visibility()
+
+    def _apply_capacity_email_status(self, settings: dict) -> None:
+        self.email_last_sent_label.configure(
+            text=f"Last sent: {settings['last_sent_at'] or 'never'}"
+        )
+        self.email_last_status_label.configure(
+            text=f"Last status: {settings['last_status'] or '—'}"
+        )
+        self.email_last_error_label.configure(
+            text=f"Last error: {settings['last_error'] or '—'}",
+            text_color=self.theme["danger"] if settings["last_error"] else self.theme["muted"],
+        )
+
+    def _update_capacity_email_visibility(self) -> None:
+        is_gmail = self.email_provider_var.get() == "Gmail"
+        for widget in (self.email_gmail_address_label, self.email_gmail_address_entry):
+            widget.grid() if is_gmail else widget.grid_remove()
+        for widget in (self.email_gmail_password_label, self.email_gmail_password_entry):
+            widget.grid() if is_gmail else widget.grid_remove()
+
+        mode_key = self._EMAIL_MODE_KEYS.get(self.email_mode_var.get(), "weekly")
+        is_weekly = mode_key == "weekly"
+        is_every_n = mode_key == "every_n_days"
+        for widget in (self.email_weekday_label, self.email_weekday_menu):
+            widget.grid() if is_weekly else widget.grid_remove()
+        for widget in (self.email_every_n_label, self.email_every_n_entry):
+            widget.grid() if is_every_n else widget.grid_remove()
+
+    def _save_capacity_email_form(self, *, silent: bool = False) -> dict | None:
+        current = self._capacity_email_settings or load_capacity_email_settings(self.db)
+        raw = dict(current)
+        raw["enabled"] = bool(self.email_enabled_var.get())
+        raw["provider"] = "outlook" if self.email_provider_var.get() == "Outlook" else "gmail"
+        raw["gmail_address"] = self.email_gmail_address_entry.get().strip()
+        raw["to"] = self.email_to_entry.get()
+        raw["cc"] = self.email_cc_entry.get()
+        raw["mode"] = self._EMAIL_MODE_KEYS.get(self.email_mode_var.get(), "weekly")
+        raw["weekday"] = self._EMAIL_WEEKDAY_LABELS.index(self.email_weekday_var.get())
+        raw["every_n_days"] = self.email_every_n_entry.get().strip() or raw.get("every_n_days", 7)
+        raw["time_local"] = self.email_time_entry.get().strip()
+        normalized = normalize_capacity_email_settings(raw)
+
+        password = self.email_gmail_password_entry.get()
+        if password:
+            normalized = set_gmail_password(normalized, self.crypto_key, password)
+
+        saved = save_capacity_email_settings(self.db, normalized)
+        self._capacity_email_settings = saved
+        self._apply_capacity_email_form(saved)
+        if not silent and hasattr(self, "admin_status"):
+            self.admin_status.configure(
+                text="Capacity email settings saved.", text_color=self.theme["accent"]
+            )
+        return saved
+
+    def _send_capacity_email_now(self) -> None:
+        if self._capacity_email_send_in_flight:
+            return
+        saved = self._save_capacity_email_form(silent=True)
+        if saved is None:
+            return
+        errors = validate_for_send(saved, crypto_key=self.crypto_key)
+        if errors:
+            messagebox.showerror("Capacity Email", "\n".join(errors))
+            return
+
+        self._capacity_email_send_in_flight = True
+        self.email_send_btn.configure(state="disabled", text="Sending...")
+        if hasattr(self, "admin_status"):
+            self.admin_status.configure(
+                text="Sending capacity email...", text_color=self.theme["accent"]
+            )
+
+        def worker() -> None:
+            try:
+                result = send_capacity_email(self.db, self.crypto_key, saved)
+            except Exception as exc:
+                result = {"ok": False, "settings": None, "path": "", "error": str(exc)}
+            self.after(0, lambda: self._on_capacity_email_send_done(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_capacity_email_send_done(self, result: dict) -> None:
+        self._capacity_email_send_in_flight = False
+        self.email_send_btn.configure(state="normal", text="Send Now")
+        settings = result.get("settings")
+        if settings:
+            self._capacity_email_settings = settings
+            self._apply_capacity_email_status(settings)
+        if hasattr(self, "admin_status"):
+            if result.get("ok"):
+                self.admin_status.configure(
+                    text="Capacity email sent.", text_color=self.theme["accent"]
+                )
+            else:
+                self.admin_status.configure(
+                    text=f"Capacity email failed: {result.get('error', '')}",
+                    text_color=self.theme["danger"],
+                )
 
     def _build_card_list(self, parent) -> None:
         list_panel = ctk.CTkFrame(parent, fg_color=self.theme["surface"], corner_radius=16)
