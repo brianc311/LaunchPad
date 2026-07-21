@@ -179,7 +179,7 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 5
+    assert len(templates) == 6
     hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
@@ -601,3 +601,98 @@ def test_windsor_lun_batches_and_names():
     assert len(expanded) == len(set(expanded))
     # 6 + 3 + 3 + 2 + 3 + 2 + 2 + 2 + 5 = 28
     assert len(expanded) == 28
+
+
+def _woodland_hills_template() -> dict:
+    return next(
+        t
+        for t in seed_lun_builder_templates()
+        if t["id"] == "template-woodland-hills-ca"
+    )
+
+
+def test_woodland_hills_template_identity_and_defaults():
+    woo = _woodland_hills_template()
+    assert woo["name"] == "Woodland Hills, CA (Template)"
+    assert woo["location"] == "Woodland Hills, CA"
+    assert woo["is_template"] is True
+    assert woo["default_storage_profile"] == "flashsystem_5200"
+    assert woo["default_pool_or_cpg"] == "WOO_Pool1"
+    assert woo["default_card_hint"] == "Woodland Hills, CA"
+    assert normalize_build(woo)["is_template"] is True
+    assert "WWPNs are blank" in woo["notes"]
+
+
+def test_woodland_hills_hosts_blank_wwpns():
+    woo = _woodland_hills_template()
+    hosts = woo["hosts"]
+    assert len(hosts) == 12
+    names = [h["lpar_name"] for h in hosts]
+    assert names.count("AWD1_New_as400") == 4
+    assert set(names) == {
+        "AWD1_New_as400",
+        "PEN-WODESX-VM01",
+        "PEN-WODESX-VM02",
+        "PEN-WODESX-VM03",
+        "PEN-WODESX-VM04",
+        "pwoovio01a",
+        "pwoovio01b",
+        "pwoovio02a",
+        "pwoovio02b",
+    }
+    assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in hosts)
+    assert all(h.get("type") == "Generic" for h in hosts)
+
+
+def test_woodland_hills_lun_batches_and_names():
+    woo = _woodland_hills_template()
+    luns = woo["luns"]
+    # 1 AS400 + 1 ESX + 4 VIO root = 6
+    assert len(luns) == 6
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "WOO_Pool1" for lun in luns)
+    assert all(lun.get("card_hint") == "Woodland Hills, CA" for lun in luns)
+
+    as400 = next(lun for lun in luns if lun["purpose"] == "AS400")
+    assert as400["count"] == 6
+    assert as400["size"] == "500GB"
+    assert as400["shared"] is True
+    assert as400["host_names"] == ["AWD1_New_as400"]
+    assert as400["name_prefix"] == "AWD1"
+    assert as400["cluster"] == ""
+
+    esx = next(lun for lun in luns if lun["purpose"] == "ESX_DataStore")
+    assert esx["count"] == 4
+    assert esx["size"] == "4TB"
+    assert esx["shared"] is True
+    assert esx["host_names"] == [
+        "PEN-WODESX-VM01",
+        "PEN-WODESX-VM02",
+        "PEN-WODESX-VM03",
+        "PEN-WODESX-VM04",
+    ]
+    assert esx["name_prefix"] == "WOO"
+
+    vio_roots = [
+        lun
+        for lun in luns
+        if lun["purpose"] == "root" and lun["host_names"][0].startswith("pwoovio")
+    ]
+    assert len(vio_roots) == 4
+    assert all(lun["count"] == 2 and lun["size"] == "100GB" for lun in vio_roots)
+    assert all(lun["shared"] is False for lun in vio_roots)
+    assert all(lun["name_prefix"] == "pwoo" for lun in vio_roots)
+    assert all(lun["cluster"] == "vio" for lun in vio_roots)
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert len(expanded) == 18
+    assert len(expanded) == len(set(expanded))
+    assert "AWD1_AS400_1" in expanded
+    assert "AWD1_AS400_6" in expanded
+    assert "WOO_ESX_DataStore_1" in expanded
+    assert "WOO_ESX_DataStore_4" in expanded
+    assert "pwoovio01a_root_1" in expanded
+    assert "pwoovio02b_root_2" in expanded
+    assert not any("Snap" in name for name in expanded)

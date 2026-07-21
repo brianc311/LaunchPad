@@ -323,6 +323,24 @@ def _windsor_host(lpar_name: str, wwpn1: str = "", wwpn2: str = "") -> dict:
     }
 
 
+def _woodland_hills_host(lpar_name: str) -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": "",
+        "wwpn2": "",
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
+    }
+
+
 def seed_lun_builder_templates() -> list[dict]:
     hosts = [
         _hartford_host("pconsps3", 5, "pconvio01b", 17, "c050760c9594000e", "c050760c9594000f", "U78DA.ND0.WZS05WT-P0-C7-T0", "F_PCONSLS3-9105-22A-78A9F81", "78A9F81"),
@@ -527,6 +545,49 @@ def seed_lun_builder_templates() -> list[dict]:
         )
     )
 
+    woo_hosts = [
+        _woodland_hills_host("AWD1_New_as400"),
+        _woodland_hills_host("AWD1_New_as400"),
+        _woodland_hills_host("AWD1_New_as400"),
+        _woodland_hills_host("AWD1_New_as400"),
+        _woodland_hills_host("PEN-WODESX-VM01"),
+        _woodland_hills_host("PEN-WODESX-VM02"),
+        _woodland_hills_host("PEN-WODESX-VM03"),
+        _woodland_hills_host("PEN-WODESX-VM04"),
+        _woodland_hills_host("pwoovio01a"),
+        _woodland_hills_host("pwoovio01b"),
+        _woodland_hills_host("pwoovio02a"),
+        _woodland_hills_host("pwoovio02b"),
+    ]
+    woo_kwargs = {
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "WOO_Pool1",
+        "card_hint": "Woodland Hills, CA",
+    }
+    woo_esx = [
+        "PEN-WODESX-VM01",
+        "PEN-WODESX-VM02",
+        "PEN-WODESX-VM03",
+        "PEN-WODESX-VM04",
+    ]
+    woo_luns: list[dict] = [
+        _lun_batch(
+            "AS400", 6, "500GB", True, ["AWD1_New_as400"], "",
+            name_prefix="AWD1", **woo_kwargs,
+        ),
+        _lun_batch(
+            "ESX_DataStore", 4, "4TB", True, woo_esx, "",
+            name_prefix="WOO", **woo_kwargs,
+        ),
+    ]
+    for vio in ("pwoovio01a", "pwoovio01b", "pwoovio02a", "pwoovio02b"):
+        woo_luns.append(
+            _lun_batch(
+                "root", 2, "100GB", False, [vio], "vio",
+                name_prefix="pwoo", **woo_kwargs,
+            )
+        )
+
     return [
         {
             "id": "template-hartford-ct",
@@ -604,6 +665,23 @@ def seed_lun_builder_templates() -> list[dict]:
             "default_card_hint": "Windsor, WI",
             "hosts": win_hosts,
             "luns": win_luns,
+        },
+        {
+            "id": "template-woodland-hills-ca",
+            "name": "Woodland Hills, CA (Template)",
+            "location": "Woodland Hills, CA",
+            "notes": (
+                "Seeded from Woodland Hills FlashSystem 5200 inventory. "
+                "WWPNs are blank — set Port Definitions / Pull from FC WWPN before create. "
+                "Defaults use card hint Woodland Hills, CA, profile flashsystem_5200, "
+                "pool WOO_Pool1."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "WOO_Pool1",
+            "default_card_hint": "Woodland Hills, CA",
+            "hosts": woo_hosts,
+            "luns": woo_luns,
         },
     ]
 
