@@ -458,6 +458,37 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     }
     function loadLocal() { try { const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); return Array.isArray(value) ? value : []; } catch (_err) { return []; } }
     function saveLocal() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(builds)); } catch (_err) { /* memory-only fallback */ } }
+    let completionSaveTimer = null;
+    function scheduleCompletionSave(build) {
+      if (completionSaveTimer) clearTimeout(completionSaveTimer);
+      completionSaveTimer = setTimeout(async () => {
+        completionSaveTimer = null;
+        if (!persisted || !build || !build.id || build.is_template) return;
+        build.updated_at = new Date().toISOString();
+        try {
+          const response = await fetch("/api/lun-builds", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ build }),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          builds = (await response.json()).builds;
+          saveLocal();
+          statusEl.textContent = "Completion saved.";
+        } catch (error) {
+          statusEl.textContent = `Completion saved locally only: ${error.message || error}`;
+        }
+      }, 400);
+    }
+    function persistCompletionState() {
+      const build = activeBuild();
+      saveLocal();
+      if (!persisted || !build.id || build.is_template) {
+        statusEl.textContent = "Completion saved locally only.";
+        return;
+      }
+      scheduleCompletionSave(build);
+    }
     function input(key, value, index, kind, type="text") { return `<input type="${type}" data-kind="${kind}" data-index="${index}" data-key="${key}" value="${esc(value)}">`; }
     function render() {
       const build = activeBuild();
@@ -561,6 +592,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         const row = target.closest("tr");
         if (row) row.classList.toggle("row-done", Boolean(value));
         updateSectionHeadings(activeBuild());
+        persistCompletionState();
         return;
       }
       invalidatePreview();
@@ -858,6 +890,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       else delete build.plan_done[name];
       syncCompletionFromPlan(build);
       render();
+      persistCompletionState();
     });
     document.getElementById("cli-checklist").addEventListener("change", (event) => {
       const target = event.target;
@@ -871,6 +904,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       const row = target.closest("tr");
       if (row) row.classList.toggle("row-done", target.checked);
       updateCopyAllRemainingState();
+      persistCompletionState();
     });
     document.getElementById("cli-checklist").addEventListener("click", (event) => {
       const button = event.target.closest("[data-cli-copy-index]");

@@ -270,3 +270,37 @@ def test_dashboard_view_exposes_lun_builder_button():
 
     assert 'text="LUN Builder"' in source
     assert "command=self._open_lun_builder" in source
+
+
+def test_lun_builder_persists_completion_state():
+    for text in (
+        "persistCompletionState",
+        "scheduleCompletionSave",
+        "Completion saved.",
+        "Completion saved locally only",
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
+def test_done_handlers_call_persist_completion_state():
+    plan_handler = LUN_BUILDER_HTML.split(
+        'document.getElementById("plan-body").addEventListener("change"', 1
+    )[1].split(
+        'document.getElementById("cli-checklist").addEventListener("change"', 1
+    )[0]
+    update_field = LUN_BUILDER_HTML.split("function updateField(event)", 1)[1].split(
+        "function refreshExpandedNames", 1
+    )[0]
+    cli_handler = LUN_BUILDER_HTML.split(
+        'document.getElementById("cli-checklist").addEventListener("change"', 1
+    )[1].split(
+        'document.getElementById("cli-checklist").addEventListener("click"', 1
+    )[0]
+
+    assert "persistCompletionState()" in plan_handler
+    assert "persistCompletionState()" in update_field
+    assert 'target.dataset.key === "done"' in update_field
+    assert update_field.index('target.dataset.key === "done"') < update_field.index(
+        "persistCompletionState()"
+    )
+    assert "persistCompletionState()" in cli_handler
