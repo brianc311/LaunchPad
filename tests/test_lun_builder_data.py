@@ -656,5 +656,5 @@ def test_anderson_hosts_cover_required_catalog():
     names = {h["lpar_name"] for h in and_["hosts"]}
     assert names == ANDERSON_REQUIRED_HOSTS
     assert all(h.get("type") == "Generic" for h in and_["hosts"])
-    # Task 1 leaves WWPNs blank; Task 2 fills Active ports
+    # WWPNs left blank — set Port Definitions before create
     assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in and_["hosts"])

@@ -669,7 +669,7 @@ def seed_lun_builder_templates() -> list[dict]:
             "location": "Williamston (Anderson)",
             "notes": (
                 "Seeded from Anderson FlashSystem 7200 inventory (v7kand-g3v1). "
-                "Active Port Definition WWPNs filled when known; Offline/missing blank. "
+                "WWPNs are blank — set Port Definitions / Pull from FC WWPN before create. "
                 "Defaults use card hint Williamston (Anderson), profile flashsystem_7200, "
                 "pool G3_AND_Pool."
             ),
