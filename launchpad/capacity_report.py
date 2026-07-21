@@ -797,6 +797,10 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         sitesEl.innerHTML =
           '<div class="empty">No servers yet. Keep LaunchPad running and unlocked, then use ' +
           "<strong>Capacity Report</strong> or <strong>Health Dashboard</strong> in LaunchPad.</div>";
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent =
+            "No servers — keep LaunchPad unlocked and open Capacity Report from LaunchPad";
+        }
         return;
       }
       const visible = includeOffToggle && includeOffToggle.checked
@@ -953,11 +957,6 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         cardsCache = Array.isArray(cards) ? cards : [];
         renderAll(cardsCache);
         updatePrintMeta(cardsCache);
-        if (refreshStatusEl && !refreshAllRunning) {
-          refreshStatusEl.textContent = cardsCache.length
-            ? `${cardsCache.length} site(s) loaded`
-            : "No servers — keep LaunchPad unlocked and open Capacity Report from LaunchPad";
-        }
       } catch (err) {
         sitesEl.innerHTML =
           `<div class="error">${escapeHtml(err.message || err)}. Keep LaunchPad running and unlocked, then use <strong>Capacity Report</strong> in the app.</div>`;
