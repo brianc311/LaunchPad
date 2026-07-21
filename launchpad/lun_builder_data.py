@@ -571,8 +571,7 @@ def seed_lun_builder_templates() -> list[dict]:
             "dandmfs1",
             "tandbt1", "tandbt20",
             "tandmfs1", "tandmfs2", "tandmfs20",
-            "tandsps1", "tandsps2",
-            "tandeps1", "tandeps2", "tandeps20", "tandeps21",
+            "tandsps1", "tandsps2", "tandsps20", "tandsps21",
             "tconbt20", "tconmfs20", "tconsps20", "tconsps21",
             "TLA_WANMFS01", "TLA_WANMFS02",
         )
@@ -634,6 +633,497 @@ def seed_lun_builder_templates() -> list[dict]:
             )
             for index in range(1, count + 1)
         )
+
+    def add_and_exact(
+        name: str,
+        size: str,
+        host_names: list[str],
+        *,
+        shared: bool | None = None,
+    ) -> None:
+        and_luns.append(
+            _lun_batch(
+                name,
+                1,
+                size,
+                len(host_names) > 1 if shared is None else shared,
+                host_names,
+                "",
+                name_prefix="",
+                **and_kwargs,
+            )
+        )
+
+    def add_and_numbered(
+        stem: str,
+        indexes: range | tuple[int, ...],
+        size: str,
+        host_names: list[str],
+        *,
+        shared: bool | None = None,
+    ) -> None:
+        for index in indexes:
+            add_and_exact(
+                f"{stem}{index}",
+                size,
+                host_names,
+                shared=shared,
+            )
+
+    add_and_exact("Test_VMware_Lun", "100GB", ["BIB_ADC_VM01"])
+
+    tla_hosts = ["TLA_WANMFS01", "TLA_WANMFS02"]
+    for stem, indexes, size in (
+        ("TLA-WANMFS01_02_5GB", range(1, 21), "5GB"),
+        ("TLA-WANMFS01_02_50GB_", range(1, 5), "50GB"),
+        ("TLA-WANMFS01_02_250GB_", range(1, 11), "250GB"),
+        ("TLA-WANMFS01_02_500GB", range(1, 6), "300GB"),
+    ):
+        add_and_numbered(stem, indexes, size, tla_hosts)
+
+    add_and_numbered("dandmfs1_", range(14), "100GB", ["dandmfs1"])
+    for name, size in (
+        ("pandap02_0", "70GB"),
+        ("pandap02_1", "70GB"),
+        ("pandap02_2", "70GB"),
+        ("pandap02_03", "100GB"),
+        ("pandap02_04", "100GB"),
+    ):
+        add_and_exact(name, size, ["pandap02"])
+
+    pandbt12 = ["pandbt1", "pandbt2"]
+    add_and_numbered(
+        "Pandbt_1_2_shared_ORAEX_",
+        range(1, 6),
+        "200GB",
+        pandbt12,
+    )
+    for host in pandbt12:
+        add_and_numbered(f"{host}_", range(3), "100GB", [host])
+    add_and_exact("pandbt_1_2_HA", "10GB", pandbt12)
+    add_and_numbered(
+        "pandbt_1_2_shared_",
+        tuple(range(1, 19)) + tuple(range(20, 27)),
+        "64GB",
+        pandbt12,
+    )
+    add_and_exact("pandbt_1_2_shared_19", "1GB", pandbt12)
+    add_and_numbered(
+        "pandbt_1_2_shared_",
+        range(27, 31),
+        "50GB",
+        pandbt12,
+    )
+    add_and_numbered(
+        "pandbt_1_2_shared_",
+        range(31, 37),
+        "100GB",
+        pandbt12,
+    )
+
+    pandbt34 = ["pandbt3", "pandbt4"]
+    add_and_numbered("PANDBT3_ROOT_", range(1, 4), "50GB", ["pandbt3"])
+    add_and_numbered("PANDBT4_ROOT_", range(1, 4), "50GB", ["pandbt4"])
+    add_and_numbered(
+        "PANDBT_3_4_ARCHVG_SHARED_",
+        range(1, 4),
+        "100GB",
+        pandbt34,
+    )
+    add_and_numbered(
+        "PANDBT_3_4_BTFS1REDOVG_SHARED_",
+        range(1, 3),
+        "100GB",
+        pandbt34,
+    )
+    add_and_numbered(
+        "PANDBT_3_4_DATA_SHARED_",
+        range(1, 22),
+        "100GB",
+        pandbt34,
+    )
+    add_and_exact("PANDBT_3_4_REPO_CAAVG_SHARED", "10GB", pandbt34)
+    add_and_numbered(
+        "Pandbt_3_4_shared_ORAEX_",
+        range(1, 6),
+        "200GB",
+        pandbt34,
+    )
+    add_and_numbered(
+        "tandbt20_clone",
+        range(3),
+        "100GB",
+        pandbt34,
+    )
+
+    add_and_numbered("pandbtdg1_", range(3), "72GB", ["pandbtdg1"])
+    add_and_numbered(
+        "pandbtdg1_dg_",
+        tuple(range(1, 19)) + tuple(range(20, 27)),
+        "64GB",
+        ["pandbtdg1"],
+    )
+    add_and_numbered(
+        "pandbtdg1_dg_",
+        range(27, 31),
+        "50GB",
+        ["pandbtdg1"],
+    )
+    add_and_numbered("panddb01_", range(21), "70GB", ["panddb01"])
+    add_and_numbered("panddb02_", range(3), "70GB", ["panddb02"])
+
+    pandmfs12 = ["pandmfs1", "pandmfs2"]
+    for host in pandmfs12:
+        add_and_numbered(f"{host}_", range(3), "100GB", [host])
+    add_and_exact("pandmfs_1_2_HA", "10GB", pandmfs12)
+    add_and_exact("pandmfs_1_2_shared_1", "20GB", pandmfs12)
+    add_and_numbered(
+        "pandmfs_1_2_shared_",
+        (2, 3, 4, 5, 7, 8, 11, 12, 14, 15, 16),
+        "64GB",
+        pandmfs12,
+    )
+    add_and_exact("pandmfs_1_2_shared_17", "20GB", pandmfs12)
+    add_and_numbered(
+        "pandmfs_1_2_shared_",
+        (18, 19),
+        "100GB",
+        pandmfs12,
+    )
+
+    for index, size in (
+        (1, "72GB"),
+        (2, "72GB"),
+        (3, "72GB"),
+        (4, "100GB"),
+        (5, "100GB"),
+        (6, "100GB"),
+        (7, "100GB"),
+        (8, "100GB"),
+    ):
+        add_and_exact(f"pandmfs10_0{index}", size, ["pandmfs10"])
+    add_and_numbered("pandmfs10_asm", range(7), "100GB", ["pandmfs10"])
+
+    pandmfs34 = ["pandmfs3", "pandmfs4"]
+    add_and_numbered("PANDMFS3_ROOT_", range(1, 4), "50GB", ["pandmfs3"])
+    add_and_numbered("PANDMFS4_ROOT_", range(1, 4), "50GB", ["pandmfs4"])
+    add_and_numbered(
+        "PANDMFS_3_4_ARCHVG_SHARED_",
+        range(1, 3),
+        "100GB",
+        pandmfs34,
+    )
+    add_and_numbered(
+        "PANDMFS_3_4_MFS1REDOVG_SHARED_",
+        range(1, 3),
+        "50GB",
+        pandmfs34,
+    )
+    add_and_numbered(
+        "PANDMFS_3_4_ORA1VG_SHARED_",
+        range(1, 9),
+        "100GB",
+        pandmfs34,
+    )
+    add_and_exact("PANDMFS_3_4_REPO_CAAVG_SHARED", "10GB", pandmfs34)
+    add_and_numbered(
+        "tandmfs20_clone",
+        range(3),
+        "100GB",
+        pandmfs34,
+    )
+
+    add_and_numbered(
+        "pandmfs_dg_mast_",
+        (1, 17),
+        "20GB",
+        ["pandmfsdg1"],
+    )
+    add_and_numbered(
+        "pandmfs_dg_mast_",
+        (2, 3, 4, 5, 7, 8, 11, 12, 14, 15, 16),
+        "64GB",
+        ["pandmfsdg1"],
+    )
+    add_and_numbered("pandmfsdg1_", range(3), "72GB", ["pandmfsdg1"])
+
+    for name in (
+        "Pandnim01_13_1",
+        "Pandnim01_13_2",
+        "pandnim01_0",
+        "pandnim01_1",
+        "pandnim01_2",
+        "pandnim01_3",
+        "pandnim01_4",
+        "pandnim01_5",
+        "pandnim01_6",
+        "pandnim01_7",
+        "pandnim01_8",
+        "pandnim01_9",
+        "pandnim01_10",
+        "pandnim01_11",
+        "pandnim01_14",
+    ):
+        add_and_exact(name, "100GB", ["pandnim01"])
+
+    pandsps12 = ["pandps1", "pandps2"]
+    for host in pandsps12:
+        add_and_numbered(f"{host}_", range(3), "100GB", [host])
+    add_and_exact("pandps_1_2_HA", "10GB", pandsps12)
+    add_and_numbered(
+        "pandps_1_2_shared_",
+        (1, 2, 3, 4, 6, 7, 11, 12, 13, 14, 15),
+        "64GB",
+        pandsps12,
+    )
+    add_and_numbered(
+        "pandps_1_2_shared_",
+        range(16, 20),
+        "50GB",
+        pandsps12,
+    )
+    add_and_numbered(
+        "pandps_1_2_shared_",
+        (20, 21),
+        "100GB",
+        pandsps12,
+    )
+
+    pandsps34 = ["pandps3", "pandps4"]
+    add_and_numbered("PANDPS3_ROOT_", range(1, 4), "50GB", ["pandps3"])
+    add_and_numbered("PANDPS4_ROOT_", range(3), "50GB", ["pandps4"])
+    add_and_numbered(
+        "PANDPS_3_4_ARCHVG_SHARED_",
+        range(1, 3),
+        "100GB",
+        pandsps34,
+    )
+    add_and_numbered(
+        "PANDPS_3_4_ORA1VG_SHARED_",
+        range(1, 10),
+        "100GB",
+        pandsps34,
+    )
+    add_and_exact("PANDPS_3_4_REPO_CAAVG_SHARED", "10GB", pandsps34)
+    add_and_numbered(
+        "PANDPS_3_4_SPS1REDOVG_SHARED_",
+        range(1, 3),
+        "100GB",
+        pandsps34,
+    )
+    add_and_numbered(
+        "PANDPS_3_4_ROOT_",
+        range(1, 4),
+        "100GB",
+        ["pandps3"],
+    )
+
+    pandspsa = ["pandpspa1", "pandpspa2"]
+    for host in pandspsa:
+        add_and_numbered(f"{host}_", range(3), "50GB", [host])
+    add_and_exact("pandpspa1_2_DATA", "250GB", pandspsa)
+    add_and_exact("pandpspa1_2_HA", "10GB", pandspsa)
+
+    add_and_numbered("pandpspdg1_", range(3), "72GB", ["pandpspdg1"])
+    add_and_numbered(
+        "pandpspdg1_dg_",
+        (1, 2, 3, 4, 6, 7, 11, 12, 13, 14, 15),
+        "64GB",
+        ["pandpspdg1"],
+    )
+    add_and_numbered(
+        "pandpspdg1_dg_",
+        range(16, 20),
+        "50GB",
+        ["pandpspdg1"],
+    )
+
+    vio_sizes = {
+        "pandvio01a": (2, "100GB", "root_", 1),
+        "pandvio01b": (2, "100GB", "root_", 1),
+        "pandvio02a": (2, "100GB", "root_", 1),
+        "pandvio02b": (2, "100GB", "root_", 1),
+        "pandvio03a": (2, "100GB", "root_", 0),
+        "pandvio03b": (2, "100GB", "root_", 0),
+        "pandvio04a": (2, "100GB", "root_", 0),
+        "pandvio04b": (2, "100GB", "root_", 0),
+        "pandvio05a": (4, "100GB", "", 0),
+        "pandvio05b": (3, "100GB", "", 0),
+        "pandvio06a": (3, "100GB", "", 0),
+        "pandvio06b": (3, "100GB", "", 0),
+        "pandvio07a": (3, "100GB", "", 0),
+        "pandvio07b": (3, "100GB", "", 0),
+        "pandvio08a": (2, "50GB", "", 0),
+        "pandvio08b": (2, "50GB", "", 0),
+        "pandvio09a": (2, "50GB", "", 0),
+        "pandvio09b": (2, "50GB", "", 0),
+        "pandvio10a": (2, "100GB", "root_", 1),
+        "pandvio10b": (2, "100GB", "root_", 1),
+    }
+    for host, (count, size, infix, start) in vio_sizes.items():
+        add_and_numbered(
+            f"{host}_{infix}",
+            range(start, start + count),
+            size,
+            [host],
+        )
+
+    add_and_numbered("tandbt1_", range(3), "72GB", ["tandbt1"])
+    add_and_numbered(
+        "tandbt1_db_",
+        tuple(range(1, 19)) + tuple(range(20, 27)),
+        "64GB",
+        ["tandbt1"],
+    )
+    add_and_numbered(
+        "tandbt1_db_",
+        range(27, 31),
+        "50GB",
+        ["tandbt1"],
+    )
+
+    add_and_numbered("tandbt20_", range(3), "100GB", ["tandbt20"])
+    add_and_numbered("tandbt20_data_", range(1, 27), "64GB", ["tandbt20"])
+    add_and_numbered("tandbt20_data_", range(27, 31), "50GB", ["tandbt20"])
+    add_and_numbered("tandbt20_data_", range(31, 38), "100GB", ["tandbt20"])
+    add_and_numbered("tandbt_clone_root", range(3), "100GB", ["tandbt20"])
+
+    add_and_numbered("tandmfs1_", range(3), "72GB", ["tandmfs1"])
+    for index, size in (
+        (1, "20GB"),
+        (2, "64GB"),
+        (3, "64GB"),
+        (4, "64GB"),
+        (5, "64GB"),
+        (7, "64GB"),
+        (8, "64GB"),
+        (11, "64GB"),
+        (12, "64GB"),
+        (14, "64GB"),
+        (15, "64GB"),
+        (16, "64GB"),
+        (17, "20GB"),
+    ):
+        add_and_exact(
+            f"pandmfs_dg_mast_{index}_01",
+            size,
+            ["tandmfs1"],
+        )
+
+    add_and_numbered("tandmfs2_", range(3), "72GB", ["tandmfs2"])
+    add_and_numbered("tandmfs2_", range(3, 8), "100GB", ["tandmfs2"])
+    add_and_numbered("tandmfs2_asm", range(7), "100GB", ["tandmfs2"])
+
+    add_and_numbered("tandmfs20_", range(3), "100GB", ["tandmfs20"])
+    add_and_exact("tandmfs20_data_1", "20GB", ["tandmfs20"])
+    add_and_numbered(
+        "tandmfs20_data_",
+        (2, 3, 4, 5, 7, 8, 11, 12, 14, 15, 16),
+        "64GB",
+        ["tandmfs20"],
+    )
+    add_and_exact("tandmfs20_data_17", "20GB", ["tandmfs20"])
+    add_and_numbered(
+        "tandmfs20_data_",
+        (18, 19),
+        "100GB",
+        ["tandmfs20"],
+    )
+    add_and_numbered("tandmfs_clone_root", range(3), "100GB", ["tandmfs20"])
+    add_and_numbered("tandmfs20_clone_root", range(2), "100GB", ["tandmfs20"])
+
+    tandsps12 = ["tandsps1", "tandsps2"]
+    for host in tandsps12:
+        add_and_numbered(f"{host}_", range(3), "72GB", [host])
+    add_and_exact("tandsps_1_2_HA", "10GB", tandsps12)
+    add_and_numbered(
+        "tandsps_1_2_shared_",
+        range(1, 12),
+        "64GB",
+        tandsps12,
+    )
+    add_and_numbered(
+        "tandsps_1_2_shared_",
+        range(12, 16),
+        "50GB",
+        tandsps12,
+    )
+
+    tandsps2021 = ["tandsps20", "tandsps21"]
+    for host in tandsps2021:
+        add_and_numbered(f"{host}_", range(3), "100GB", [host])
+    add_and_exact("tandsps20_21_HA", "10GB", tandsps2021)
+    add_and_numbered(
+        "tandsps20_21_shared_",
+        (1, 2, 3, 4, 6, 7, 11, 12, 13, 14, 15),
+        "64GB",
+        tandsps2021,
+    )
+    add_and_numbered(
+        "tandsps20_21_shared_",
+        range(16, 20),
+        "50GB",
+        tandsps2021,
+    )
+    add_and_numbered(
+        "tandsps20_21_shared_",
+        (20, 21),
+        "100GB",
+        tandsps2021,
+    )
+    add_and_numbered(
+        "tandsps_clone_root",
+        range(3),
+        "100GB",
+        ["tandsps20"],
+    )
+
+    tcon_specs = {
+        "tconbt20": (
+            ("pconbt1_2_archvg_dt", range(1, 3), "100GB"),
+            ("pconbt1_2_btfs1redovg_dt", range(1, 3), "100GB"),
+            ("pconbt1_2_ora1evg_dt_", range(1, 15), "100GB"),
+            ("pconbt1_rootvg_dt_", range(1, 4), "50GB"),
+        ),
+        "tconmfs20": (
+            ("pconmfs1_2_archvg_dt_", range(1, 2), "200GB"),
+            ("pconmfs1_2_mfs1redovg_dt_", range(1, 3), "100GB"),
+            ("pconmfs1_2_ora1vg_dt", range(1, 8), "100GB"),
+            ("pconmfs1_root_sysvg_dt_", range(1, 4), "50GB"),
+        ),
+        "tconsps20": (
+            ("pconsps1_root_sysvg_dt_", range(1, 4), "50GB"),
+        ),
+        "tconsps21": (
+            ("pconsps2_root_sysvg_dt", range(1, 4), "50GB"),
+        ),
+    }
+    for host, specs in tcon_specs.items():
+        for stem, indexes, size in specs:
+            add_and_numbered(stem, indexes, size, [host])
+    add_and_exact("pconbt1_2_caavg_dt", "10GB", ["tconbt20"])
+    add_and_exact("tconbt20_vol1", "100GB", ["tconbt20"])
+    add_and_exact("pconmfs1_2_caavg_dt", "10GB", ["tconmfs20"])
+    tconsps_hosts = ["tconsps20", "tconsps21"]
+    add_and_numbered(
+        "pconsps1_2_archvg_dt_",
+        range(1, 3),
+        "200GB",
+        tconsps_hosts,
+    )
+    add_and_numbered(
+        "pconsps1_2_ora1vg_dt_",
+        range(1, 8),
+        "100GB",
+        tconsps_hosts,
+    )
+    add_and_numbered(
+        "pconsps1_2_sps1redovg_dt_",
+        range(1, 3),
+        "100GB",
+        tconsps_hosts,
+    )
+    add_and_exact("pconsps1_2_caavg_dt", "10GB", tconsps_hosts)
 
     return [
         {
@@ -792,8 +1282,7 @@ def _volume_name_base(lun: dict, purpose: str) -> str | None:
         "name_prefix" in lun
         and not prefix
         and not cluster
-        and len(host_names) == 1
-        and purpose.lower().startswith(f"{host_names[0].lower()}_")
+        and _normalize_count(lun.get("count")) == 1
     ):
         return None
     if not prefix:

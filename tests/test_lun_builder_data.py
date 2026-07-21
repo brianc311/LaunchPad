@@ -56,6 +56,22 @@ def test_expand_single_host_keeps_explicit_live_name():
     assert rows[0]["name"] == "pandap01_0"
 
 
+def test_expand_single_host_keeps_arbitrary_exact_live_name():
+    rows = expand_lun_batch(
+        {
+            "purpose": "pconbt1_2_archive_dt1",
+            "count": 1,
+            "size": "100GB",
+            "pool_or_cpg": "G3_AND_Pool",
+            "storage_profile": "flashsystem_7200",
+            "host_names": ["tconbt20"],
+            "shared": False,
+            "name_prefix": "",
+        }
+    )
+    assert rows[0]["name"] == "pconbt1_2_archive_dt1"
+
+
 def test_expand_infers_pcon_prefix_from_host():
     rows = expand_lun_batch(
         {
@@ -639,8 +655,7 @@ ANDERSON_REQUIRED_HOSTS = frozenset({
     "dandmfs1",
     "tandbt1", "tandbt20",
     "tandmfs1", "tandmfs2", "tandmfs20",
-    "tandsps1", "tandsps2",
-    "tandeps1", "tandeps2", "tandeps20", "tandeps21",
+    "tandsps1", "tandsps2", "tandsps20", "tandsps21",
     "tconbt20", "tconmfs20", "tconsps20", "tconsps21",
     "TLA_WANMFS01", "TLA_WANMFS02",
 })
@@ -723,3 +738,39 @@ def test_anderson_core_lun_families():
         and set(row["host_names"]) == {"pla-wanoemcr01", "pla-wanoemcr02"}
         for row in oem
     )
+
+
+def test_anderson_lun_inventory_covers_mapped_hosts():
+    and_ = _anderson_template()
+    luns = and_["luns"]
+    hosts_with_luns = {
+        host_name
+        for lun in luns
+        for host_name in (lun.get("host_names") or [])
+    }
+    configured_hosts = {host["lpar_name"] for host in and_["hosts"]}
+    for required in (
+        "AAN1",
+        "AAN1C",
+        "FC_AAN1",
+        "pen_andesx_vm03",
+        "pla-wanoemcr01",
+        "pandap01",
+        "pandvio08b",
+        "tandbt1",
+        "tandbt20",
+        "tandmfs1",
+        "tandmfs20",
+        "tandsps1",
+        "TLA_WANMFS01",
+    ):
+        assert required in hosts_with_luns or required in configured_hosts
+
+    expanded = [
+        row["name"]
+        for lun in luns
+        for row in expand_lun_batch(lun)
+    ]
+    assert len(expanded) >= 200
+    assert len(expanded) == len(set(expanded))
+    assert all(lun.get("pool_or_cpg") == "G3_AND_Pool" for lun in luns)
