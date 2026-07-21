@@ -22,10 +22,10 @@ def test_setting_key():
     assert CONTINGENCY_GROUPS_SETTING == "contingency_groups"
 
 
-def test_seeds_include_three_sites():
+def test_seeds_include_four_sites():
     seeds = seed_contingency_groups()
     ids = {g["id"] for g in seeds}
-    assert ids == {"hartford-ct", "houston-tx", "windsor"}
+    assert ids == {"hartford-ct", "houston-tx", "windsor", "woodland-hills-ca"}
     hartford = next(g for g in seeds if g["id"] == "hartford-ct")
     assert len(hartford["hosts"]) == 3
     hartford_sources = [v for v in hartford["volumes"] if v.get("role") != "snap"]
@@ -47,6 +47,75 @@ def test_seeds_include_three_sites():
     assert "51402EC012CFD072" in vm01["wwpns"]
     vol1 = next(v for v in windsor["volumes"] if v["name"] == "WIN_ESX_DataStore_1")
     assert vol1["uid"].startswith("60050768128000A758")
+
+
+def test_woodland_hills_seed_inventory():
+    woo = next(g for g in seed_contingency_groups() if g["id"] == "woodland-hills-ca")
+    assert woo["name"] == "Woodland Hills, CA"
+    assert woo["location"] == "Woodland Hills, CA"
+    assert woo["storage_hint"] == "v5kwoo-g3c1"
+    assert {h["name"] for h in woo["hosts"]} == {
+        "AWD1_New_as400",
+        "PEN-WODESX-VM01",
+        "PEN-WODESX-VM02",
+        "PEN-WODESX-VM03",
+        "PEN-WODESX-VM04",
+        "pwoovio01a",
+        "pwoovio01b",
+        "pwoovio02a",
+        "pwoovio02b",
+    }
+    as400 = next(h for h in woo["hosts"] if h["name"] == "AWD1_New_as400")
+    assert as400["port_count"] == 8
+    assert as400["wwpns"] == []
+    assert all(h["wwpns"] == [] for h in woo["hosts"])
+
+    sources = [v for v in woo["volumes"] if v.get("role") != "snap"]
+    assert len(sources) == 18
+    assert len(woo["volumes"]) == 36
+    assert all(v["pool"] == "WOO_Pool1" for v in sources)
+
+    ds1 = next(v for v in sources if v["name"] == "WOO_ESX_DataStore_1")
+    assert ds1["uid"] == "60050768128100A7D000000000000000"
+    assert ds1["capacity"] == "4.00 TiB"
+    ds4 = next(v for v in sources if v["name"] == "WOO_ESX_DataStore_4")
+    assert ds4["uid"] == "60050768128100A7D000000000000017"
+    root1 = next(v for v in sources if v["name"] == "pwoovio02b_root_1")
+    assert root1["uid"] == "60050768128100A7D00000000000000F"
+    assert root1["capacity"] == "100.00 GiB"
+    as400_vol = next(v for v in sources if v["name"] == "AWD1_AS400_1")
+    assert as400_vol["uid"] == ""
+    assert as400_vol["capacity"] == "500.00 GiB"
+    assert not any(v["name"].endswith("Snap1") for v in sources)
+    assert any(v["name"] == "AWD1_AS400_1_snap" for v in woo["volumes"])
+
+    source_maps = [m for m in woo["maps"] if m.get("role") != "snap"]
+    assert len(source_maps) == 30
+    assert {
+        (m["volume"], m["host"], m["scsi_id"])
+        for m in source_maps
+        if m["volume"] == "WOO_ESX_DataStore_1"
+    } == {
+        ("WOO_ESX_DataStore_1", "PEN-WODESX-VM01", "0"),
+        ("WOO_ESX_DataStore_1", "PEN-WODESX-VM02", "0"),
+        ("WOO_ESX_DataStore_1", "PEN-WODESX-VM03", "0"),
+        ("WOO_ESX_DataStore_1", "PEN-WODESX-VM04", "0"),
+    }
+    assert {
+        (m["volume"], m["host"], m["scsi_id"])
+        for m in source_maps
+        if m["volume"].startswith("AWD1_AS400_")
+    } == {
+        (f"AWD1_AS400_{i}", "AWD1_New_as400", str(i - 1)) for i in range(1, 7)
+    }
+    assert {
+        (m["volume"], m["host"], m["scsi_id"])
+        for m in source_maps
+        if m["volume"].startswith("pwoovio02b_root_")
+    } == {
+        ("pwoovio02b_root_1", "pwoovio02b", "0"),
+        ("pwoovio02b_root_2", "pwoovio02b", "1"),
+    }
 
 
 def test_normalize_strips_and_keeps_empty_wwpn_uid():
