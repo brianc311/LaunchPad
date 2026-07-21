@@ -578,12 +578,62 @@ def seed_lun_builder_templates() -> list[dict]:
         )
     )
     and_hosts = [_anderson_host(name) for name in and_host_names]
-    and_luns: list[dict] = [
-        _lun_batch(
-            "placeholder", 1, "1GB", False, ["AAN1C"], "",
-            name_prefix="AAN1C", **and_kwargs,
-        ),
-    ]
+    and_luns: list[dict] = []
+    for stem, count, size, host_name in (
+        ("aan1", 28, "120GB", "AAN1"),
+        ("AAN1C", 4, "125GB", "AAN1C"),
+        ("FC_AAN1", 28, "120GB", "FC_AAN1"),
+    ):
+        and_luns.extend(
+            _lun_batch(
+                f"{stem}_{index}", 1, size, False, [host_name], "",
+                name_prefix="", **and_kwargs,
+            )
+            for index in range(count)
+        )
+
+    esx_hosts = ["pen_andesx_vm03", "pen_andesx_vm04"]
+    for volume_name, size in (
+        ("ADC-Data01", "1023GB"),
+        ("ADC-Data02", "4TB"),
+        ("ADC-Data03", "4TB"),
+        ("Andesx-DS01", "4TB"),
+        ("Andesx-DS02", "4TB"),
+        ("Andesx-DS03", "4TB"),
+        ("RHEL-Networker01", "100GB"),
+    ):
+        and_luns.append(
+            _lun_batch(
+                volume_name, 1, size, True, esx_hosts, "",
+                name_prefix="", **and_kwargs,
+            )
+        )
+
+    for index in range(5):
+        and_luns.append(
+            _lun_batch(
+                f"pandap01_{index}", 1, "70GB" if index < 4 else "50GB",
+                False, ["pandap01"], "", name_prefix="", **and_kwargs,
+            )
+        )
+
+    oem_hosts = ["pla-wanoemcr01", "pla-wanoemcr02"]
+    for name_pattern, count, size in (
+        ("pla-wanoemcr01_02_5GB{}", 20, "5GB"),
+        ("pla-wanoemcr01_02_250GB{}", 10, "250GB"),
+        ("pla-wanoemcr01_02_300GB_{}", 5, "300GB"),
+        ("pla-wanoemcr01_02_50{}", 4, "50GB"),
+        ("pla-wanoemcr01_02_FRA_{}", 4, "40GB"),
+        ("pla-wanoemcr01_02_data_{}", 8, "50GB"),
+        ("pla-wanoemcr01_02_redo_{}", 10, "10GB"),
+    ):
+        and_luns.extend(
+            _lun_batch(
+                name_pattern.format(index), 1, size, True, oem_hosts, "",
+                name_prefix="", **and_kwargs,
+            )
+            for index in range(1, count + 1)
+        )
 
     return [
         {
@@ -737,9 +787,17 @@ def _volume_name_base(lun: dict, purpose: str) -> str | None:
     """
     host_names = _normalize_str_list(lun.get("host_names"))
     prefix = str(lun.get("name_prefix") or "").strip().rstrip("_")
+    cluster = str(lun.get("cluster") or "").strip().lower()
+    if (
+        "name_prefix" in lun
+        and not prefix
+        and not cluster
+        and len(host_names) == 1
+        and purpose.lower().startswith(f"{host_names[0].lower()}_")
+    ):
+        return None
     if not prefix:
         prefix = _infer_site_prefix(host_names)
-    cluster = str(lun.get("cluster") or "").strip().lower()
     shared = _as_bool(lun.get("shared"))
     head = ""
     if not shared and len(host_names) == 1:

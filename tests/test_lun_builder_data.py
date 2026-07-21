@@ -40,6 +40,22 @@ def test_expand_single_keeps_purpose_name():
     assert rows[0]["name"] == "caavg_private"
 
 
+def test_expand_single_host_keeps_explicit_live_name():
+    rows = expand_lun_batch(
+        {
+            "purpose": "pandap01_0",
+            "count": 1,
+            "size": "70GB",
+            "pool_or_cpg": "G3_AND_Pool",
+            "storage_profile": "flashsystem_7200",
+            "host_names": ["pandap01"],
+            "shared": False,
+            "name_prefix": "",
+        }
+    )
+    assert rows[0]["name"] == "pandap01_0"
+
+
 def test_expand_infers_pcon_prefix_from_host():
     rows = expand_lun_batch(
         {
@@ -658,3 +674,52 @@ def test_anderson_hosts_cover_required_catalog():
     assert all(h.get("type") == "Generic" for h in and_["hosts"])
     # WWPNs left blank — set Port Definitions before create
     assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in and_["hosts"])
+
+
+def test_anderson_core_lun_families():
+    luns = _anderson_template()["luns"]
+    assert all(lun.get("storage_profile") == "flashsystem_7200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "G3_AND_Pool" for lun in luns)
+    assert all(lun.get("card_hint") == "Williamston (Anderson)" for lun in luns)
+    assert not any(lun.get("purpose") == "placeholder" for lun in luns)
+
+    rows = [row for lun in luns for row in expand_lun_batch(lun)]
+    by_name = {row["name"]: row for row in rows}
+    assert len(rows) == len(by_name)
+    assert not any("Snap" in name or name.lower().endswith("_snap") for name in by_name)
+
+    esx_hosts = {"pen_andesx_vm03", "pen_andesx_vm04"}
+    esx_sizes = {
+        "ADC-Data01": "1023GB",
+        "ADC-Data02": "4TB",
+        "ADC-Data03": "4TB",
+        "Andesx-DS01": "4TB",
+        "Andesx-DS02": "4TB",
+        "Andesx-DS03": "4TB",
+        "RHEL-Networker01": "100GB",
+    }
+    for name, size in esx_sizes.items():
+        assert by_name[name]["size"] == size
+        assert set(by_name[name]["host_names"]) == esx_hosts
+        assert by_name[name]["shared"] is True
+
+    for prefix, count, size, host in (
+        ("aan1_", 28, "120GB", "AAN1"),
+        ("AAN1C_", 4, "125GB", "AAN1C"),
+        ("FC_AAN1_", 28, "120GB", "FC_AAN1"),
+    ):
+        family = [row for row in rows if row["name"].startswith(prefix)]
+        assert len(family) == count
+        assert all(row["size"] == size and row["host_names"] == [host] for row in family)
+
+    assert {by_name[f"pandap01_{index}"]["size"] for index in range(4)} == {"70GB"}
+    assert by_name["pandap01_4"]["size"] == "50GB"
+    assert all(by_name[f"pandap01_{index}"]["host_names"] == ["pandap01"] for index in range(5))
+
+    oem = [row for row in rows if row["name"].startswith("pla-wanoemcr01_02_")]
+    assert len(oem) == 61
+    assert all(
+        row["shared"] is True
+        and set(row["host_names"]) == {"pla-wanoemcr01", "pla-wanoemcr02"}
+        for row in oem
+    )
