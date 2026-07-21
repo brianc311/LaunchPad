@@ -96,6 +96,19 @@ class ExportResult:
     generated_at: str
 
 
+@dataclass(frozen=True)
+class ExportSite:
+    card_id: int
+    name: str
+    host: str
+    serial_number: str
+    category: str
+    device_profile: str
+    capacity_summary: dict[str, Any] | None
+    pools: list[dict[str, Any]]
+    error: str | None
+
+
 def card_ids_included_for_export(
     card_ids: Iterable[int],
     *,
@@ -191,6 +204,26 @@ def _build_card_lookups(
         if serial_key:
             by_serial[serial_key] = card_id
         name_key = _normalize(card.name)
+        if name_key:
+            by_name[name_key] = card_id
+    return by_ip, by_serial, by_name
+
+
+def _build_site_lookups(
+    sites_by_id: dict[int, ExportSite],
+) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    """Index health-report sites by IP (primary), serial, and device name."""
+    by_ip: dict[str, int] = {}
+    by_serial: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for card_id, site in sites_by_id.items():
+        ip_key = _normalize_ip(site.host)
+        if ip_key:
+            by_ip[ip_key] = card_id
+        serial_key = _normalize(site.serial_number)
+        if serial_key:
+            by_serial[serial_key] = card_id
+        name_key = _normalize(site.name)
         if name_key:
             by_name[name_key] = card_id
     return by_ip, by_serial, by_name
@@ -383,6 +416,23 @@ def _card_to_extra_row(
     )
 
 
+def _site_to_extra_row(
+    site: ExportSite,
+    capacity_text: str,
+    pool_stats_text: str,
+) -> ExtraRow:
+    return (
+        site.category or site.name,
+        site.name,
+        site.host,
+        site.device_profile or "",
+        site.serial_number or "",
+        "IBM" if "flashsystem" in (site.device_profile or "").lower() else (site.device_profile or ""),
+        capacity_text,
+        pool_stats_text,
+    )
+
+
 def _refresh_entry_capacity(
     entry: HealthDashboardEntry,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
@@ -493,6 +543,112 @@ def export_storage_capacity_excel(
                 card.category or card.name,
                 card.name,
                 card.host,
+                pools,
+            )
+        )
+        if capacity_text and not capacity_text.startswith("Error:"):
+            filled_count += 1
+        if pool_stats_text:
+            pool_filled_count += 1
+
+    extra_rows.sort(key=lambda row: (row[0].lower(), row[1].lower()))
+    pool_detail_rows.sort(key=lambda row: (row[0].lower(), row[1].lower(), row[3].lower()))
+
+    wb = _styled_workbook(inventory_rows_exported, inventory_fills, extra_rows, pool_detail_rows)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return ExportResult(
+        path=output_path,
+        filled_count=filled_count,
+        pool_filled_count=pool_filled_count,
+        pool_rows_written=len(pool_detail_rows),
+        error_count=error_count,
+        extra_rows=len(extra_rows),
+        generated_at=generated_at,
+    )
+
+
+def export_storage_capacity_excel_from_sites(
+    sites: list[ExportSite],
+    output_path: Path,
+    *,
+    include_monitor_off: bool,
+    monitor_enabled: Mapping[int, bool],
+) -> ExportResult:
+    included = card_ids_included_for_export(
+        [site.card_id for site in sites],
+        include_monitor_off=include_monitor_off,
+        monitor_enabled=monitor_enabled,
+    )
+    sites_by_id = {site.card_id: site for site in sites if site.card_id in included}
+    by_ip, by_serial, by_name = _build_site_lookups(sites_by_id)
+
+    capacity_by_card_id: dict[int, str] = {}
+    pools_by_card_id: dict[int, list[dict[str, Any]]] = {}
+    error_count = 0
+
+    for card_id, site in sites_by_id.items():
+        text = format_capacity_text(site.capacity_summary, error=site.error)
+        capacity_by_card_id[card_id] = text
+        pools_by_card_id[card_id] = site.pools
+        if site.error and not site.capacity_summary:
+            error_count += 1
+
+    matched_card_ids: set[int] = set()
+    inventory_rows_exported: list[tuple[str, ...]] = []
+    inventory_fills: list[InventoryFill] = []
+    pool_detail_rows: list[PoolDetailRow] = []
+    filled_count = 0
+    pool_filled_count = 0
+
+    for row in INVENTORY_ROWS:
+        capacity_text = ""
+        pool_stats_text = ""
+        location, device_sn, ip_addr, _device_name, _serial, _model = row
+        card_id = match_inventory_row(
+            row,
+            by_ip,
+            by_serial,
+            by_name,
+            matched_card_ids=matched_card_ids,
+        )
+        if not keep_inventory_row(
+            matched_card_id=card_id,
+            included_card_ids=included,
+            include_monitor_off=include_monitor_off,
+        ):
+            continue
+        if card_id is not None:
+            matched_card_ids.add(card_id)
+            capacity_text = capacity_by_card_id.get(card_id, "")
+            pools = pools_by_card_id.get(card_id, [])
+            pool_stats_text = format_pool_stats_text(pools)
+            pool_detail_rows.extend(
+                _pool_detail_rows_for_site(location, device_sn, ip_addr, pools)
+            )
+            if capacity_text and not capacity_text.startswith("Error:"):
+                filled_count += 1
+            if pool_stats_text:
+                pool_filled_count += 1
+        inventory_rows_exported.append(row)
+        inventory_fills.append((capacity_text, pool_stats_text))
+
+    extra_rows: list[ExtraRow] = []
+    for card_id, site in sites_by_id.items():
+        if card_id in matched_card_ids:
+            continue
+        capacity_text = capacity_by_card_id.get(card_id, "")
+        pools = pools_by_card_id.get(card_id, [])
+        pool_stats_text = format_pool_stats_text(pools)
+        extra_rows.append(_site_to_extra_row(site, capacity_text, pool_stats_text))
+        pool_detail_rows.extend(
+            _pool_detail_rows_for_site(
+                site.category or site.name,
+                site.name,
+                site.host,
                 pools,
             )
         )

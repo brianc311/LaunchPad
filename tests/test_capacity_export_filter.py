@@ -4,8 +4,10 @@ from unittest.mock import MagicMock
 from openpyxl import load_workbook
 
 from launchpad.capacity_export import (
+    ExportSite,
     card_ids_included_for_export,
     export_storage_capacity_excel,
+    export_storage_capacity_excel_from_sites,
     keep_inventory_row,
 )
 from launchpad.database import Card
@@ -213,3 +215,46 @@ def test_export_default_includes_both_cards_as_extra_rows(monkeypatch, tmp_path:
 
     assert out.exists()
     assert result.extra_rows == 2
+
+
+def test_from_sites_respects_monitor_filter(tmp_path: Path):
+    sites = [
+        ExportSite(
+            card_id=1,
+            name="A",
+            host="10.0.0.1",
+            serial_number="S1",
+            category="Remote",
+            device_profile="flashsystem",
+            capacity_summary={"name": "A", "used_pct": 2, "used_bytes": 2, "total_bytes": 100},
+            pools=[],
+            error=None,
+        ),
+        ExportSite(
+            card_id=2,
+            name="B",
+            host="10.0.0.2",
+            serial_number="S2",
+            category="Remote",
+            device_profile="flashsystem",
+            capacity_summary=None,
+            pools=[],
+            error="Authentication failed.",
+        ),
+    ]
+    out = tmp_path / "sites.xlsx"
+    result = export_storage_capacity_excel_from_sites(
+        sites,
+        out,
+        include_monitor_off=False,
+        monitor_enabled={1: True, 2: False},
+    )
+    assert out.exists()
+    assert result.extra_rows + result.filled_count >= 1
+    wb = load_workbook(out)
+    ws = wb["Storage Capacity"]
+    blob = "\n".join(
+        str(cell or "") for row in ws.iter_rows(values_only=True) for cell in row
+    )
+    assert "10.0.0.1" in blob or "A" in blob
+    assert "10.0.0.2" not in blob
