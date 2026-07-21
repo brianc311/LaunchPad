@@ -7,10 +7,11 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import AbstractSet, Any, Callable
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -93,6 +94,31 @@ class ExportResult:
     error_count: int
     extra_rows: int
     generated_at: str
+
+
+def card_ids_included_for_export(
+    card_ids: Iterable[int],
+    *,
+    include_monitor_off: bool,
+    monitor_enabled: Mapping[int, bool],
+) -> frozenset[int]:
+    ids = [int(card_id) for card_id in card_ids]
+    if include_monitor_off:
+        return frozenset(ids)
+    return frozenset(
+        card_id for card_id in ids if bool(monitor_enabled.get(card_id, False))
+    )
+
+
+def keep_inventory_row(
+    *,
+    matched_card_id: int | None,
+    included_card_ids: AbstractSet[int],
+    include_monitor_off: bool,
+) -> bool:
+    if include_monitor_off:
+        return True
+    return matched_card_id is not None and matched_card_id in included_card_ids
 
 
 def format_capacity_text(
