@@ -111,6 +111,7 @@ def test_api_get_lun_builds_includes_site_templates(monkeypatch):
         "template-hartford-ct",
         "template-jupiter-fl",
         "template-pendergrass-ga",
+        "template-mount-vernon-il",
     }
     assert all(
         build["id"] not in template_ids for build in payload["builds"]
