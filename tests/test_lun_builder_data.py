@@ -179,8 +179,8 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 1
-    hartford = templates[0]
+    assert len(templates) == 4
+    hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
     assert hartford["is_template"] is True
@@ -189,7 +189,8 @@ def test_hartford_template_identity():
 
 
 def test_hartford_hosts_cover_six_lpars():
-    hartford = seed_lun_builder_templates()[0]
+    templates = seed_lun_builder_templates()
+    hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     names = {h["lpar_name"] for h in hartford["hosts"]}
     assert names == {
         "pconsps3",
@@ -206,7 +207,8 @@ def test_hartford_hosts_cover_six_lpars():
 
 
 def test_hartford_lun_batches_and_blank_profile_pool():
-    hartford = seed_lun_builder_templates()[0]
+    templates = seed_lun_builder_templates()
+    hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     luns = hartford["luns"]
     assert len(luns) == 21  # 6 root batches + 15 shared batches
     assert all(not str(lun.get("storage_profile") or "").strip() for lun in luns)
@@ -224,3 +226,256 @@ def test_hartford_lun_batches_and_blank_profile_pool():
     assert "pconsps_ora1vg_1" in expanded
     assert "pconmfs_ora1vg_1" in expanded
     assert "pconbt_ora1vg_1" in expanded
+
+
+def _jupiter_template() -> dict:
+    return next(
+        t for t in seed_lun_builder_templates() if t["id"] == "template-jupiter-fl"
+    )
+
+
+def test_jupiter_template_identity_and_defaults():
+    jup = _jupiter_template()
+    assert jup["name"] == "Jupiter, FL (Template)"
+    assert jup["location"] == "Jupiter, FL"
+    assert jup["is_template"] is True
+    assert jup["default_storage_profile"] == "flashsystem_5200"
+    assert jup["default_pool_or_cpg"] == "JUP_G3_Pool"
+    assert jup["default_card_hint"] == "Jupiter, FL"
+    assert normalize_build(jup)["is_template"] is True
+
+
+def test_jupiter_hosts_blank_wwpns():
+    jup = _jupiter_template()
+    names = {h["lpar_name"] for h in jup["hosts"]}
+    assert names == {
+        "pjupvio01a",
+        "pjupvio01b",
+        "pjupvio02a",
+        "pjupvio02b",
+        "pjupvio03a",
+        "pjupvio03b",
+        "pjupvio04a",
+        "pjupvio04b",
+        "pjupmhcdb2",
+        "pjupmhcdg2",
+        "pjupres01",
+    }
+    assert len(jup["hosts"]) == 11
+    assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in jup["hosts"])
+    assert all(h.get("type") == "Generic" for h in jup["hosts"])
+
+
+def test_jupiter_lun_batches_profile_and_names():
+    jup = _jupiter_template()
+    luns = jup["luns"]
+    # 8 vio root + 2 db root + 2 db data + 1 res data = 13
+    assert len(luns) == 13
+    assert all(lun.get("name_prefix") == "pjup" for lun in luns)
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "JUP_G3_Pool" for lun in luns)
+    assert all(lun.get("card_hint") == "Jupiter, FL" for lun in luns)
+
+    vio_roots = [
+        lun
+        for lun in luns
+        if lun["purpose"] == "root" and lun["host_names"][0].startswith("pjupvio")
+    ]
+    assert len(vio_roots) == 8
+    assert all(lun["count"] == 2 and lun["size"] == "100GB" for lun in vio_roots)
+
+    db2_root = next(
+        lun
+        for lun in luns
+        if lun["purpose"] == "root" and lun["host_names"] == ["pjupmhcdb2"]
+    )
+    assert db2_root["count"] == 3 and db2_root["size"] == "50GB"
+    db2_data = next(
+        lun
+        for lun in luns
+        if lun["purpose"] == "data" and lun["host_names"] == ["pjupmhcdb2"]
+    )
+    assert db2_data["count"] == 9 and db2_data["size"] == "100GB"
+
+    res = next(lun for lun in luns if lun["host_names"] == ["pjupres01"])
+    assert res["purpose"] == "data" and res["count"] == 5 and res["size"] == "100GB"
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert len(expanded) == len(set(expanded))
+    assert "pjupvio01a_root_1" in expanded
+    assert "pjupmhcdb2_root_1" in expanded
+    assert "pjupmhcdb2_data_1" in expanded
+    assert "pjupres01_data_1" in expanded
+
+
+def _pendergrass_template() -> dict:
+    return next(
+        t for t in seed_lun_builder_templates() if t["id"] == "template-pendergrass-ga"
+    )
+
+
+def test_pendergrass_template_identity_and_defaults():
+    pen = _pendergrass_template()
+    assert pen["name"] == "Pendergrass, GA (Template)"
+    assert pen["location"] == "Pendergrass, GA"
+    assert pen["is_template"] is True
+    assert pen["default_storage_profile"] == "flashsystem_5200"
+    assert pen["default_pool_or_cpg"] == "G3_PEN_Pool1"
+    assert pen["default_card_hint"] == "Pendergrass, GA"
+    assert normalize_build(pen)["is_template"] is True
+
+
+def test_pendergrass_hosts_blank_wwpns():
+    pen = _pendergrass_template()
+    names = {h["lpar_name"] for h in pen["hosts"]}
+    assert names == {"pen_penesx_vm05", "pen_penesx_vm06"}
+    assert len(pen["hosts"]) == 2
+    assert all(h.get("wwpn1") == "" and h.get("wwpn2") == "" for h in pen["hosts"])
+    assert all(h.get("type") == "Generic" for h in pen["hosts"])
+
+
+def test_pendergrass_lun_batches_shared_and_names():
+    pen = _pendergrass_template()
+    luns = pen["luns"]
+    both = ["pen_penesx_vm05", "pen_penesx_vm06"]
+    assert len(luns) == 3
+    assert all(lun.get("name_prefix") == "PEN" for lun in luns)
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "G3_PEN_Pool1" for lun in luns)
+    assert all(lun.get("card_hint") == "Pendergrass, GA" for lun in luns)
+    assert all(lun.get("shared") is True for lun in luns)
+    assert all(lun.get("cluster") == "esx" for lun in luns)
+    assert all(lun.get("host_names") == both for lun in luns)
+
+    vol_2tb = next(
+        lun for lun in luns if lun["purpose"] == "ESX_VOL" and lun["size"] == "2TB"
+    )
+    assert vol_2tb["count"] == 3
+    vol_4tb = next(
+        lun for lun in luns if lun["purpose"] == "ESX_VOL" and lun["size"] == "4TB"
+    )
+    assert vol_4tb["count"] == 1
+    coredump = next(lun for lun in luns if lun["purpose"] == "ESX_VOL_COREDUMP")
+    assert coredump["count"] == 1 and coredump["size"] == "100GB"
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert len(expanded) == 5
+    assert len(expanded) == len(set(expanded))
+    assert "PENesx_ESX_VOL_1" in expanded
+    assert "PENesx_ESX_VOL_2" in expanded
+    assert "PENesx_ESX_VOL_3" in expanded
+    assert "PENesx_ESX_VOL" in expanded  # single 4TB batch (count==1 uses base only)
+    assert "PENesx_ESX_VOL_COREDUMP" in expanded
+
+
+def _mount_vernon_template() -> dict:
+    return next(
+        t for t in seed_lun_builder_templates() if t["id"] == "template-mount-vernon-il"
+    )
+
+
+def test_mount_vernon_template_identity_and_defaults():
+    mtv = _mount_vernon_template()
+    assert mtv["name"] == "Mount Vernon, IL (Template)"
+    assert mtv["location"] == "Mount Vernon, IL"
+    assert mtv["is_template"] is True
+    assert mtv["default_storage_profile"] == "flashsystem_5200"
+    assert mtv["default_pool_or_cpg"] == "MtVerno_Pool1"
+    assert mtv["default_card_hint"] == "Mount Vernon, IL"
+    assert normalize_build(mtv)["is_template"] is True
+
+
+def test_mount_vernon_hosts_and_active_wwpns():
+    mtv = _mount_vernon_template()
+    hosts = mtv["hosts"]
+    assert len(hosts) == 11
+    names = [h["lpar_name"] for h in hosts]
+    assert names.count("amv1_as400") == 2
+    assert names.count("tmtvtst1") == 2
+    assert set(names) == {
+        "amv1_as400",
+        "pen-mtvesx-vm01",
+        "pen-mtvesx-vm02",
+        "pen-mtvesx-vm03",
+        "pmtvvio01a",
+        "pmtvvio01b",
+        "pmtvvio02a",
+        "pmtvvio02b",
+        "tmtvtst1",
+    }
+    assert all(h.get("type") == "Generic" for h in hosts)
+
+    as400_rows = [h for h in hosts if h["lpar_name"] == "amv1_as400"]
+    assert {(r["wwpn1"], r["wwpn2"]) for r in as400_rows} == {
+        ("C050760B552B0004", "C050760B552B0006"),
+        ("C050760B552B0010", ""),
+    }
+    tst_rows = [h for h in hosts if h["lpar_name"] == "tmtvtst1"]
+    assert {(r["wwpn1"], r["wwpn2"]) for r in tst_rows} == {
+        ("C050760B20CA0008", "C050760B20CA000A"),
+        ("C050760B20CA000C", "C050760B20CA000E"),
+    }
+    esx01 = next(h for h in hosts if h["lpar_name"] == "pen-mtvesx-vm01")
+    assert esx01["wwpn1"] == "51402EC012434DDC"
+    assert esx01["wwpn2"] == "51402EC012434DDE"
+    vio01a = next(h for h in hosts if h["lpar_name"] == "pmtvvio01a")
+    assert vio01a["wwpn1"] == "21000024FF85BB40"
+    assert vio01a["wwpn2"] == "21000024FF85BB41"
+
+
+def test_mount_vernon_lun_batches_and_names():
+    mtv = _mount_vernon_template()
+    luns = mtv["luns"]
+    # 1 AS400 + 1 ESX + 4 VIO + 1 test = 7
+    assert len(luns) == 7
+    assert all(lun.get("storage_profile") == "flashsystem_5200" for lun in luns)
+    assert all(lun.get("pool_or_cpg") == "MtVerno_Pool1" for lun in luns)
+    assert all(lun.get("card_hint") == "Mount Vernon, IL" for lun in luns)
+
+    as400 = next(lun for lun in luns if lun["purpose"] == "AS400")
+    assert as400["count"] == 10 and as400["size"] == "500GB"
+    assert as400["shared"] is True
+    assert as400["name_prefix"] == "AVM1"
+    assert as400["host_names"] == ["amv1_as400"]
+
+    esx = next(lun for lun in luns if lun["purpose"] == "ESXI_DS")
+    assert esx["count"] == 4 and esx["size"] == "4TB"
+    assert esx["shared"] is True
+    assert esx["name_prefix"] == "MTV"
+    assert esx["host_names"] == [
+        "pen-mtvesx-vm01",
+        "pen-mtvesx-vm02",
+        "pen-mtvesx-vm03",
+    ]
+
+    vio = [
+        lun
+        for lun in luns
+        if lun["purpose"] == "root" and lun["host_names"][0].startswith("pmtvvio")
+    ]
+    assert len(vio) == 4
+    assert all(lun["count"] == 2 and lun["size"] == "100GB" for lun in vio)
+    assert all(lun["name_prefix"] == "pmtv" for lun in vio)
+
+    tst = next(lun for lun in luns if lun["host_names"] == ["tmtvtst1"])
+    assert tst["purpose"] == "root" and tst["count"] == 3 and tst["size"] == "100GB"
+    assert tst["name_prefix"] == ""
+
+    expanded = [
+        name for lun in luns for name in (r["name"] for r in expand_lun_batch(lun))
+    ]
+    assert "AVM1_AS400_1" in expanded
+    assert "AVM1_AS400_10" in expanded
+    assert "MTV_ESXI_DS_1" in expanded
+    assert "MTV_ESXI_DS_4" in expanded
+    assert "pmtvvio01a_root_1" in expanded
+    assert "pmtvvio02b_root_2" in expanded
+    assert "tmtvtst1_root_1" in expanded
+    assert "tmtvtst1_root_3" in expanded
+    assert len(expanded) == len(set(expanded))
+    # 10 + 4 + 8 + 3 = 25
+    assert len(expanded) == 25

@@ -232,19 +232,76 @@ def _lun_batch(
     cluster: str,
     *,
     name_prefix: str = "pcon",
+    storage_profile: str = "",
+    pool_or_cpg: str = "",
+    card_hint: str = "",
 ) -> dict:
     return {
         "purpose": purpose,
         "count": count,
         "size": size,
         "shared": shared,
-        "storage_profile": "",
-        "pool_or_cpg": "",
+        "storage_profile": storage_profile,
+        "pool_or_cpg": pool_or_cpg,
         "host_names": host_names,
         "scsi_or_lun_id": "",
-        "card_hint": "",
+        "card_hint": card_hint,
         "cluster": cluster,
         "name_prefix": name_prefix,
+    }
+
+
+def _jupiter_host(lpar_name: str) -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": "",
+        "wwpn2": "",
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
+    }
+
+
+def _pendergrass_host(lpar_name: str) -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": "",
+        "wwpn2": "",
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
+    }
+
+
+def _mount_vernon_host(lpar_name: str, wwpn1: str = "", wwpn2: str = "") -> dict:
+    return {
+        "lpar_name": lpar_name,
+        "slot": "",
+        "state": "",
+        "required": False,
+        "type": "Generic",
+        "remote_lpar": "",
+        "remote_slot": "",
+        "wwpn1": wwpn1,
+        "wwpn2": wwpn2,
+        "physical_fc_slot": "",
+        "managed_system_name": "",
+        "managed_system_serial": "",
+        "notes": "",
     }
 
 
@@ -295,6 +352,105 @@ def seed_lun_builder_templates() -> list[dict]:
                 _lun_batch("caavg_private", 1, "10GB", True, host_names, cluster),
             ]
         )
+    jup_hosts = [
+        _jupiter_host(name)
+        for name in (
+            "pjupvio01a",
+            "pjupvio01b",
+            "pjupvio02a",
+            "pjupvio02b",
+            "pjupvio03a",
+            "pjupvio03b",
+            "pjupvio04a",
+            "pjupvio04b",
+            "pjupmhcdb2",
+            "pjupmhcdg2",
+            "pjupres01",
+        )
+    ]
+    jup_kwargs = {
+        "name_prefix": "pjup",
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "JUP_G3_Pool",
+        "card_hint": "Jupiter, FL",
+    }
+    jup_luns: list[dict] = []
+    for vio in (
+        "pjupvio01a",
+        "pjupvio01b",
+        "pjupvio02a",
+        "pjupvio02b",
+        "pjupvio03a",
+        "pjupvio03b",
+        "pjupvio04a",
+        "pjupvio04b",
+    ):
+        jup_luns.append(_lun_batch("root", 2, "100GB", False, [vio], "vio", **jup_kwargs))
+    for db_host in ("pjupmhcdb2", "pjupmhcdg2"):
+        jup_luns.append(_lun_batch("root", 3, "50GB", False, [db_host], "db", **jup_kwargs))
+        jup_luns.append(_lun_batch("data", 9, "100GB", False, [db_host], "db", **jup_kwargs))
+    jup_luns.append(_lun_batch("data", 5, "100GB", False, ["pjupres01"], "res", **jup_kwargs))
+
+    pen_hosts = [
+        _pendergrass_host(name)
+        for name in ("pen_penesx_vm05", "pen_penesx_vm06")
+    ]
+    pen_kwargs = {
+        "name_prefix": "PEN",
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "G3_PEN_Pool1",
+        "card_hint": "Pendergrass, GA",
+    }
+    pen_both = ["pen_penesx_vm05", "pen_penesx_vm06"]
+    pen_luns = [
+        _lun_batch("ESX_VOL", 3, "2TB", True, pen_both, "esx", **pen_kwargs),
+        _lun_batch("ESX_VOL", 1, "4TB", True, pen_both, "esx", **pen_kwargs),
+        _lun_batch("ESX_VOL_COREDUMP", 1, "100GB", True, pen_both, "esx", **pen_kwargs),
+    ]
+
+    mtv_hosts = [
+        _mount_vernon_host("amv1_as400", "C050760B552B0004", "C050760B552B0006"),
+        _mount_vernon_host("amv1_as400", "C050760B552B0010", ""),
+        _mount_vernon_host("pen-mtvesx-vm01", "51402EC012434DDC", "51402EC012434DDE"),
+        _mount_vernon_host("pen-mtvesx-vm02", "51402EC012435D38", "51402EC012435D3A"),
+        _mount_vernon_host("pen-mtvesx-vm03", "51402EC01243643C", "51402EC01243643E"),
+        _mount_vernon_host("pmtvvio01a", "21000024FF85BB40", "21000024FF85BB41"),
+        _mount_vernon_host("pmtvvio01b", "21000024FF85F054", "21000024FF85F055"),
+        _mount_vernon_host("pmtvvio02a", "21000024FF860A60", "21000024FF860A61"),
+        _mount_vernon_host("pmtvvio02b", "21000024FF86373E", "21000024FF86373F"),
+        _mount_vernon_host("tmtvtst1", "C050760B20CA0008", "C050760B20CA000A"),
+        _mount_vernon_host("tmtvtst1", "C050760B20CA000C", "C050760B20CA000E"),
+    ]
+    mtv_kwargs = {
+        "storage_profile": "flashsystem_5200",
+        "pool_or_cpg": "MtVerno_Pool1",
+        "card_hint": "Mount Vernon, IL",
+    }
+    mtv_esx = ["pen-mtvesx-vm01", "pen-mtvesx-vm02", "pen-mtvesx-vm03"]
+    mtv_luns: list[dict] = [
+        _lun_batch(
+            "AS400", 10, "500GB", True, ["amv1_as400"], "",
+            name_prefix="AVM1", **mtv_kwargs,
+        ),
+        _lun_batch(
+            "ESXI_DS", 4, "4TB", True, mtv_esx, "",
+            name_prefix="MTV", **mtv_kwargs,
+        ),
+    ]
+    for vio in ("pmtvvio01a", "pmtvvio01b", "pmtvvio02a", "pmtvvio02b"):
+        mtv_luns.append(
+            _lun_batch(
+                "root", 2, "100GB", False, [vio], "vio",
+                name_prefix="pmtv", **mtv_kwargs,
+            )
+        )
+    mtv_luns.append(
+        _lun_batch(
+            "root", 3, "100GB", False, ["tmtvtst1"], "test",
+            name_prefix="", **mtv_kwargs,
+        )
+    )
+
     return [
         {
             "id": "template-hartford-ct",
@@ -307,7 +463,55 @@ def seed_lun_builder_templates() -> list[dict]:
             "is_template": True,
             "hosts": hosts,
             "luns": luns,
-        }
+        },
+        {
+            "id": "template-jupiter-fl",
+            "name": "Jupiter, FL (Template)",
+            "location": "Jupiter, FL",
+            "notes": (
+                "Seeded from Jupiter FlashSystem 5200 inventory. "
+                "WWPNs are blank — set Port Definitions / Pull from FC WWPN before create. "
+                "Defaults use card hint Jupiter, FL, profile flashsystem_5200, pool JUP_G3_Pool."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "JUP_G3_Pool",
+            "default_card_hint": "Jupiter, FL",
+            "hosts": jup_hosts,
+            "luns": jup_luns,
+        },
+        {
+            "id": "template-pendergrass-ga",
+            "name": "Pendergrass, GA (Template)",
+            "location": "Pendergrass, GA",
+            "notes": (
+                "Seeded from Pendergrass FlashSystem 5200 inventory. "
+                "WWPNs are blank — set Port Definitions / Pull from FC WWPN before create. "
+                "Defaults use card hint Pendergrass, GA, profile flashsystem_5200, pool G3_PEN_Pool1."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "G3_PEN_Pool1",
+            "default_card_hint": "Pendergrass, GA",
+            "hosts": pen_hosts,
+            "luns": pen_luns,
+        },
+        {
+            "id": "template-mount-vernon-il",
+            "name": "Mount Vernon, IL (Template)",
+            "location": "Mount Vernon, IL",
+            "notes": (
+                "Seeded from Mount Vernon FlashSystem 5200 inventory. "
+                "Active Port Definition WWPNs are filled; Offline ports omitted. "
+                "Defaults use card hint Mount Vernon, IL, profile flashsystem_5200, pool MtVerno_Pool1."
+            ),
+            "is_template": True,
+            "default_storage_profile": "flashsystem_5200",
+            "default_pool_or_cpg": "MtVerno_Pool1",
+            "default_card_hint": "Mount Vernon, IL",
+            "hosts": mtv_hosts,
+            "luns": mtv_luns,
+        },
     ]
 
 

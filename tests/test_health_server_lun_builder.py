@@ -98,7 +98,7 @@ def test_lun_builds_replace_upsert_and_delete_persist():
     assert json.loads(settings[LUN_BUILDS_SETTING]) == builds
 
 
-def test_api_get_lun_builds_includes_hartford_template(monkeypatch):
+def test_api_get_lun_builds_includes_site_templates(monkeypatch):
     settings, getter, setter = _settings_backend()
     server = HealthServer()
     server.set_settings_backend(getter, setter)
@@ -106,9 +106,15 @@ def test_api_get_lun_builds_includes_hartford_template(monkeypatch):
     status, payload = _call_lun_builds_api(monkeypatch, server, "GET")
 
     assert status == 200
-    assert payload["templates"][0]["id"] == "template-hartford-ct"
+    template_ids = {t["id"] for t in payload["templates"]}
+    assert template_ids == {
+        "template-hartford-ct",
+        "template-jupiter-fl",
+        "template-pendergrass-ga",
+        "template-mount-vernon-il",
+    }
     assert all(
-        build["id"] != "template-hartford-ct" for build in payload["builds"]
+        build["id"] not in template_ids for build in payload["builds"]
     )
     assert LUN_BUILDS_SETTING not in settings
 
