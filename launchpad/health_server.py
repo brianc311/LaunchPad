@@ -33,6 +33,13 @@ from launchpad.contingency_snap_create import (
     resolve_card_by_storage_hint,
     run_snap_steps,
 )
+from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
+from launchpad.fc_consistgrp_ops import (
+    build_fc_consistgrp_steps,
+    collect_fc_consistgrp_inventory,
+    partition_maps,
+    preview_ok as fc_consistgrp_preview_ok,
+)
 from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
 from launchpad.flashsystem_fc import analyze_fc_inventory
 from launchpad.flashsystem_health import analyze_health
@@ -1735,6 +1742,26 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == FC_WWPN_REPORT_PATH:
             self._send_html(FC_WWPN_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == FC_CONSISTGRP_PATH:
+            self._send_html(FC_CONSISTGRP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
+        if path == "/api/fc-consistgrp/cards":
+            self._send_json({"cards": server.fc_consistgrp_cards()})
+            return
+        if path == "/api/fc-consistgrp/inventory":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            try:
+                card_id = int(raw_card_id)
+            except ValueError:
+                self._send_json(
+                    {"ok": False, "warnings": ["card_id is required"], "groups": [], "maps": [], "stand_alone": []},
+                    status=400,
+                )
+                return
+            result = server.fc_consistgrp_inventory(card_id)
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
         if path == "/api/cards":
             self._send_json(server.list_cards())
             return
@@ -2202,6 +2229,34 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     status=503,
                 )
                 return
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
+        if path in {"/api/fc-consistgrp/preview", "/api/fc-consistgrp/run"}:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"ok": False, "error": "JSON object required"}, status=400)
+                return
+            action = str(payload.get("action") or "")
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json(
+                    {"ok": False, "warnings": ["card_id is required"], "steps": []},
+                    status=400,
+                )
+                return
+            if path == "/api/fc-consistgrp/preview":
+                result = server.preview_fc_consistgrp(card_id, action, payload)
+            else:
+                result = server.run_fc_consistgrp(
+                    card_id, action, payload, confirm=payload.get("confirm") is True
+                )
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
         if not path.startswith("/api/refresh/"):
@@ -2758,6 +2813,103 @@ class HealthServer:
         result["warnings"] = preview["warnings"]
         return result
 
+    def _fc_consistgrp_card_by_id(self, card_id: int) -> HealthCard | None:
+        with self._lock:
+            return self._cards.get(card_id)
+
+    def fc_consistgrp_cards(self) -> list[dict[str, Any]]:
+        return [
+            {"id": card["id"], "name": card["name"], "host": card["host"]}
+            for card in self.list_cards()
+        ]
+
+    def fc_consistgrp_inventory(self, card_id: int) -> dict[str, Any]:
+        card = self._fc_consistgrp_card_by_id(card_id)
+        if card is None:
+            return {
+                "ok": False,
+                "warnings": [f"Unknown Health Card id {card_id}"],
+                "groups": [],
+                "maps": [],
+                "stand_alone": [],
+            }
+        try:
+            groups, maps = collect_fc_consistgrp_inventory(self._snap_run_command(card))
+        except Exception as exc:
+            return {
+                "ok": False,
+                "warnings": [f"Unable to collect array inventory: {exc}"],
+                "groups": [],
+                "maps": [],
+                "stand_alone": [],
+            }
+        _in_group, stand_alone = partition_maps(maps)
+        return {
+            "ok": True,
+            "warnings": [],
+            "card": {"id": card.card_id, "name": card.name, "host": card.host},
+            "groups": groups,
+            "maps": maps,
+            "stand_alone": stand_alone,
+        }
+
+    def preview_fc_consistgrp(
+        self,
+        card_id: int,
+        action: str,
+        payload: dict,
+    ) -> dict[str, Any]:
+        inventory = self.fc_consistgrp_inventory(card_id)
+        if not inventory["ok"]:
+            return {"ok": False, "warnings": inventory["warnings"], "steps": []}
+        steps, warnings = build_fc_consistgrp_steps(
+            action, payload, groups=inventory["groups"], maps=inventory["maps"]
+        )
+        return {
+            "ok": fc_consistgrp_preview_ok(steps, warnings),
+            "warnings": warnings,
+            "steps": self._snap_steps_payload(steps),
+            "card": inventory["card"],
+        }
+
+    def run_fc_consistgrp(
+        self,
+        card_id: int,
+        action: str,
+        payload: dict,
+        *,
+        confirm: bool,
+    ) -> dict[str, Any]:
+        if confirm is not True:
+            return {
+                "ok": False,
+                "warnings": ["confirm must be true before running consistency group actions"],
+                "log": [],
+            }
+        preview = self.preview_fc_consistgrp(card_id, action, payload)
+        if not preview["ok"]:
+            return {"ok": False, "warnings": preview["warnings"], "log": []}
+        card = self._fc_consistgrp_card_by_id(card_id)
+        if card is None:
+            return {
+                "ok": False,
+                "warnings": [f"Unknown Health Card id {card_id}"],
+                "log": [],
+            }
+        steps = [
+            SnapStep(
+                kind=step["kind"],
+                purpose=step["purpose"],
+                cmd=step["cmd"],
+                skip=step["skip"],
+                reason=step["reason"],
+            )
+            for step in preview["steps"]
+        ]
+        result = run_snap_steps(steps, self._snap_run_command(card))
+        result["warnings"] = preview["warnings"]
+        return result
+
     def get_snapshot_notes(self) -> dict[str, str]:
         with self._lock:
             getter = self._get_setting
@@ -2905,6 +3057,10 @@ class HealthServer:
     @property
     def lun_builder_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{LUN_BUILDER_PATH}"
+
+    @property
+    def fc_consistgrp_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{FC_CONSISTGRP_PATH}"
 
     def ensure_running(self) -> None:
         with self._lock:
@@ -3126,6 +3282,16 @@ class HealthServer:
         webbrowser.open(self.lun_builder_url)
         _log(f"Opened LUN Builder in browser: {self.lun_builder_url}")
         return self.lun_builder_url
+
+    def open_fc_consistgrp(self, card_id: int | None = None) -> str:
+        """Open the FlashCopy consistency groups page in the default browser."""
+        self.ensure_running()
+        url = self.fc_consistgrp_url
+        if card_id is not None:
+            url = f"{url}?card={card_id}"
+        webbrowser.open(url)
+        _log(f"Opened FlashCopy consistency groups in browser: {url}")
+        return url
 
 
 _instance: HealthServer | None = None

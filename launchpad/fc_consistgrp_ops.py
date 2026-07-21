@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from launchpad.contingency_snap_create import SnapStep, cli_token
 from launchpad.flashsystem_fc import _get, _table_records
 
@@ -129,6 +131,23 @@ def enrich_group_map_counts(groups: list[dict], maps: list[dict]) -> list[dict]:
             updated["map_count"] = membership
         enriched.append(updated)
     return enriched
+
+
+def collect_fc_consistgrp_inventory(
+    run_cmd: Callable[[str], str],
+) -> tuple[list[dict], list[dict]]:
+    """Collect and parse `lsfcconsistgrp` + `lsfcmap` inventory over SSH."""
+    groups_output = run_cmd("svcinfo lsfcconsistgrp -delim :")
+    if not groups_output.strip():
+        groups_output = run_cmd("svcinfo lsfcconsistgrp")
+    maps_output = run_cmd("svcinfo lsfcmap -delim :")
+    if not maps_output.strip():
+        maps_output = run_cmd("svcinfo lsfcmap")
+
+    groups = parse_lsfcconsistgrp(groups_output)
+    maps = parse_lsfcmap_rows(maps_output)
+    groups = enrich_group_map_counts(groups, maps)
+    return groups, maps
 
 
 def preview_ok(steps: list[SnapStep], warnings: list[str]) -> bool:
