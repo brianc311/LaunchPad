@@ -6,6 +6,8 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from launchpad.lun_builder_data import expand_lun_batch, seed_lun_builder_templates
+
 CONTINGENCY_GROUPS_SETTING = "contingency_groups"
 
 SNAP_SUFFIX = "_snap"
@@ -158,11 +160,61 @@ def _windsor() -> dict[str, Any]:
     }
 
 
+def _williamston_anderson() -> dict[str, Any]:
+    template = next(
+        build
+        for build in seed_lun_builder_templates()
+        if build["id"] == "template-williamston-anderson"
+    )
+    hosts = [
+        _host(name)
+        for name in sorted({row["lpar_name"] for row in template["hosts"]})
+    ]
+    inventory = [
+        row
+        for lun in template["luns"]
+        for row in expand_lun_batch(lun)
+    ]
+    known_uids = {
+        "ADC-Data01": "60050764008101A45800000000000B90",
+    }
+    volumes = [
+        _volume(
+            row["name"],
+            pool=row["pool_or_cpg"],
+            capacity=row["size"],
+            uid=known_uids.get(row["name"], ""),
+        )
+        for row in inventory
+    ]
+    maps: list[dict[str, str]] = []
+    for row in inventory:
+        maps.extend(
+            _maps_all_hosts(
+                row["name"],
+                row["host_names"],
+                row["scsi_or_lun_id"],
+            )
+        )
+    return {
+        "id": "williamston-anderson",
+        "name": "Williamston (Anderson)",
+        "location": "Williamston (Anderson)",
+        "storage_hint": "v7kand-g3v1",
+        "notes": "",
+        "updated_at": _SEED_UPDATED_AT,
+        "hosts": hosts,
+        "volumes": volumes,
+        "maps": maps,
+    }
+
+
 def seed_contingency_groups() -> list[dict]:
     return [
         generate_snap_rows(_hartford_ct()),
         generate_snap_rows(_houston_tx()),
         generate_snap_rows(_windsor()),
+        generate_snap_rows(_williamston_anderson()),
     ]
 
 

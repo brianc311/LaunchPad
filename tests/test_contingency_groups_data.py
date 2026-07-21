@@ -17,15 +17,93 @@ from launchpad.contingency_groups_data import (
     validate_wizard_step2,
 )
 
+ANDERSON_REQUIRED_HOSTS = frozenset(
+    {
+        "AAN1",
+        "AAN1C",
+        "FC_AAN1",
+        "BIB_ADC_VM01",
+        "BIB_ADC_VM02",
+        "pen_andesx_vm03",
+        "pen_andesx_vm04",
+        "pla-wanoemcr01",
+        "pla-wanoemcr02",
+        "pandvio01a",
+        "pandvio01b",
+        "pandvio02a",
+        "pandvio02b",
+        "pandvio03a",
+        "pandvio03b",
+        "pandvio04a",
+        "pandvio04b",
+        "pandvio05a",
+        "pandvio05b",
+        "pandvio06a",
+        "pandvio06b",
+        "pandvio07a",
+        "pandvio07b",
+        "pandvio08a",
+        "pandvio08b",
+        "pandvio09a",
+        "pandvio09b",
+        "pandvio10a",
+        "pandvio10b",
+        "pandap01",
+        "pandap02",
+        "pandbt1",
+        "pandbt2",
+        "pandbt3",
+        "pandbt4",
+        "pandbtdg1",
+        "panddb01",
+        "panddb02",
+        "pandmfs1",
+        "pandmfs2",
+        "pandmfs3",
+        "pandmfs4",
+        "pandmfs10",
+        "pandmfsdg1",
+        "pandnim01",
+        "pandps1",
+        "pandps2",
+        "pandps3",
+        "pandps4",
+        "pandpspdg1",
+        "pandpspa1",
+        "pandpspa2",
+        "dandmfs1",
+        "tandbt1",
+        "tandbt20",
+        "tandmfs1",
+        "tandmfs2",
+        "tandmfs20",
+        "tandsps1",
+        "tandsps2",
+        "tandsps20",
+        "tandsps21",
+        "tconbt20",
+        "tconmfs20",
+        "tconsps20",
+        "tconsps21",
+        "TLA_WANMFS01",
+        "TLA_WANMFS02",
+    }
+)
+
 
 def test_setting_key():
     assert CONTINGENCY_GROUPS_SETTING == "contingency_groups"
 
 
-def test_seeds_include_three_sites():
+def test_seeds_include_four_sites():
     seeds = seed_contingency_groups()
     ids = {g["id"] for g in seeds}
-    assert ids == {"hartford-ct", "houston-tx", "windsor"}
+    assert ids == {
+        "hartford-ct",
+        "houston-tx",
+        "windsor",
+        "williamston-anderson",
+    }
     hartford = next(g for g in seeds if g["id"] == "hartford-ct")
     assert len(hartford["hosts"]) == 3
     hartford_sources = [v for v in hartford["volumes"] if v.get("role") != "snap"]
@@ -47,6 +125,35 @@ def test_seeds_include_three_sites():
     assert "51402EC012CFD072" in vm01["wwpns"]
     vol1 = next(v for v in windsor["volumes"] if v["name"] == "WIN_ESX_DataStore_1")
     assert vol1["uid"].startswith("60050768128000A758")
+
+
+def test_williamston_anderson_contingency_group():
+    and_ = next(
+        g for g in seed_contingency_groups() if g["id"] == "williamston-anderson"
+    )
+    assert and_["name"] == "Williamston (Anderson)"
+    assert and_["location"] == "Williamston (Anderson)"
+    assert and_["storage_hint"] == "v7kand-g3v1"
+    assert {h["name"] for h in and_["hosts"]} == ANDERSON_REQUIRED_HOSTS
+    assert all(h["wwpns"] == [] for h in and_["hosts"])
+    sources = [v for v in and_["volumes"] if v.get("role") != "snap"]
+    snaps = [v for v in and_["volumes"] if v.get("role") == "snap"]
+    assert len(sources) == 780
+    assert len(snaps) == len(sources)
+    assert all(v.get("pool") == "G3_AND_Pool" for v in sources)
+    assert all(s["name"].endswith("_snap") for s in snaps)
+    adc = next(v for v in sources if v["name"] == "ADC-Data01")
+    assert adc["uid"].startswith("60050764008101A458")
+    assert adc["capacity"]
+    adc_maps = [
+        m
+        for m in and_["maps"]
+        if m["volume"] == "ADC-Data01" and m.get("role") != "snap"
+    ]
+    assert {m["host"] for m in adc_maps} == {
+        "pen_andesx_vm03",
+        "pen_andesx_vm04",
+    }
 
 
 def test_normalize_strips_and_keeps_empty_wwpn_uid():

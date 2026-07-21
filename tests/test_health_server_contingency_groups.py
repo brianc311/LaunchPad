@@ -29,6 +29,7 @@ def test_get_contingency_groups_seeds_and_persists_when_empty():
         "hartford-ct",
         "houston-tx",
         "windsor",
+        "williamston-anderson",
     }
     assert json.loads(settings[CONTINGENCY_GROUPS_SETTING]) == groups
 
