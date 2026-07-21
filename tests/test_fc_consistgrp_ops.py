@@ -1,6 +1,7 @@
 from launchpad.fc_consistgrp_ops import (
     ACTIONS,
     build_fc_consistgrp_steps,
+    collect_fc_consistgrp_inventory,
     enrich_group_map_counts,
     parse_lsfcconsistgrp,
     parse_lsfcmap_rows,
@@ -42,6 +43,54 @@ def test_enrich_group_map_counts():
     enriched = enrich_group_map_counts(groups, maps)
     awd = next(g for g in enriched if g["name"] == "AWD1_AS400_CG")
     assert awd["map_count"] == 2  # from membership in sample
+
+
+def test_collect_fc_consistgrp_inventory_parses_delimited_tables():
+    responses = {
+        "svcinfo lsfcconsistgrp -delim :": CG_SAMPLE.strip(),
+        "svcinfo lsfcmap -delim :": MAP_SAMPLE.strip(),
+    }
+    calls: list[str] = []
+
+    def run_cmd(cmd: str) -> str:
+        calls.append(cmd)
+        return responses.get(cmd, "")
+
+    groups, maps = collect_fc_consistgrp_inventory(run_cmd)
+
+    assert [g["name"] for g in groups] == ["AWD1_AS400_CG", "empty_cg"]
+    assert groups[0]["map_count"] == 2
+    assert [m["name"] for m in maps] == ["fcmap0", "fcmap1", "standalone1"]
+    assert all(cmd.endswith("-delim :") for cmd in calls)
+    assert calls == [
+        "svcinfo lsfcconsistgrp -delim :",
+        "svcinfo lsfcmap -delim :",
+    ]
+
+
+def test_collect_fc_consistgrp_inventory_falls_back_when_delimited_empty():
+    responses = {
+        "svcinfo lsfcconsistgrp -delim :": "",
+        "svcinfo lsfcconsistgrp": CG_SAMPLE.strip(),
+        "svcinfo lsfcmap -delim :": "   \n  ",
+        "svcinfo lsfcmap": MAP_SAMPLE.strip(),
+    }
+    calls: list[str] = []
+
+    def run_cmd(cmd: str) -> str:
+        calls.append(cmd)
+        return responses.get(cmd, "")
+
+    groups, maps = collect_fc_consistgrp_inventory(run_cmd)
+
+    assert [g["name"] for g in groups] == ["AWD1_AS400_CG", "empty_cg"]
+    assert len(maps) == 3
+    assert calls == [
+        "svcinfo lsfcconsistgrp -delim :",
+        "svcinfo lsfcconsistgrp",
+        "svcinfo lsfcmap -delim :",
+        "svcinfo lsfcmap",
+    ]
 
 
 def _inv():

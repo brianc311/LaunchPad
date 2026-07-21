@@ -214,7 +214,18 @@ def test_run_fc_consistgrp_executes_steps_when_confirmed(monkeypatch):
     assert result["warnings"] == []
 
 
-def test_open_fc_consistgrp_url_includes_card_id():
+def test_open_fc_consistgrp_url_includes_card_id(monkeypatch):
     server = HealthServer()
+    opened: list[str] = []
 
-    assert server.fc_consistgrp_url.endswith("/fc-consistgrp")
+    monkeypatch.setattr(server, "ensure_running", lambda: None)
+    monkeypatch.setattr(
+        "launchpad.health_server.webbrowser.open",
+        lambda url: opened.append(url),
+    )
+
+    url = server.open_fc_consistgrp(card_id=42)
+
+    assert "?card=42" in url
+    assert url.endswith("/fc-consistgrp?card=42")
+    assert opened == [url]
