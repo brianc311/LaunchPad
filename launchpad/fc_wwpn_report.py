@@ -128,6 +128,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="excel-btn" class="btn secondary">Export Excel</button>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
         <a class="btn secondary" href="/contingency-groups">Contingency Groups</a>
+        <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <label for="group-select" class="status">Contingency group</label>
         <select id="group-select" class="group-filter" aria-label="Contingency group">
