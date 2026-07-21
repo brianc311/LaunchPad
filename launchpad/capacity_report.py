@@ -381,6 +381,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       <div class="hero-actions no-print">
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
+        <button type="button" id="excel-btn" class="secondary">Export Excel</button>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
@@ -404,6 +405,10 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           <input type="checkbox" id="show-title-toggle" checked>
           Show report title on print
         </label>
+        <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel.">
+          <input type="checkbox" id="include-off-toggle">
+          Include monitoring-off sites
+        </label>
         <span id="refresh-status" class="refresh-status"></span>
       </div>
       <p id="print-meta" class="print-meta"></p>
@@ -425,6 +430,8 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const onePageToggle = document.getElementById("one-page-toggle");
     const showPoolsToggle = document.getElementById("show-pools-toggle");
     const showTitleToggle = document.getElementById("show-title-toggle");
+    const includeOffToggle = document.getElementById("include-off-toggle");
+    const excelBtn = document.getElementById("excel-btn");
     const reportTitleInput = document.getElementById("report-title-input");
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
@@ -497,6 +504,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     function setMonitor(cardId, on, { refresh = true } = {}) {
       void persistMonitor(cardId, on).then(() => {
         applyMonitorVisual(cardId);
+        renderAll(cardsCache);
         if (on && refresh) refreshCard(cardId).then(updateSiteBlock).catch(() => {});
         updateMasterMonitorToggle();
       });
@@ -519,6 +527,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         applyMonitorVisual(id);
       });
       updateMasterMonitorToggle();
+      renderAll(cardsCache);
       if (!on) {
         if (refreshStatusEl) refreshStatusEl.textContent = "All monitoring off.";
         return;
@@ -790,7 +799,20 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           "<strong>Capacity Report</strong> or <strong>Health Dashboard</strong> in LaunchPad.</div>";
         return;
       }
-      const sorted = [...cards].sort((a, b) =>
+      const visible = includeOffToggle && includeOffToggle.checked
+        ? cards
+        : cards.filter((c) => isMonitorOn(c.id));
+      if (!visible.length) {
+        sitesEl.innerHTML =
+          '<div class="empty">All sites have Monitor off. Check ' +
+          '<strong>Include monitoring-off sites</strong> to view them.</div>';
+        updateMasterMonitorToggle();
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `0 of ${cards.length} site(s) shown`;
+        }
+        return;
+      }
+      const sorted = [...visible].sort((a, b) =>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
       sitesEl.innerHTML = sorted.map(renderSite).join("");
@@ -801,6 +823,48 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       });
       sorted.forEach((card) => applyMonitorVisual(card.id));
       updateMasterMonitorToggle();
+      if (refreshStatusEl) {
+        refreshStatusEl.textContent = `${visible.length} of ${cards.length} site(s) shown`;
+      }
+    }
+
+    async function downloadExcel() {
+      if (!excelBtn) return;
+      excelBtn.disabled = true;
+      if (refreshStatusEl) refreshStatusEl.textContent = "Building Excel workbook…";
+      try {
+        const includeOff = includeOffToggle ? includeOffToggle.checked : false;
+        const res = await fetch(
+          `/api/capacity-export?include_off=${includeOff ? 1 : 0}&open=1`
+        );
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err && err.error) detail = err.error;
+          } catch (_err) {
+            /* ignore */
+          }
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, "");
+        a.href = url;
+        a.download = `Storage_Capacity_Report_${stamp}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = "Excel (.xlsx) downloaded and opened in Excel.";
+        }
+      } catch (err) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `Excel export failed: ${err.message || err}`;
+        }
+      } finally {
+        excelBtn.disabled = false;
+      }
     }
 
     async function refreshCard(cardId) {
@@ -913,6 +977,14 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       monitorAllToggle.addEventListener("change", () => {
         setAllMonitoring(monitorAllToggle.checked);
       });
+    }
+    if (includeOffToggle) {
+      includeOffToggle.addEventListener("change", () => {
+        renderAll(cardsCache);
+      });
+    }
+    if (excelBtn) {
+      excelBtn.addEventListener("click", downloadExcel);
     }
 
     initDetailsToggle();

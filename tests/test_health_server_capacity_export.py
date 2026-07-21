@@ -159,3 +159,12 @@ def test_health_handler_declares_capacity_export_route():
     source = inspect.getsource(_HealthHandler.do_GET)
 
     assert "/api/capacity-export" in source
+
+
+def test_capacity_report_html_has_export_and_include_off():
+    from launchpad.capacity_report import CAPACITY_REPORT_HTML
+
+    assert "Export Excel" in CAPACITY_REPORT_HTML
+    assert "Include monitoring-off sites" in CAPACITY_REPORT_HTML
+    assert 'id="excel-btn"' in CAPACITY_REPORT_HTML
+    assert 'id="include-off-toggle"' in CAPACITY_REPORT_HTML
