@@ -1966,6 +1966,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "yes",
             }
             try:
+                server.sync_from_app()
                 body, filename = server.export_capacity_excel_bytes(
                     include_monitor_off=include_off
                 )

@@ -102,6 +102,23 @@ def _call_capacity_export_api(
     return sent
 
 
+def test_get_capacity_export_route_syncs_from_app(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "On", monitor_on=True)
+    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    synced = {"called": False}
+
+    def _sync_from_app():
+        synced["called"] = True
+        return 0
+
+    monkeypatch.setattr(server, "sync_from_app", _sync_from_app)
+
+    _call_capacity_export_api(monkeypatch, server, "?include_off=0&open=0")
+
+    assert synced["called"] is True
+
+
 def test_get_capacity_export_route_sends_xlsx_bytes(monkeypatch):
     server = HealthServer()
     _register(server, 1, "On", monitor_on=True)
