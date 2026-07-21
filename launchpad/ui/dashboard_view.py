@@ -596,8 +596,6 @@ class DashboardView(ctk.CTkFrame):
         self._run_capacity_email_send(settings, source="Manual")
 
     def _run_capacity_email_send(self, settings: dict, *, source: str) -> None:
-        from launchpad.ssh_launcher import _log
-
         self._capacity_email_send_in_flight = True
         self.status_label.configure(text=f"{source} capacity email sending...")
 
@@ -621,8 +619,6 @@ class DashboardView(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_capacity_email_send_done(self, result: dict, *, source: str) -> None:
-        from launchpad.ssh_launcher import _log
-
         self._capacity_email_send_in_flight = False
         if result.get("ok"):
             text = f"{source} capacity email sent."
