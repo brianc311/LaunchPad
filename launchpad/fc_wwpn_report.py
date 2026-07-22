@@ -54,10 +54,35 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       background: #0f141d; color: var(--text); border: 1px solid var(--border);
       border-radius: 10px; height: 34px; padding: 0 10px; font: inherit;
     }
+    .site-filters {
+      display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+      margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+    }
+    .site-filters .filter-label {
+      color: var(--muted); font-size: 0.85rem; font-weight: 700;
+      letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .site-filters label.filter-check {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--text); font-size: 0.92rem; cursor: pointer; user-select: none;
+      background: #0f141d; border: 1px solid var(--border); border-radius: 999px;
+      padding: 6px 12px;
+    }
+    .site-filters label.filter-check input {
+      width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;
+    }
+    .site-filters .filter-hint { color: var(--muted); font-size: 0.82rem; }
+    .search-row { margin-bottom: 16px; }
+    .search-row input[type="search"] {
+      width: 100%; max-width: 420px; background: #0f141d; color: var(--text);
+      border: 1px solid var(--border); border-radius: 10px; height: 36px;
+      padding: 0 12px; font: inherit;
+    }
     .site {
       background: var(--card); border: 1px solid var(--border); border-radius: 16px;
       padding: 18px 20px; margin-bottom: 16px; break-inside: avoid;
     }
+    .site.highlight { outline: 2px solid var(--accent); outline-offset: 2px; }
     .site-head {
       display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: baseline;
       margin-bottom: 12px;
@@ -135,7 +160,26 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         </select>
         <span id="status" class="status"></span>
       </div>
+      <div class="site-filters no-print" id="site-filters">
+        <span class="filter-label">Include in list / Excel</span>
+        <label class="filter-check" for="filter-wag1">
+          <input type="checkbox" id="filter-wag1" checked>
+          WAG1
+        </label>
+        <label class="filter-check" for="filter-wag2">
+          <input type="checkbox" id="filter-wag2" checked>
+          WAG2
+        </label>
+        <label class="filter-check" for="filter-other">
+          <input type="checkbox" id="filter-other" checked>
+          Other sites
+        </label>
+        <span class="filter-hint">Uncheck a group to hide it from the report and export.</span>
+      </div>
     </section>
+    <div class="search-row no-print">
+      <input type="search" id="fc-search" placeholder="Search WWPN, remote WWPN, host, or volume…" aria-label="Search FC inventory">
+    </div>
     <div id="sites"></div>
     <p class="footer">LaunchPad FC WWPN v{{APP_VERSION}} · Keep LaunchPad running while refreshing.</p>
   </div>
@@ -161,6 +205,10 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     const printBtn = document.getElementById("print-btn");
     const excelBtn = document.getElementById("excel-btn");
     const groupSelect = document.getElementById("group-select");
+    const filterWag1 = document.getElementById("filter-wag1");
+    const filterWag2 = document.getElementById("filter-wag2");
+    const filterOther = document.getElementById("filter-other");
+    const searchInput = document.getElementById("fc-search");
     const modal = document.getElementById("modal");
     const modalTitle = document.getElementById("modal-title");
     const modalSub = document.getElementById("modal-sub");
@@ -267,6 +315,94 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       return groupsCache.find((group) => group.id === activeGroupId) || null;
     }
 
+    // Keep siteGroup in sync with launchpad.snapshot_schedule_export.site_group
+    function siteGroup(card) {
+      const hay = [
+        card.name,
+        card.category,
+        card.host,
+        card.model,
+        card.device_profile,
+      ]
+        .map((part) => String(part || "").toLowerCase())
+        .join(" ");
+      if (hay.includes("wag1")) return "wag1";
+      if (hay.includes("wag2")) return "wag2";
+      return "other";
+    }
+
+    function selectedSiteGroups() {
+      const groups = [];
+      if (filterWag1.checked) groups.push("wag1");
+      if (filterWag2.checked) groups.push("wag2");
+      if (filterOther.checked) groups.push("other");
+      return groups;
+    }
+
+    function wwpnFieldTokens(field) {
+      const text = String(field || "").trim();
+      if (!text) return [];
+      return text
+        .split(/[;,]+/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map(normalizeWwpn);
+    }
+
+    function fieldMatchesText(field, qText) {
+      if (!qText) return false;
+      const text = String(field || "").trim();
+      if (!text) return false;
+      return text.toLowerCase().includes(qText);
+    }
+
+    function fieldMatchesWwpn(field, qWwpn) {
+      if (!qWwpn) return false;
+      return wwpnFieldTokens(field).some((token) => token.includes(qWwpn));
+    }
+
+    // Keep cardMatchesSearch in sync with launchpad.fc_wwpn_filter.card_matches_search
+    function cardMatchesSearch(card, query) {
+      const raw = String(query || "").trim();
+      if (!raw) return true;
+      const qText = raw.toLowerCase();
+      const qWwpn = normalizeWwpn(raw);
+
+      const textFields = [];
+      const wwpnFields = [];
+
+      for (const port of card.fc_ports || []) {
+        wwpnFields.push(port.wwpn);
+        wwpnFields.push(port.remote_wwpns);
+      }
+      for (const node of card.fc_ports_by_node || []) {
+        for (const port of node.ports || []) {
+          wwpnFields.push(port.wwpn);
+          wwpnFields.push(port.remote_wwpns);
+        }
+      }
+      for (const host of card.fc_hosts || []) {
+        textFields.push(host.host_name || host.name);
+        wwpnFields.push(host.wwpns);
+        wwpnFields.push(host.wwpn);
+        wwpnFields.push(host.host_wwpns);
+      }
+      for (const mapping of card.fc_mappings || []) {
+        textFields.push(mapping.vdisk_name || mapping.volume);
+        textFields.push(mapping.host_name || mapping.host);
+        wwpnFields.push(mapping.host_wwpns);
+      }
+      for (const login of card.fc_fabric || []) {
+        textFields.push(login.host_name);
+        wwpnFields.push(login.local_wwpn);
+        wwpnFields.push(login.remote_wwpn);
+      }
+
+      if (textFields.some((field) => fieldMatchesText(field, qText))) return true;
+      if (wwpnFields.some((field) => fieldMatchesWwpn(field, qWwpn))) return true;
+      return false;
+    }
+
     function updateGroupOptions() {
       const selected = groupsCache.some((group) => group.id === activeGroupId)
         ? activeGroupId : "";
@@ -359,7 +495,18 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
 
     function render() {
       const group = activeGroup();
-      const cards = cardsCache.filter(isSvcLike).map((card) => filterCardByGroup(card, group));
+      const query = searchInput.value || "";
+      const svcCards = cardsCache.filter(isSvcLike);
+      const allowedGroups = new Set(selectedSiteGroups());
+      const cards = svcCards
+        .filter((card) => allowedGroups.has(siteGroup(card)))
+        .map((card) => filterCardByGroup(card, group))
+        .filter((card) => cardMatchesSearch(card, query));
+
+      let statusText = `Showing ${cards.length} of ${svcCards.length} site(s)`;
+      if (query.trim()) statusText += " · search matched";
+      statusEl.textContent = statusText;
+
       if (!cards.length) {
         sitesEl.innerHTML = '<p class="empty">No storage sites with FC data. Register IBM FlashSystem/Storwize/SVC cards, load presets, monitor, and refresh.</p>';
         return;
@@ -371,6 +518,15 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
           openModal(cards.find((c) => c.id === id));
         });
       });
+
+      if (query.trim()) {
+        const firstSite = sitesEl.querySelector(".site");
+        if (firstSite) {
+          firstSite.scrollIntoView({ behavior: "smooth", block: "center" });
+          firstSite.classList.add("highlight");
+          setTimeout(() => firstSite.classList.remove("highlight"), 1500);
+        }
+      }
     }
 
     function tableFromRows(headers, rows) {
@@ -430,10 +586,15 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     }
 
     async function downloadExcel() {
+      const groups = selectedSiteGroups();
+      if (!groups.length) {
+        statusEl.textContent = "Select at least one group (WAG1, WAG2, or Other) before exporting.";
+        return;
+      }
       excelBtn.disabled = true;
       statusEl.textContent = "Building Excel workbook…";
       try {
-        const res = await fetch("/api/fc-wwpn-export?open=1");
+        const res = await fetch(`/api/fc-wwpn-export?open=1&groups=${groups.join(",")}`);
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
           try {
@@ -564,6 +725,10 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       window.history.replaceState({}, "", url);
       render();
     });
+    searchInput.addEventListener("input", render);
+    filterWag1.addEventListener("change", render);
+    filterWag2.addEventListener("change", render);
+    filterOther.addEventListener("change", render);
     Promise.all([loadGroups(), loadCards()]);
   </script>
 </body>
