@@ -15,17 +15,33 @@ from openpyxl.utils import get_column_letter
 from launchpad.database import Database
 from launchpad.flashsystem_fc import analyze_fc_inventory
 from launchpad.monitor import build_health_dashboard_entries
+from launchpad.snapshot_schedule_export import filter_cards_by_groups
 from launchpad.storage_presets import DEVICE_PROFILES
 
 ProgressCallback = Callable[[str, int, int], None]
+
+DEFAULT_FC_EXPORT_GROUPS = frozenset({"wag1", "wag2", "other"})
+
+
+def parse_fc_export_groups(query: dict[str, list[str]]) -> set[str]:
+    """Parse ``groups`` from a query dict produced by ``parse_qs(..., keep_blank_values=True)``.
+
+    Omitted ``groups`` → all three WAG buckets; explicit empty ``groups=`` → empty set.
+    """
+    if "groups" not in query:
+        return set(DEFAULT_FC_EXPORT_GROUPS)
+    return {
+        part.strip().lower()
+        for raw in query.get("groups") or [""]
+        for part in str(raw).split(",")
+        if part.strip()
+    }
 
 
 def cards_for_fc_export(
     cards: list[dict[str, Any]],
     groups: set[str] | None,
 ) -> list[dict[str, Any]]:
-    from launchpad.snapshot_schedule_export import filter_cards_by_groups
-
     return filter_cards_by_groups(list(cards), groups)
 
 

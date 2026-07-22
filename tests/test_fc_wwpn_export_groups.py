@@ -1,4 +1,8 @@
-from launchpad.fc_wwpn_export import cards_for_fc_export
+from launchpad.fc_wwpn_export import (
+    DEFAULT_FC_EXPORT_GROUPS,
+    cards_for_fc_export,
+    parse_fc_export_groups,
+)
 from launchpad.snapshot_schedule_export import filter_cards_by_groups, site_group
 
 
@@ -30,6 +34,19 @@ def test_cards_for_fc_export_wag1_only():
     ]
     kept = cards_for_fc_export(cards, {"wag1"})
     assert [c["name"] for c in kept] == ["WAG1-A"]
+
+
+def test_parse_fc_export_groups_omitted_defaults_all():
+    assert parse_fc_export_groups({}) == set(DEFAULT_FC_EXPORT_GROUPS)
+
+
+def test_parse_fc_export_groups_empty_param_yields_empty_set():
+    assert parse_fc_export_groups({"groups": [""]}) == set()
+    assert parse_fc_export_groups({"groups": ["  ,  "]}) == set()
+
+
+def test_parse_fc_export_groups_explicit_subset():
+    assert parse_fc_export_groups({"groups": ["wag1,wag2"]}) == {"wag1", "wag2"}
 
 
 def test_cards_for_fc_export_all_groups_keeps_all():

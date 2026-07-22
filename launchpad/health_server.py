@@ -1911,22 +1911,18 @@ class _HealthHandler(BaseHTTPRequestHandler):
             from launchpad.fc_wwpn_export import (
                 build_fc_wwpn_workbook,
                 cards_for_fc_export,
+                parse_fc_export_groups,
                 workbook_to_bytes,
             )
             from launchpad.storage_presets import is_svc_fc_profile
 
-            query = parse_qs(parsed.query)
+            query = parse_qs(parsed.query, keep_blank_values=True)
             open_after = (query.get("open") or ["1"])[0].strip().lower() in {
                 "1",
                 "true",
                 "yes",
             }
-            groups_raw = (query.get("groups") or ["wag1,wag2,other"])[0]
-            groups = {
-                part.strip().lower()
-                for part in str(groups_raw).split(",")
-                if part.strip()
-            }
+            groups = parse_fc_export_groups(query)
             try:
                 server.sync_from_app()
                 cards = [
