@@ -40,6 +40,7 @@ from launchpad.flashsystem_fc import (
     parse_fabric_logins,
     parse_fc_hosts,
     parse_host_lun_maps,
+    parse_lsconsistgrp,
     parse_lsvdisk_volumes,
 )
 from launchpad.flashsystem_health import analyze_health
@@ -66,6 +67,8 @@ from launchpad.lun_builder_import import (
     merge_hosts,
     parse_lun_builder_upload,
 )
+from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
+from launchpad.site_lookup_data import payload_from_ssh
 from launchpad.snapshot_schedule import SNAPSHOT_SCHEDULE_HTML, SNAPSHOT_SCHEDULE_PATH
 from launchpad.snapshot_schedule_overrides import (
     SNAPSHOT_OVERRIDES_SETTING,
@@ -116,6 +119,7 @@ class HealthCard:
             "device_profile": self.device_profile,
             "model": model,
             "category": self.category,
+            "serial_number": self.serial_number,
             "command_mode": bool(
                 resolve_card_commands(
                     self.device_profile,
@@ -1740,6 +1744,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == LUN_BUILDER_PATH:
             self._send_html(LUN_BUILDER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == SITE_LOOKUP_PATH:
+            self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == FC_WWPN_REPORT_PATH:
             self._send_html(FC_WWPN_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
@@ -2221,6 +2228,31 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path == "/api/site-lookup/refresh":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            try:
+                self._send_json(server.refresh_site_lookup(card_id))
+            except KeyError:
+                self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=502)
+            return
         if not path.startswith("/api/refresh/"):
             self.send_error(404)
             return
@@ -2463,6 +2495,32 @@ class HealthServer:
             "pulled": result["pulled"],
             "warnings": result["warnings"],
         }
+
+    def refresh_site_lookup(self, card_id: int) -> dict:
+        with self._lock:
+            card = self._cards.get(int(card_id))
+        if card is None:
+            raise KeyError(card_id)
+        if card.device_profile not in SVC_PROFILES:
+            raise ValueError("Site Lookup requires a FlashSystem / SVC card profile.")
+
+        run = self._lun_run_command(card)
+        hosts_out = run("svcinfo lshost -delim :")
+        maps_out = run("svcinfo lshostvdiskmap -delim :")
+        volumes_out = run("svcinfo lsvdisk -delim :")
+        try:
+            cg_out = run("svcinfo lsconsistgrp -delim :")
+        except Exception:
+            cg_out = ""
+        return payload_from_ssh(
+            card=card.to_api(),
+            hosts=parse_fc_hosts(hosts_out),
+            volumes=parse_lsvdisk_volumes(volumes_out),
+            maps=parse_host_lun_maps(maps_out),
+            consist_groups=parse_lsconsistgrp(cg_out),
+            contingency_groups=self.get_contingency_groups(),
+            refreshed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
 
     @staticmethod
     def _lun_run_command(card: HealthCard) -> Callable[[str], str]:
@@ -2985,6 +3043,10 @@ class HealthServer:
     def lun_builder_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{LUN_BUILDER_PATH}"
 
+    @property
+    def site_lookup_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{SITE_LOOKUP_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -3205,6 +3267,13 @@ class HealthServer:
         webbrowser.open(self.lun_builder_url)
         _log(f"Opened LUN Builder in browser: {self.lun_builder_url}")
         return self.lun_builder_url
+
+    def open_site_lookup(self) -> str:
+        """Open the Site Lookup page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.site_lookup_url)
+        _log(f"Opened Site Lookup in browser: {self.site_lookup_url}")
+        return self.site_lookup_url
 
 
 _instance: HealthServer | None = None
