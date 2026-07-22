@@ -123,6 +123,7 @@ def normalize_lun_row(raw: Any) -> dict | None:
         "card_hint": str(raw.get("card_hint") or "").strip(),
         "cluster": str(raw.get("cluster") or raw.get("group") or "").strip(),
         "name_prefix": str(raw.get("name_prefix") or "").strip().rstrip("_"),
+        "exact_name": _as_bool(raw.get("exact_name")),
         "done": _as_bool(raw.get("done")),
     }
 
@@ -658,8 +659,10 @@ def _volume_name_base(lun: dict, purpose: str) -> str | None:
 
     Site prefix and host/cluster qualifier are joined without an underscore
     (pconsps3_root, pconmfs_ora1vg), then purpose is appended with ``_``.
-    Returns None only when there is no host/cluster/prefix context.
+    Returns None for exact names or when there is no host/cluster/prefix context.
     """
+    if _as_bool(lun.get("exact_name")):
+        return None
     host_names = _normalize_str_list(lun.get("host_names"))
     prefix = str(lun.get("name_prefix") or "").strip().rstrip("_")
     if not prefix:

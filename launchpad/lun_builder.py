@@ -377,6 +377,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       return "";
     }
     function volumeNameBase(lun, purpose) {
+      if (Boolean(lun.exact_name)) return null;
       const hostNames = Array.isArray(lun.host_names) ? lun.host_names.filter(Boolean) : [];
       let prefix = String(lun.name_prefix || "").trim().replace(/_+$/, "");
       if (!prefix) prefix = inferSitePrefix(hostNames);
