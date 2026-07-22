@@ -1,9 +1,21 @@
+from launchpad.flashsystem_fc import parse_lsconsistgrp
 from launchpad.site_lookup_data import (
     filter_svc_cards,
     match_contingency_groups,
     payload_from_card_cache,
     payload_from_ssh,
 )
+
+SAMPLE_LSCONSISTGRP = """id:name:type:status
+0:cg_app:flash:empty
+1:cg_db:flash:empty
+"""
+
+
+def test_parse_lsconsistgrp():
+    rows = parse_lsconsistgrp(SAMPLE_LSCONSISTGRP)
+    assert [r["name"] for r in rows] == ["cg_app", "cg_db"]
+    assert rows[0]["status"] == "empty"
 
 
 def test_filter_svc_cards_keeps_flashsystem_only():

@@ -145,6 +145,23 @@ def parse_lsvdisk_volumes(output: str) -> list[dict[str, str]]:
     return volumes
 
 
+def parse_lsconsistgrp(output: str) -> list[dict[str, str]]:
+    groups: list[dict[str, str]] = []
+    for record in _table_records(output):
+        name = _get(record, "name")
+        if not name:
+            continue
+        groups.append(
+            {
+                "id": _get(record, "id"),
+                "name": name,
+                "status": _get(record, "status", "state"),
+                "type": _get(record, "type"),
+            }
+        )
+    return groups
+
+
 def parse_fabric_logins(output: str) -> list[dict[str, str]]:
     """Parse svcinfo lsfabric — links array WWPN to remote (host) WWPN."""
     logins: list[dict[str, str]] = []
