@@ -274,10 +274,11 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         });
       }
       if (step === 2) {
-        const volumesByName = new Map((group.volumes || []).filter((volume) => volume && volume.name).map((volume) => [String(volume.name), volume]));
+        const targets = (group.volumes || []).filter((volume) => isSnapVolume(volume));
         sources.forEach((source) => {
           const sourceName = String(source.name || "");
-          const target = volumesByName.get(`${sourceName}_snap`);
+          const target = targets.find((volume) => String(volume.source_volume || "") === sourceName)
+            || targets.find((volume) => String(volume.name || "") === `${sourceName}_snap`);
           if (!target || !isSnapVolume(target)) warnings.push(`Missing target volume for source ${sourceName}`);
         });
       }

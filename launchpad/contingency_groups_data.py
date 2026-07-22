@@ -279,6 +279,17 @@ def source_maps_for_volume(group: dict, volume_name: str) -> list[dict]:
     return out
 
 
+def _resolve_snap_target(source_name: str, volumes: list, by_name: dict) -> dict | None:
+    for vol in volumes:
+        if (
+            isinstance(vol, dict)
+            and str(vol.get("role") or "").lower() == "snap"
+            and str(vol.get("source_volume") or "") == source_name
+        ):
+            return vol
+    return by_name.get(snap_volume_name(source_name))
+
+
 def snap_pairs(group: dict) -> list[dict]:
     pairs: list[dict] = []
     volumes = group.get("volumes") or []
@@ -290,12 +301,13 @@ def snap_pairs(group: dict) -> list[dict]:
     }
     for source in source_volumes(group):
         source_name = str(source.get("name") or "")
-        target_name = snap_volume_name(source_name)
-        target = by_name.get(target_name)
+        target = _resolve_snap_target(source_name, volumes, by_name)
+        target_name = str(target.get("name") or "") if isinstance(target, dict) else ""
         snap_maps = [
             mapping
             for mapping in maps
             if isinstance(mapping, dict)
+            and target_name
             and str(mapping.get("volume") or "") == target_name
             and str(mapping.get("role") or "").lower() == "snap"
         ]
@@ -334,8 +346,7 @@ def validate_wizard_step2(group: dict) -> list[str]:
     }
     for source in source_volumes(group):
         source_name = str(source.get("name") or "")
-        target_name = snap_volume_name(source_name)
-        target = by_name.get(target_name)
+        target = _resolve_snap_target(source_name, volumes, by_name)
         if target is None or not is_snap_volume(target):
             warnings.append(f"Missing target volume for source {source_name}")
     return warnings
