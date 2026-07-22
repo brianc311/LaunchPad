@@ -18,6 +18,7 @@ from launchpad.monitor import (
     get_monitor_states,
     open_capacity_report_for_cards,
     open_fc_wwpn_report_for_cards,
+    open_site_lookup_for_cards,
     open_health_dashboard,
     open_health_dashboard_for_cards,
     set_all_monitor_enabled,
@@ -194,11 +195,19 @@ class DashboardView(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions,
+            text="Site Lookup",
+            fg_color=self.theme["surface_alt"],
+            hover_color=self.theme["border"],
+            command=self._open_site_lookup_all,
+        ).grid(row=0, column=3, padx=6)
+
+        ctk.CTkButton(
+            actions,
             text="Contingency Groups",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_contingency_groups,
-        ).grid(row=0, column=3, padx=6)
+        ).grid(row=0, column=4, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -206,7 +215,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_lun_builder,
-        ).grid(row=0, column=4, padx=6)
+        ).grid(row=0, column=5, padx=6)
 
         self.export_excel_btn = ctk.CTkButton(
             actions,
@@ -216,7 +225,7 @@ class DashboardView(ctk.CTkFrame):
             command=self._open_export_excel_menu,
             width=140,
         )
-        self.export_excel_btn.grid(row=0, column=5, padx=6)
+        self.export_excel_btn.grid(row=0, column=6, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -224,14 +233,14 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._fetch_all_ssh_stats,
-        ).grid(row=0, column=6, padx=6)
+        ).grid(row=0, column=7, padx=6)
 
         self.theme_switch = ctk.CTkSwitch(
             actions,
             text="Light mode" if self.theme_name == "dark" else "Dark mode",
             command=self._toggle_theme,
         )
-        self.theme_switch.grid(row=0, column=7, padx=6)
+        self.theme_switch.grid(row=0, column=8, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -239,7 +248,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self.on_admin,
-        ).grid(row=0, column=8, padx=6)
+        ).grid(row=0, column=9, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -247,7 +256,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["danger"],
             hover_color="#B91C1C",
             command=self.on_lock,
-        ).grid(row=0, column=9, padx=6)
+        ).grid(row=0, column=10, padx=6)
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -1314,6 +1323,59 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self._set_status(f"FC WWPN report failed: {exc}"),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_site_lookup_all(self) -> None:
+        from launchpad.ssh_launcher import _log
+
+        cards = self._health_ssh_cards()
+        if not cards:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
+        entries: list[HealthDashboardEntry] = []
+        for card in cards:
+            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
+            entries.append(
+                HealthDashboardEntry(
+                    card_id=card.id,
+                    name=card.name,
+                    host=card.host,
+                    port=card.port,
+                    username=card.username,
+                    auth=auth,
+                    device_profile=card.device_profile,
+                    custom_commands=card.custom_commands,
+                    serial_number=getattr(card, "serial_number", "") or "",
+                    category=card.category or "",
+                )
+            )
+
+        self.status_label.configure(text=f"Opening Site Lookup for {len(entries)} site(s)...")
+        self.update_idletasks()
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Site Lookup register failed: {exc}")
+
+        def worker() -> None:
+            try:
+                url = open_site_lookup_for_cards(entries)
+                summary = (
+                    f"Site Lookup opened — {len(entries)} site(s). "
+                    "Select a site and Open, or Refresh for live inventory."
+                )
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+            except Exception as exc:
+                _log(f"Site Lookup failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self._set_status(f"Site Lookup failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()
