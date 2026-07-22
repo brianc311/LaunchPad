@@ -26,10 +26,12 @@ def _call_lun_builds_api(
     server: HealthServer,
     method: str,
     payload: dict | None = None,
+    *,
+    path: str = "/api/lun-builds",
 ) -> tuple[int, dict]:
     body = json.dumps(payload or {}).encode()
     handler = object.__new__(_HealthHandler)
-    handler.path = "/api/lun-builds"
+    handler.path = path
     handler.headers = {"Content-Length": str(len(body))}
     handler.rfile = io.BytesIO(body)
     responses: list[tuple[int, dict]] = []
@@ -276,11 +278,159 @@ def test_pull_fc_hosts_filters_card_and_merges_into_build(monkeypatch):
     assert len(result["build"]["hosts"]) == 1
 
 
+def test_sync_inventory_replaces_build_and_upserts_cg(monkeypatch):
+    _settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+    server.set_lun_builds(
+        [
+            {
+                "id": "first",
+                "name": "First",
+                "hosts": [{"lpar_name": "stale-host"}],
+                "luns": [{"purpose": "stale-volume"}],
+            }
+        ]
+    )
+    server.set_contingency_groups(
+        [
+            {
+                "id": "existing-storage-a",
+                "name": "Storage A",
+                "location": "Old",
+                "hosts": [],
+                "volumes": [],
+                "maps": [],
+            }
+        ]
+    )
+    server.register_card(
+        1,
+        "Storage A",
+        "array.example",
+        22,
+        "operator",
+        "",
+        device_profile="flashsystem_5200",
+    )
+    outputs = {
+        "svcinfo lshost -delim :": (
+            "id:name:status:port_count\n0:host1:online:2\n"
+        ),
+        "svcinfo lshostvdiskmap -delim :": (
+            "host_name:vdisk_name:SCSI_id\nhost1:vol1:3\n"
+        ),
+        "svcinfo lsvdisk -delim :": (
+            "id:name:status:mdisk_grp_name:capacity:vdisk_UID\n"
+            "0:vol1:online:Pool0:10.00 GiB:UID1\n"
+            "1:vol1_snap:online:Pool0:10.00 GiB:UID2\n"
+        ),
+        "svcinfo lsfabric -delim :": (
+            "name:local_wwpn:remote_wwpn\n"
+            "host1:5005076801100001:100000109B000001\n"
+            "host1:5005076801100002:100000109B000002\n"
+        ),
+    }
+    monkeypatch.setattr(
+        server,
+        "_lun_run_command",
+        lambda _card: lambda command: outputs[command],
+    )
+
+    result = server.sync_inventory("first", card_name="Storage A")
+
+    assert [host["lpar_name"] for host in result["build"]["hosts"]] == ["host1"]
+    assert result["build"]["hosts"][0]["wwpn1"] == "100000109B000001"
+    assert [lun["purpose"] for lun in result["build"]["luns"]] == ["vol1"]
+    assert result["build"]["default_pool_or_cpg"] == "Pool0"
+    assert result["pulled"] == {
+        "hosts": 1,
+        "volumes": 1,
+        "maps": 1,
+        "skipped_snaps": 1,
+    }
+    assert result["group"]["id"] == "existing-storage-a"
+    assert result["group"]["storage_hint"] == "Storage A"
+    assert {volume["name"] for volume in result["group"]["volumes"]} == {
+        "vol1",
+        "vol1_snap",
+    }
+
+
+def test_sync_inventory_ssh_failure_leaves_build_unchanged(monkeypatch):
+    settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+    server.set_lun_builds(
+        [
+            {
+                "id": "first",
+                "name": "First",
+                "hosts": [{"lpar_name": "known-host"}],
+                "luns": [{"purpose": "known-volume"}],
+            }
+        ]
+    )
+    server.register_card(
+        1,
+        "Storage A",
+        "array.example",
+        22,
+        "operator",
+        "",
+        device_profile="flashsystem_5200",
+    )
+    before = dict(settings)
+
+    def fail_on_maps(command):
+        if "lshostvdiskmap" in command:
+            raise RuntimeError("SSH failed")
+        return "id:name\n0:host1\n"
+
+    monkeypatch.setattr(server, "_lun_run_command", lambda _card: fail_on_maps)
+
+    with pytest.raises(RuntimeError, match="SSH failed"):
+        server.sync_inventory("first", card_name="Storage A")
+
+    assert settings == before
+    assert server.get_lun_builds()[0]["hosts"][0]["lpar_name"] == "known-host"
+
+
+def test_sync_inventory_requires_card_name_and_svc_profile(monkeypatch):
+    _settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+    server.set_lun_builds([{"id": "first", "name": "First"}])
+    server.register_card(
+        1,
+        "Primera",
+        "array.example",
+        22,
+        "operator",
+        "",
+        device_profile="hpe_primera_600",
+    )
+
+    status, payload = _call_lun_builds_api(
+        monkeypatch,
+        server,
+        "POST",
+        {"build_id": "first"},
+        path="/api/lun-builds/sync-inventory",
+    )
+
+    assert status == 400
+    assert payload["error"] == "card_name required"
+    with pytest.raises(ValueError, match="FlashSystem / SVC"):
+        server.sync_inventory("first", card_name="Primera")
+
+
 def test_health_handler_declares_import_and_pull_fc_routes():
     source = inspect.getsource(_HealthHandler.do_POST)
 
     assert "/api/lun-builds/import" in source
     assert "/api/lun-builds/pull-fc" in source
+    assert "/api/lun-builds/sync-inventory" in source
 
 
 def test_health_handler_declares_lun_preview_and_create_routes():
