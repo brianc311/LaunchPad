@@ -190,3 +190,9 @@ def test_health_server_exposes_contingency_groups_url():
     server = HealthServer()
 
     assert server.contingency_groups_url.endswith(CONTINGENCY_GROUPS_PATH)
+
+
+def test_contingency_groups_page_has_sync_from_array():
+    assert "Sync from array" in CONTINGENCY_GROUPS_HTML
+    assert 'id="sync-array-btn"' in CONTINGENCY_GROUPS_HTML
+    assert "/api/contingency-groups/sync-inventory" in CONTINGENCY_GROUPS_HTML
