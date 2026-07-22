@@ -162,13 +162,59 @@ def _windsor() -> dict[str, Any]:
 
 def _williamston_anderson() -> dict[str, Any]:
     template = next(
-        build
-        for build in seed_lun_builder_templates()
-        if build["id"] == "template-williamston-anderson"
+        (
+            build
+            for build in seed_lun_builder_templates()
+            if build["id"] == "template-williamston-anderson"
+        ),
+        None,
     )
+    if template is None:
+        raise RuntimeError(
+            "Anderson LUN template 'template-williamston-anderson' is missing"
+        )
+
+    eight_port_hosts = {
+        "AAN1",
+        "AAN1C",
+        "FC_AAN1",
+        "pandap01",
+        "pandap02",
+        "pandbt1",
+        "pandbt2",
+        "pandbt3",
+        "pandbt4",
+        "pandbtdg1",
+        "panddb01",
+        "panddb02",
+        "pandmfs1",
+        "pandmfs2",
+        "pandmfs3",
+        "pandmfs4",
+        "pandmfs10",
+        "pandmfsdg1",
+        "pandnim01",
+        "pandps1",
+        "pandps2",
+        "pandps3",
+        "pandps4",
+        "pandpspdg1",
+        "pandpspa1",
+        "pandpspa2",
+        "dandmfs1",
+    }
+    host_names = sorted({row["lpar_name"] for row in template["hosts"]})
     hosts = [
-        _host(name)
-        for name in sorted({row["lpar_name"] for row in template["hosts"]})
+        _host(
+            name,
+            port_count=(
+                8
+                if name in eight_port_hosts
+                or name.startswith(("tand", "tcon"))
+                else 2
+            ),
+        )
+        for name in host_names
     ]
     inventory = [
         row
@@ -188,14 +234,19 @@ def _williamston_anderson() -> dict[str, Any]:
         for row in inventory
     ]
     maps: list[dict[str, str]] = []
+    next_scsi_id_by_host = {host_name: 0 for host_name in host_names}
     for row in inventory:
-        maps.extend(
-            _maps_all_hosts(
-                row["name"],
-                row["host_names"],
-                row["scsi_or_lun_id"],
+        for host_name in row["host_names"]:
+            scsi_id = next_scsi_id_by_host[host_name]
+            maps.append(
+                {
+                    "volume": row["name"],
+                    "host": host_name,
+                    "scsi_id": str(scsi_id),
+                    "role": "source",
+                }
             )
-        )
+            next_scsi_id_by_host[host_name] = scsi_id + 1
     return {
         "id": "williamston-anderson",
         "name": "Williamston (Anderson)",

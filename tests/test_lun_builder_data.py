@@ -51,6 +51,7 @@ def test_expand_single_host_keeps_explicit_live_name():
             "host_names": ["pandap01"],
             "shared": False,
             "name_prefix": "",
+            "exact_name": True,
         }
     )
     assert rows[0]["name"] == "pandap01_0"
@@ -67,6 +68,7 @@ def test_expand_single_host_keeps_arbitrary_exact_live_name():
             "host_names": ["tconbt20"],
             "shared": False,
             "name_prefix": "",
+            "exact_name": True,
         }
     )
     assert rows[0]["name"] == "pconbt1_2_archive_dt1"
@@ -177,6 +179,26 @@ def test_normalize_keeps_done_flags():
     )
     assert build["hosts"][0]["done"] is True
     assert build["luns"][0]["done"] is True
+
+
+def test_normalize_keeps_exact_name_flag():
+    build = normalize_build(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "hosts": [{"lpar_name": "host1"}],
+            "luns": [
+                {
+                    "purpose": "exact-live-name",
+                    "count": 1,
+                    "size": "50GB",
+                    "host_names": ["host1"],
+                    "exact_name": True,
+                }
+            ],
+        }
+    )
+    assert build["luns"][0]["exact_name"] is True
 
 
 def test_normalize_keeps_plan_done_map():
@@ -717,6 +739,10 @@ def test_anderson_core_lun_families():
         assert by_name[name]["size"] == size
         assert set(by_name[name]["host_names"]) == esx_hosts
         assert by_name[name]["shared"] is True
+
+    exact_batches = [lun for lun in luns if lun["count"] == 1]
+    assert exact_batches
+    assert all(lun.get("exact_name") is True for lun in exact_batches)
 
     for prefix, count, size, host in (
         ("aan1_", 28, "120GB", "AAN1"),

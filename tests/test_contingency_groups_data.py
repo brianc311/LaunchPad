@@ -1,3 +1,7 @@
+import pytest
+
+import launchpad.contingency_groups_data as contingency_groups_data
+from launchpad.contingency_snap_create import build_snap_steps
 from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
@@ -154,6 +158,41 @@ def test_williamston_anderson_contingency_group():
         "pen_andesx_vm03",
         "pen_andesx_vm04",
     }
+    source_maps = [m for m in and_["maps"] if m.get("role") != "snap"]
+    assert source_maps
+    assert all(m["scsi_id"].isdigit() for m in source_maps)
+
+    steps, _warnings = build_snap_steps(and_)
+    assert any(step.kind == "hostmap" for step in steps)
+
+
+def test_williamston_anderson_host_port_counts():
+    and_ = next(
+        g for g in seed_contingency_groups() if g["id"] == "williamston-anderson"
+    )
+    by_name = {host["name"]: host for host in and_["hosts"]}
+
+    for name in ("AAN1", "pandap01", "pandpspa1", "tandbt20", "tconmfs20"):
+        assert by_name[name]["port_count"] == 8
+    for name in (
+        "BIB_ADC_VM01",
+        "pen_andesx_vm03",
+        "pla-wanoemcr01",
+        "pandvio01a",
+        "TLA_WANMFS01",
+    ):
+        assert by_name[name]["port_count"] == 2
+
+
+def test_williamston_anderson_missing_template_has_clear_error(monkeypatch):
+    monkeypatch.setattr(
+        contingency_groups_data,
+        "seed_lun_builder_templates",
+        lambda: [],
+    )
+
+    with pytest.raises(RuntimeError, match="Anderson LUN template"):
+        contingency_groups_data._williamston_anderson()
 
 
 def test_normalize_strips_and_keeps_empty_wwpn_uid():
