@@ -143,6 +143,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <input id="import-file" type="file" accept=".xlsx,.csv,.zip" hidden>
         <button type="button" class="secondary" id="import-btn">Import</button>
         <button type="button" class="secondary" id="pull-fc-btn">Pull from FC WWPN</button>
+        <button type="button" class="secondary" id="sync-inventory-btn">Sync Inventory</button>
         <button type="button" class="secondary" id="preview-btn">Preview / Dry-run</button>
         <button type="button" class="danger" id="run-btn">Run Create</button>
         <a class="btn secondary" href="/">Health Dashboard</a>
@@ -377,6 +378,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       return "";
     }
     function volumeNameBase(lun, purpose) {
+      if (Boolean(lun.exact_name)) return null;
       const hostNames = Array.isArray(lun.host_names) ? lun.host_names.filter(Boolean) : [];
       let prefix = String(lun.name_prefix || "").trim().replace(/_+$/, "");
       if (!prefix) prefix = inferSitePrefix(hostNames);
@@ -844,6 +846,31 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         statusEl.textContent = `FC WWPN pull failed: ${error.message || error}`;
       }
     }
+    async function syncInventory() {
+      if (!currentId) { statusEl.textContent = "Save the build before syncing inventory."; return; }
+      if (!persisted) { statusEl.textContent = "Unlock LaunchPad before syncing inventory."; return; }
+      const cardName = window.prompt("Storage card name (required):", activeBuild()?.default_card_hint || "");
+      if (cardName === null) return;
+      if (!cardName.trim()) { statusEl.textContent = "Card name is required for Sync Inventory."; return; }
+      statusEl.textContent = "Syncing inventory via SSH...";
+      try {
+        const response = await fetch("/api/lun-builds/sync-inventory", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ build_id:currentId, card_name:cardName.trim() }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        builds = data.builds; saveLocal(); invalidatePreview(); render();
+        const p = data.pulled || {};
+        importMessage(
+          `Synced hosts=${p.hosts||0} volumes=${p.volumes||0} maps=${p.maps||0} skipped_snaps=${p.skipped_snaps||0}. CG upserted. No create was run.`,
+          data.warnings
+        );
+      } catch (error) {
+        statusEl.textContent = `Sync Inventory failed: ${error.message || error}`;
+      }
+    }
     async function load() {
       const local = loadLocal(); builds = local; currentId = builds[0]?.id || ""; render();
       try {
@@ -867,6 +894,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     document.getElementById("import-btn").addEventListener("click", () => document.getElementById("import-file").click());
     document.getElementById("import-file").addEventListener("change", (event) => { const file = event.target.files?.[0]; if (file) importBuild(file); });
     document.getElementById("pull-fc-btn").addEventListener("click", pullFcHosts);
+    document.getElementById("sync-inventory-btn").addEventListener("click", syncInventory);
     document.getElementById("add-host-btn").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); addRow("hosts"); });
     document.getElementById("add-lun-btn").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); addRow("luns"); });
     document.querySelectorAll("details.section").forEach((section) => {

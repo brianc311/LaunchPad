@@ -663,8 +663,10 @@ def _volume_name_base(lun: dict, purpose: str) -> str | None:
 
     Site prefix and host/cluster qualifier are joined without an underscore
     (pconsps3_root, pconmfs_ora1vg), then purpose is appended with ``_``.
-    Returns None only when there is no host/cluster/prefix context.
+    Returns None for exact names or when there is no host/cluster/prefix context.
     """
+    if _as_bool(lun.get("exact_name")):
+        return None
     host_names = _normalize_str_list(lun.get("host_names"))
     prefix = str(lun.get("name_prefix") or "").strip().rstrip("_")
     cluster = str(lun.get("cluster") or "").strip().lower()

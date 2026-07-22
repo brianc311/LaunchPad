@@ -20,6 +20,7 @@ from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
     generate_snap_rows,
+    new_group_id,
     normalize_group,
     normalize_groups,
     seed_contingency_groups,
@@ -34,9 +35,16 @@ from launchpad.contingency_snap_create import (
     run_snap_steps,
 )
 from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
-from launchpad.flashsystem_fc import analyze_fc_inventory
+from launchpad.flashsystem_fc import (
+    analyze_fc_inventory,
+    parse_fabric_logins,
+    parse_fc_hosts,
+    parse_host_lun_maps,
+    parse_lsvdisk_volumes,
+)
 from launchpad.flashsystem_health import analyze_health
 from launchpad.health_metrics import run_remote_metrics
+from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
 from launchpad.lun_builder_data import (
     LUN_BUILDS_SETTING,
@@ -2095,7 +2103,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"builds": builds, "persisted": True})
             return
-        if path in {"/api/lun-builds/import", "/api/lun-builds/pull-fc"}:
+        if path in {
+            "/api/lun-builds/import",
+            "/api/lun-builds/pull-fc",
+            "/api/lun-builds/sync-inventory",
+        }:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -2126,9 +2138,14 @@ class _HealthHandler(BaseHTTPRequestHandler):
                         mode=str(payload.get("mode") or "merge"),
                         build_id=build_id,
                     )
-                else:
+                elif path == "/api/lun-builds/pull-fc":
                     card_name = str(payload.get("card_name") or "").strip() or None
                     result = server.pull_fc_hosts(build_id, card_name=card_name)
+                else:
+                    card_name = str(payload.get("card_name") or "").strip()
+                    if not card_name:
+                        raise ValueError("card_name required")
+                    result = server.sync_inventory(build_id, card_name=card_name)
             except RuntimeError as exc:
                 self._send_json({"error": str(exc), "persisted": False}, status=503)
                 return
@@ -2383,6 +2400,68 @@ class HealthServer:
             "builds": builds,
             "warnings": warnings,
             "pulled": len(incoming),
+        }
+
+    def sync_inventory(self, build_id: str, *, card_name: str) -> dict:
+        build = self._find_lun_build(build_id)
+        target_card = str(card_name or "").strip()
+        if not target_card:
+            raise ValueError("card_name required")
+        card = self.find_card_by_hint(target_card)
+        if card is None:
+            raise ValueError(f'Card "{target_card}" was not found.')
+        if card.device_profile not in SVC_PROFILES:
+            raise ValueError(
+                "Sync Inventory requires a FlashSystem / SVC card profile."
+            )
+
+        run = self._lun_run_command(card)
+        hosts_out = run("svcinfo lshost -delim :")
+        maps_out = run("svcinfo lshostvdiskmap -delim :")
+        volumes_out = run("svcinfo lsvdisk -delim :")
+        fabric_out = run("svcinfo lsfabric -delim :")
+        result = build_inventory_sync(
+            hosts=parse_fc_hosts(hosts_out),
+            volumes=parse_lsvdisk_volumes(volumes_out),
+            maps=parse_host_lun_maps(maps_out),
+            card_name=card.name,
+            storage_profile=card.device_profile,
+            storage_hint=card.name,
+            fabric_or_host_wwpns=parse_fabric_logins(fabric_out),
+        )
+
+        groups = self.get_contingency_groups()
+        existing_group = next(
+            (
+                group
+                for group in groups
+                if str(group.get("name") or "") == result["group"]["name"]
+            ),
+            None,
+        )
+        group = result["group"]
+        group["id"] = (
+            existing_group["id"]
+            if existing_group is not None
+            else new_group_id(group["name"], groups)
+        )
+        group["location"] = group.get("location") or group["name"]
+        groups = self.upsert_contingency_group(group)
+
+        updated_build = dict(build)
+        updated_build["hosts"] = result["hosts"]
+        updated_build["luns"] = result["luns"]
+        updated_build.update(result["defaults"])
+        builds = self.upsert_lun_build(updated_build)
+        saved_build = next(item for item in builds if item["id"] == updated_build["id"])
+        saved_group = next(item for item in groups if item["id"] == group["id"])
+        return {
+            "build": saved_build,
+            "builds": builds,
+            "group": saved_group,
+            "groups": groups,
+            "pulled": result["pulled"],
+            "warnings": result["warnings"],
         }
 
     @staticmethod

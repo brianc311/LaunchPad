@@ -127,6 +127,24 @@ def parse_host_lun_maps(output: str) -> list[dict[str, str]]:
     return maps
 
 
+def parse_lsvdisk_volumes(output: str) -> list[dict[str, str]]:
+    volumes: list[dict[str, str]] = []
+    for record in _table_records(output):
+        name = _get(record, "name", "vdisk_name", "volume_name")
+        if not name:
+            continue
+        volumes.append(
+            {
+                "name": name,
+                "capacity": _get(record, "capacity"),
+                "pool": _get(record, "mdisk_grp_name", "pool", "mdisk_grp"),
+                "uid": _get(record, "vdisk_UID", "UID", "uid"),
+                "status": _get(record, "status", "state"),
+            }
+        )
+    return volumes
+
+
 def parse_fabric_logins(output: str) -> list[dict[str, str]]:
     """Parse svcinfo lsfabric — links array WWPN to remote (host) WWPN."""
     logins: list[dict[str, str]] = []
