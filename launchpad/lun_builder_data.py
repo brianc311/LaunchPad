@@ -10,6 +10,7 @@ from launchpad.storage_presets import (
     HP_3PAR_PROFILES,
     SVC_PROFILES,
 )
+from launchpad.lun_templates_six_sites import build_six_site_templates
 
 LUN_BUILDS_SETTING = "lun_builds"
 
@@ -608,6 +609,7 @@ def seed_lun_builder_templates() -> list[dict]:
             "hosts": win_hosts,
             "luns": win_luns,
         },
+        *build_six_site_templates(),
     ]
 
 
