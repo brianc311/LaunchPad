@@ -123,6 +123,7 @@ def normalize_lun_row(raw: Any) -> dict | None:
         "card_hint": str(raw.get("card_hint") or "").strip(),
         "cluster": str(raw.get("cluster") or raw.get("group") or "").strip(),
         "name_prefix": str(raw.get("name_prefix") or "").strip().rstrip("_"),
+        "exact_name": _as_bool(raw.get("exact_name")),
         "done": _as_bool(raw.get("done")),
     }
 
@@ -235,6 +236,7 @@ def _lun_batch(
     storage_profile: str = "",
     pool_or_cpg: str = "",
     card_hint: str = "",
+    exact_name: bool = False,
 ) -> dict:
     return {
         "purpose": purpose,
@@ -248,6 +250,7 @@ def _lun_batch(
         "card_hint": card_hint,
         "cluster": cluster,
         "name_prefix": name_prefix,
+        "exact_name": exact_name,
     }
 
 
@@ -662,9 +665,11 @@ def _volume_name_base(lun: dict, purpose: str) -> str | None:
     """
     host_names = _normalize_str_list(lun.get("host_names"))
     prefix = str(lun.get("name_prefix") or "").strip().rstrip("_")
+    cluster = str(lun.get("cluster") or "").strip().lower()
+    if _as_bool(lun.get("exact_name")):
+        return None
     if not prefix:
         prefix = _infer_site_prefix(host_names)
-    cluster = str(lun.get("cluster") or "").strip().lower()
     shared = _as_bool(lun.get("shared"))
     head = ""
     if not shared and len(host_names) == 1:
