@@ -42,6 +42,18 @@ EXPECTED = {
         "WOO_Pool1",
         "Woodland Hills, CA",
     ),
+    "template-orlando-fl": (
+        "Orlando, FL",
+        "ibm_storwize_v7000",
+        "G1_CPO_Pool",
+        "Orlando, FL",
+    ),
+    "template-carolina-pr": (
+        "Carolina, PR",
+        "flashsystem_7300",
+        "PR_pool1",
+        "Carolina, PR",
+    ),
 }
 
 
