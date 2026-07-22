@@ -68,7 +68,11 @@ from launchpad.lun_builder_import import (
     parse_lun_builder_upload,
 )
 from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
-from launchpad.site_lookup_data import payload_from_ssh
+from launchpad.site_lookup_data import (
+    filter_svc_cards,
+    payload_from_card_cache,
+    payload_from_ssh,
+)
 from launchpad.snapshot_schedule import SNAPSHOT_SCHEDULE_HTML, SNAPSHOT_SCHEDULE_PATH
 from launchpad.snapshot_schedule_overrides import (
     SNAPSHOT_OVERRIDES_SETTING,
@@ -1752,6 +1756,34 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/cards":
             self._send_json(server.list_cards())
+            return
+        if path == "/api/site-lookup/cards":
+            self._send_json(filter_svc_cards(server.list_cards()))
+            return
+        if path == "/api/site-lookup/detail":
+            card_id = (parse_qs(parsed.query).get("card") or [""])[0]
+            try:
+                target_id = int(card_id)
+            except (TypeError, ValueError):
+                self._send_json({"error": "card query parameter required"}, status=400)
+                return
+            cards = server.list_cards()
+            card = next((item for item in cards if item.get("id") == target_id), None)
+            if card is None:
+                self._send_json({"error": f"Unknown card id {target_id}"}, status=404)
+                return
+            if card.get("device_profile") not in SVC_PROFILES:
+                self._send_json(
+                    {"error": "Site Lookup requires a FlashSystem / SVC card profile."},
+                    status=400,
+                )
+                return
+            self._send_json(
+                payload_from_card_cache(
+                    card,
+                    contingency_groups=server.get_contingency_groups(),
+                )
+            )
             return
         if path == "/api/sync":
             count = server.sync_from_app()

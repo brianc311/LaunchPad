@@ -29,6 +29,25 @@ def _call_site_lookup_api(
     return responses[0]
 
 
+def _call_site_lookup_get(
+    monkeypatch,
+    server: HealthServer,
+    path: str,
+) -> tuple[int, dict]:
+    handler = object.__new__(_HealthHandler)
+    handler.path = path
+    responses: list[tuple[int, dict]] = []
+    handler._send_json = lambda data, status=200: responses.append((status, data))
+    monkeypatch.setattr(
+        "launchpad.health_server.get_health_server",
+        lambda: server,
+    )
+
+    handler.do_GET()
+
+    return responses[0]
+
+
 def _registered_svc_server() -> HealthServer:
     server = HealthServer()
     server.register_card(
@@ -124,6 +143,38 @@ def test_health_card_api_includes_serial_number():
     server = _registered_svc_server()
 
     assert server.list_cards(allow_sync=False)[0]["serial_number"] == "SN123"
+
+
+def test_site_lookup_cards_api_filters_to_svc_profiles(monkeypatch):
+    server = _registered_svc_server()
+    server.register_card(
+        2,
+        "Primera",
+        "primera.example",
+        22,
+        "operator",
+        "",
+        device_profile="hpe_primera_600",
+    )
+
+    status, payload = _call_site_lookup_get(
+        monkeypatch, server, "/api/site-lookup/cards"
+    )
+
+    assert status == 200
+    assert [card["id"] for card in payload] == [1]
+
+
+def test_site_lookup_detail_api_returns_cache_payload(monkeypatch):
+    server = _registered_svc_server()
+
+    status, payload = _call_site_lookup_get(
+        monkeypatch, server, "/api/site-lookup/detail?card=1"
+    )
+
+    assert status == 200
+    assert payload["card"]["name"] == "Storage A"
+    assert payload["source"] == "cache"
 
 
 def test_open_site_lookup_for_cards_registers_cards_and_opens(monkeypatch):
