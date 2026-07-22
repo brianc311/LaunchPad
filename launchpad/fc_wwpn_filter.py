@@ -14,7 +14,7 @@ def _wwpn_field_tokens(field: Any) -> list[str]:
     text = str(field or "").strip()
     if not text:
         return []
-    return [normalize_wwpn(part) for part in re.split(r"[;\s,]+", text) if part.strip()]
+    return [normalize_wwpn(part) for part in re.split(r"[;,]+", text) if part.strip()]
 
 
 def _field_matches_text(field: Any, q_text: str) -> bool:

@@ -60,6 +60,16 @@ def test_matches_fc_ports_by_node_only():
     assert card_matches_search(card, "deadbeef") is False
 
 
+def test_space_formatted_wwpn_field_matches_normalized_query():
+    card = {
+        "fc_ports": [{"wwpn": "10 00 00 00 c9 a1 b2 c3", "remote_wwpns": ""}],
+        "fc_hosts": [],
+        "fc_mappings": [],
+        "fc_fabric": [],
+    }
+    assert card_matches_search(card, "10000000c9a1b2c3") is True
+
+
 def test_concatenated_wwpn_fields_do_not_false_positive():
     card = {
         "fc_ports": [
