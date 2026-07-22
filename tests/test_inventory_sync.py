@@ -1,3 +1,5 @@
+import pytest
+
 from launchpad.flashsystem_fc import parse_lsvdisk_volumes
 from launchpad.inventory_sync import is_flashcopy_target_name
 
@@ -95,3 +97,48 @@ def test_build_inventory_sync_packs_multi_wwpn_host_rows():
     assert len(rows) == 2
     assert rows[0]["wwpn1"] == "W1" and rows[0]["wwpn2"] == "W2"
     assert rows[1]["wwpn1"] == "W3" and rows[1]["wwpn2"] == "W4"
+
+
+def test_build_inventory_sync_dedupes_duplicate_fabric_logins():
+    from launchpad.inventory_sync import build_inventory_sync
+
+    result = build_inventory_sync(
+        hosts=[{"host_name": "host1", "status": "online", "port_count": "2"}],
+        volumes=[],
+        maps=[],
+        card_name="Site",
+        storage_profile="flashsystem_7200",
+        fabric_or_host_wwpns=[
+            {"host_name": "host1", "remote_wwpn": "100000109B000001"},
+            {"host_name": "host1", "remote_wwpn": "100000109B000001"},
+            {"host_name": "host1", "remote_wwpn": "100000109B000002"},
+        ],
+        allow_empty=True,
+    )
+
+    assert len(result["hosts"]) == 1
+    assert result["hosts"][0]["wwpn1"] == "100000109B000001"
+    assert result["hosts"][0]["wwpn2"] == "100000109B000002"
+    assert result["group"]["hosts"][0]["wwpns"] == [
+        "100000109B000001",
+        "100000109B000002",
+    ]
+
+
+def test_build_inventory_sync_refuses_empty_inventory_unless_allowed():
+    from launchpad.inventory_sync import build_inventory_sync
+
+    kwargs = {
+        "hosts": [],
+        "volumes": [],
+        "maps": [],
+        "card_name": "Site",
+        "storage_profile": "flashsystem_7200",
+    }
+
+    with pytest.raises(ValueError, match="Refusing empty inventory sync"):
+        build_inventory_sync(**kwargs)
+
+    result = build_inventory_sync(**kwargs, allow_empty=True)
+    assert result["hosts"] == []
+    assert result["luns"] == []

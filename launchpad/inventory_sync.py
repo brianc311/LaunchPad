@@ -29,10 +29,13 @@ def _slugify(value: str) -> str:
 
 def _wwpns_by_host(raw: Any) -> dict[str, list[str]]:
     if isinstance(raw, dict):
-        return {str(name): _split_values(values) for name, values in raw.items()}
-    result: dict[str, list[str]] = {}
+        return {
+            str(name): sorted(set(_split_values(values)))
+            for name, values in raw.items()
+        }
+    by_host: dict[str, set[str]] = {}
     if not isinstance(raw, list):
-        return result
+        return {}
     for login in raw:
         if not isinstance(login, dict):
             continue
@@ -43,8 +46,8 @@ def _wwpns_by_host(raw: Any) -> dict[str, list[str]]:
             or login.get("host_wwpns")
         )
         if name:
-            result.setdefault(name, []).extend(values)
-    return result
+            by_host.setdefault(name, set()).update(values)
+    return {name: sorted(values) for name, values in by_host.items()}
 
 
 def _lun_host_row(name: str, wwpn1: str = "", wwpn2: str = "") -> dict[str, Any]:
@@ -91,7 +94,6 @@ def build_inventory_sync(
     ]
     warnings: list[str] = []
     if not hosts and not kept_volumes and not allow_empty:
-        warnings.append("Inventory contains no hosts or source volumes.")
         raise ValueError("Refusing empty inventory sync")
 
     fallback_wwpns = _wwpns_by_host(fabric_or_host_wwpns)
