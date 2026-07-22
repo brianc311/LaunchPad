@@ -19,6 +19,7 @@ from launchpad.config import APP_VERSION
 from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
+    ensure_groups_for_cards,
     generate_snap_rows,
     new_group_id,
     normalize_group,
@@ -1770,7 +1771,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
             persisted = server.contingency_groups_persist_available()
             self._send_json(
                 {
-                    "groups": server.get_contingency_groups() if persisted else [],
+                    "groups": (
+                        server.ensure_contingency_groups_from_cards()
+                        if persisted
+                        else []
+                    ),
                     "persisted": persisted,
                 }
             )
@@ -2184,6 +2189,36 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path == "/api/contingency-groups/sync-inventory":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            group_id = str(payload.get("group_id") or "").strip()
+            if not group_id:
+                self._send_json({"error": "group_id required"}, status=400)
+                return
+            card_name = str(payload.get("card_name") or "").strip()
+            try:
+                result = server.sync_contingency_inventory(
+                    group_id, card_name=card_name
+                )
+            except RuntimeError as exc:
+                self._send_json(
+                    {"error": str(exc), "persisted": False}, status=503
+                )
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            self._send_json({**result, "persisted": True})
+            return
         if path in {
             "/api/contingency-groups/generate-snaps",
             "/api/contingency-groups/snap-preview",
@@ -2464,6 +2499,56 @@ class HealthServer:
             "warnings": result["warnings"],
         }
 
+    def sync_contingency_inventory(
+        self, group_id: str, *, card_name: str = ""
+    ) -> dict:
+        existing = self._contingency_group_by_id(group_id)
+        if existing is None:
+            raise ValueError(f'Contingency group "{group_id}" was not found.')
+        hint = (
+            str(card_name or "").strip()
+            or str(existing.get("storage_hint") or "").strip()
+            or str(existing.get("name") or "").strip()
+        )
+        card = self.find_card_by_hint(hint)
+        if card is None:
+            raise ValueError(f'Card "{hint}" was not found.')
+        if card.device_profile not in SVC_PROFILES:
+            raise ValueError(
+                "Sync Inventory requires a FlashSystem / SVC card profile."
+            )
+
+        run = self._lun_run_command(card)
+        hosts_out = run("svcinfo lshost -delim :")
+        maps_out = run("svcinfo lshostvdiskmap -delim :")
+        volumes_out = run("svcinfo lsvdisk -delim :")
+        fabric_out = run("svcinfo lsfabric -delim :")
+        result = build_inventory_sync(
+            hosts=parse_fc_hosts(hosts_out),
+            volumes=parse_lsvdisk_volumes(volumes_out),
+            maps=parse_host_lun_maps(maps_out),
+            card_name=card.name,
+            storage_profile=card.device_profile,
+            storage_hint=card.name,
+            fabric_or_host_wwpns=parse_fabric_logins(fabric_out),
+            group_id=existing["id"],
+        )
+
+        shaped_group = result["group"]
+        merged = dict(existing)
+        merged["storage_hint"] = card.name
+        merged["hosts"] = shaped_group["hosts"]
+        merged["volumes"] = shaped_group["volumes"]
+        merged["maps"] = shaped_group["maps"]
+        groups = self.upsert_contingency_group(merged)
+        saved_group = next(item for item in groups if item["id"] == merged["id"])
+        return {
+            "group": saved_group,
+            "groups": groups,
+            "pulled": result["pulled"],
+            "warnings": result["warnings"],
+        }
+
     @staticmethod
     def _lun_run_command(card: HealthCard) -> Callable[[str], str]:
         return lambda command: run_remote_ssh_command(
@@ -2710,6 +2795,27 @@ class HealthServer:
             cards = list(self._cards.values())
         card = resolve_card_by_storage_hint(cards, hint)
         return card if isinstance(card, HealthCard) else None
+
+    def monitored_svc_card_dicts(self) -> list[dict]:
+        with self._lock:
+            cards = list(self._cards.values())
+        return [
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "device_profile": card.device_profile,
+            }
+            for card in cards
+            if self.is_monitor_enabled(card.card_id)
+            and card.device_profile in SVC_PROFILES
+        ]
+
+    def ensure_contingency_groups_from_cards(self) -> list[dict]:
+        groups = self.get_contingency_groups()
+        ensured = ensure_groups_for_cards(groups, self.monitored_svc_card_dicts())
+        if self.contingency_groups_persist_available():
+            return self.set_contingency_groups(ensured)
+        return ensured
 
     def _contingency_group_by_id(self, group_id: str) -> dict | None:
         for group in self.get_contingency_groups():
