@@ -299,6 +299,38 @@ def test_group_matches_card_by_name_and_hint():
     assert group_matches_card(group, {"name": "Unrelated Site"}) is False
 
 
+def test_group_matches_card_by_id():
+    group = {
+        "id": "12",
+        "name": "Legacy Group",
+        "location": "Elsewhere",
+        "storage_hint": "array-12",
+    }
+    assert group_matches_card(group, {"id": 12, "name": "Moreno Valley, CA"}) is True
+    assert group_matches_card(group, {"id": 13, "name": "Moreno Valley, CA"}) is False
+
+
+def test_ensure_groups_for_cards_matches_by_card_id_without_duping():
+    existing = [
+        {
+            "id": "12",
+            "name": "Legacy Group",
+            "location": "Elsewhere",
+            "storage_hint": "array-12",
+            "hosts": [{"name": "keep-me", "status": "Online", "host_type": "Generic", "port_count": 2, "protocol": "SCSI", "wwpns": []}],
+            "volumes": [],
+            "maps": [],
+        }
+    ]
+    cards = [{"id": 12, "name": "Moreno Valley, CA", "device_profile": "flashsystem_7200"}]
+    out = ensure_groups_for_cards(existing, cards)
+    assert len(out) == 1
+    legacy = out[0]
+    assert legacy["id"] == "12"
+    assert legacy["name"] == "Legacy Group"
+    assert legacy["hosts"][0]["name"] == "keep-me"
+
+
 def test_ensure_groups_for_cards_adds_stubs_without_duping():
     existing = [
         {
