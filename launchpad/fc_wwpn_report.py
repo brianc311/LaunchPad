@@ -127,6 +127,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="print-btn" class="btn secondary">Print / Save PDF</button>
         <button type="button" id="excel-btn" class="btn secondary">Export Excel</button>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
+        <a class="btn secondary" href="/site-lookup">Site Lookup</a>
         <a class="btn secondary" href="/contingency-groups">Contingency Groups</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <label for="group-select" class="status">Contingency group</label>
