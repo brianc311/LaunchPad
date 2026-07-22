@@ -127,17 +127,23 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         return host.includes(needle) || volume.includes(needle);
       });
     }
-    function tableHeaders(tab) {
+    function tableHeaders(tab, source) {
       if (tab === "hosts") return [["name","Host"],["status","Status"],["type","Type"],["ports","Ports"],["protocol","Protocol"]];
       if (tab === "volumes") return [["name","Volume"],["capacity","Capacity"],["pool","Pool"],["status","Status"],["uid","UID"]];
       if (tab === "mappings") return [["host","Host"],["volume","Volume"],["scsi_id","SCSI / LUN ID"],["io_group","I/O group"]];
+      if (tab === "consistency_groups" && source === "ssh") return [["id","ID"],["name","Name"],["status","Status"],["type","Type"]];
       return [["id","ID"],["name","Name"],["status","Status"],["type","Type"],["location","Location"],["volume_count","Volumes"],["host_count","Hosts"],["map_count","Mappings"]];
     }
     function filterRows() {
-      const headers = tableHeaders(activeTab);
+      const headers = tableHeaders(activeTab, state && state.source);
       const rows = filteredRows(activeTab);
       if (!rows.length) {
-        tableEl.innerHTML = `<p class="empty">${searchEl.value ? "No matching rows." : "No inventory rows returned."}</p>`;
+        const message = searchEl.value
+          ? "No matching rows."
+          : activeTab === "consistency_groups" && state && state.source === "ssh+cg_fallback"
+            ? "No consistency groups returned from live storage or LaunchPad fallback."
+            : "No inventory rows returned.";
+        tableEl.innerHTML = `<p class="empty">${message}</p>`;
         return;
       }
       tableEl.innerHTML = `<div class="table-wrap"><table><thead><tr>${headers.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map(([key]) => `<td>${escapeHtml(row[key])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;

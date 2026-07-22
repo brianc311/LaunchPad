@@ -10,3 +10,10 @@ def test_site_lookup_path_and_markers():
     assert 'id="siteSelect"' in SITE_LOOKUP_HTML
     assert "filterRows" in SITE_LOOKUP_HTML
     assert "window.open" in SITE_LOOKUP_HTML
+
+
+def test_site_lookup_uses_live_cg_columns_for_ssh_results():
+    assert "function tableHeaders(tab, source)" in SITE_LOOKUP_HTML
+    assert 'tab === "consistency_groups" && source === "ssh"' in SITE_LOOKUP_HTML
+    assert '["id","ID"],["name","Name"],["status","Status"],["type","Type"]' in SITE_LOOKUP_HTML
+    assert "No consistency groups returned from live storage or LaunchPad fallback." in SITE_LOOKUP_HTML

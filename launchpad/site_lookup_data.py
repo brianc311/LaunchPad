@@ -129,10 +129,6 @@ def payload_from_card_cache(
         if (row := _map_row(m))["host"] or row["volume"]
     ]
     volumes = _volumes_from_maps(mappings)
-    for vol in card.get("fc_volumes") or []:
-        row = _volume_row(vol)
-        if row["name"] and row["name"] not in {v["name"] for v in volumes}:
-            volumes.append(row)
     matched = match_contingency_groups(
         contingency_groups or [], card_name=str(card.get("name") or "")
     )
