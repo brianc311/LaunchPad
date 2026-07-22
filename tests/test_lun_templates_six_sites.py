@@ -54,6 +54,18 @@ EXPECTED = {
         "PR_pool1",
         "Carolina, PR",
     ),
+    "template-anderson-sc": (
+        "Anderson, SC",
+        "flashsystem_7200",
+        "G3_AND_Pool",
+        "Anderson, SC",
+    ),
+    "template-tempe-az": (
+        "Tempe, AZ",
+        "ibm_storwize_v7000_g3",
+        "G2_TMP_Pool",
+        "Tempe, AZ",
+    ),
 }
 
 

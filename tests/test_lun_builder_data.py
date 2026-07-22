@@ -219,7 +219,7 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 13
+    assert len(templates) == 15
     hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
