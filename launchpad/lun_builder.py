@@ -379,6 +379,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     function volumeNameBase(lun, purpose) {
       const hostNames = Array.isArray(lun.host_names) ? lun.host_names.filter(Boolean) : [];
       let prefix = String(lun.name_prefix || "").trim().replace(/_+$/, "");
+      if (Boolean(lun.exact_name)) return null;
       if (!prefix) prefix = inferSitePrefix(hostNames);
       const cluster = String(lun.cluster || "").trim().toLowerCase();
       const shared = Boolean(lun.shared);

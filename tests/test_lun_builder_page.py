@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
-from launchpad.lun_builder_data import LUN_BUILDER_PROFILES
+from launchpad.lun_builder_data import LUN_BUILDER_PROFILES, expand_lun_batch
 
 
 def _run_completion_sync(build: dict) -> dict:
@@ -31,6 +31,62 @@ def _run_completion_sync(build: dict) -> dict:
         text=True,
     )
     return json.loads(result.stdout)
+
+
+def _run_js_expand_lun_batch(lun: dict) -> list[str]:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to execute the embedded JavaScript helper")
+
+    helpers = LUN_BUILDER_HTML.split("const SITE_HOST_RE =", 1)[1].split(
+        "function normalizeHostName", 1
+    )[0]
+    script = (
+        "const SITE_HOST_RE ="
+        + helpers
+        + f"\nconst lun = {json.dumps(lun)};"
+        + "\nprocess.stdout.write(JSON.stringify(expandLunBatch(lun)));"
+    )
+    result = subprocess.run(
+        [node, "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    "lun",
+    [
+        {
+            "purpose": "ADC-Data01",
+            "count": 1,
+            "shared": True,
+            "host_names": ["pen_andesx_vm03", "pen_andesx_vm04"],
+            "exact_name": True,
+        },
+        {
+            "purpose": "aan1_0",
+            "count": 1,
+            "shared": False,
+            "host_names": ["AAN1"],
+            "exact_name": True,
+        },
+        {
+            "purpose": "forced_name",
+            "count": 2,
+            "shared": False,
+            "host_names": ["host1"],
+            "name_prefix": "site",
+            "exact_name": True,
+        },
+    ],
+)
+def test_browser_expansion_matches_python_exact_name_contract(lun):
+    expected = [row["name"] for row in expand_lun_batch(lun)]
+
+    assert _run_js_expand_lun_batch(lun) == expected
 
 
 def _completion_build() -> dict:
