@@ -126,6 +126,15 @@ def test_contingency_groups_wizard_exposes_source_target_pairs():
     assert "source_volume" in CONTINGENCY_GROUPS_HTML
 
 
+def test_contingency_groups_wizard_step2_validation_resolves_live_snap_targets():
+    validate_fn = CONTINGENCY_GROUPS_HTML.split(
+        "function validateWizardStep(group, step) {", 1
+    )[1].split("\n    function showWizardErrors", 1)[0]
+    step_two_block = validate_fn.split("if (step === 2) {", 1)[1]
+    assert "source_volume" in step_two_block
+    assert "isSnapVolume(target)" in step_two_block
+
+
 def test_contingency_groups_wizard_places_snap_actions_in_their_steps():
     hero = CONTINGENCY_GROUPS_HTML.split('<section class="hero">', 1)[1].split(
         "</section>", 1
