@@ -348,6 +348,7 @@ def test_sync_inventory_replaces_build_and_upserts_cg(monkeypatch):
         "volumes": 1,
         "maps": 1,
         "skipped_snaps": 1,
+        "live_snaps": 1,
     }
     assert result["group"]["id"] == "existing-storage-a"
     assert result["group"]["storage_hint"] == "Storage A"
