@@ -35,3 +35,41 @@ def test_matches_host_and_volume_names():
     assert card_matches_search(card, "esx-wag1") is True
     assert card_matches_search(card, "adc-data") is True
     assert card_matches_search(card, "missing") is False
+
+
+def test_matches_fc_ports_by_node_only():
+    card = {
+        "fc_ports": [],
+        "fc_ports_by_node": [
+            {
+                "node": "node1",
+                "ports": [
+                    {
+                        "wwpn": "10:00:00:00:c9:a1:b2:c3",
+                        "remote_wwpns": "20:00:00:00:11:22:33:44",
+                    }
+                ],
+            }
+        ],
+        "fc_hosts": [],
+        "fc_mappings": [],
+        "fc_fabric": [],
+    }
+    assert card_matches_search(card, "c9a1b2c3") is True
+    assert card_matches_search(card, "2000000011223344") is True
+    assert card_matches_search(card, "deadbeef") is False
+
+
+def test_concatenated_wwpn_fields_do_not_false_positive():
+    card = {
+        "fc_ports": [
+            {"wwpn": "AA", "remote_wwpns": ""},
+            {"wwpn": "BB", "remote_wwpns": ""},
+        ],
+        "fc_hosts": [],
+        "fc_mappings": [],
+        "fc_fabric": [],
+    }
+    assert card_matches_search(card, "AABB") is False
+    assert card_matches_search(card, "AA") is True
+    assert card_matches_search(card, "BB") is True
