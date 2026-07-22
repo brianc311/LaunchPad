@@ -20,6 +20,15 @@ from launchpad.storage_presets import DEVICE_PROFILES
 ProgressCallback = Callable[[str, int, int], None]
 
 
+def cards_for_fc_export(
+    cards: list[dict[str, Any]],
+    groups: set[str] | None,
+) -> list[dict[str, Any]]:
+    from launchpad.snapshot_schedule_export import filter_cards_by_groups
+
+    return filter_cards_by_groups(list(cards), groups)
+
+
 @dataclass(frozen=True)
 class FcExportResult:
     path: Path

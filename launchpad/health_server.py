@@ -1908,7 +1908,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == "/api/fc-wwpn-export":
             from launchpad.capacity_export import open_exported_workbook
             from launchpad.config import TEMP_DIR
-            from launchpad.fc_wwpn_export import build_fc_wwpn_workbook, workbook_to_bytes
+            from launchpad.fc_wwpn_export import (
+                build_fc_wwpn_workbook,
+                cards_for_fc_export,
+                workbook_to_bytes,
+            )
             from launchpad.storage_presets import is_svc_fc_profile
 
             query = parse_qs(parsed.query)
@@ -1916,6 +1920,12 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "1",
                 "true",
                 "yes",
+            }
+            groups_raw = (query.get("groups") or ["wag1,wag2,other"])[0]
+            groups = {
+                part.strip().lower()
+                for part in str(groups_raw).split(",")
+                if part.strip()
             }
             try:
                 server.sync_from_app()
@@ -1925,6 +1935,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     if is_svc_fc_profile(str(card.get("device_profile") or ""))
                     or bool(card.get("fc_available"))
                 ]
+                cards = cards_for_fc_export(cards, groups)
                 wb, port_count, host_count, map_count = build_fc_wwpn_workbook(cards)
                 body = workbook_to_bytes(wb)
             except Exception as exc:

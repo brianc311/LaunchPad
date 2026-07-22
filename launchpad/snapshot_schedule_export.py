@@ -113,7 +113,7 @@ def filter_cards_by_groups(
     cards: list[dict[str, Any]],
     groups: set[str] | None,
 ) -> list[dict[str, Any]]:
-    if not groups:
+    if groups is None:
         return list(cards)
     allowed = {g.strip().lower() for g in groups if g and str(g).strip()}
     if not allowed or allowed >= {"wag1", "wag2", "other"}:
