@@ -175,6 +175,76 @@ def test_validate_step2_requires_targets():
     assert validate_wizard_step2(group)
 
 
+def test_generate_snap_rows_keeps_linked_live_snap_name():
+    group = {
+        "id": "lab",
+        "name": "Lab",
+        "location": "Lab",
+        "storage_hint": "",
+        "notes": "",
+        "updated_at": "",
+        "hosts": [{"name": "h1", "status": "Online", "host_type": "Generic", "port_count": 2, "protocol": "SCSI", "wwpns": []}],
+        "volumes": [
+            {
+                "name": "volA",
+                "capacity": "1.00TB",
+                "pool": "Pool1",
+                "uid": "UID-SRC",
+                "protocol": "SCSI",
+                "role": "source",
+                "source_volume": "",
+            },
+            {
+                "name": "volA_Snap1",
+                "capacity": "1.00TB",
+                "pool": "Pool1",
+                "uid": "UID-LIVE",
+                "protocol": "SCSI",
+                "role": "snap",
+                "source_volume": "volA",
+            },
+        ],
+        "maps": [
+            {"volume": "volA", "host": "h1", "scsi_id": "0", "role": "source"},
+        ],
+    }
+    out = generate_snap_rows(group)
+    snaps = [v for v in out["volumes"] if v.get("role") == "snap"]
+    assert len(snaps) == 1
+    assert snaps[0]["name"] == "volA_Snap1"
+    assert snaps[0]["uid"] == "UID-LIVE"
+    assert "volA_snap" not in {v["name"] for v in out["volumes"]}
+    snap_maps = [m for m in out["maps"] if m.get("role") == "snap"]
+    assert snap_maps
+    assert all(m["volume"] == "volA_Snap1" for m in snap_maps)
+
+
+def test_generate_snap_rows_still_creates_placeholder_when_no_live_snap():
+    group = {
+        "id": "lab",
+        "name": "Lab",
+        "location": "Lab",
+        "storage_hint": "",
+        "notes": "",
+        "updated_at": "",
+        "hosts": [],
+        "volumes": [
+            {
+                "name": "solo",
+                "capacity": "50GB",
+                "pool": "P",
+                "uid": "U1",
+                "protocol": "SCSI",
+                "role": "source",
+                "source_volume": "",
+            }
+        ],
+        "maps": [{"volume": "solo", "host": "h1", "scsi_id": "1", "role": "source"}],
+    }
+    out = generate_snap_rows(group)
+    assert any(v["name"] == "solo_snap" and v.get("role") == "snap" for v in out["volumes"])
+
+
 def test_filter_fc_card_keeps_mapping_when_host_matches_by_wwpn_only():
     group = {
         "id": "g1",

@@ -188,24 +188,36 @@ def generate_snap_rows(group: dict) -> dict:
     volumes = list(g["volumes"])
     maps = list(g["maps"])
     by_name = {str(v.get("name") or ""): v for v in volumes}
+    linked_snap_by_source: dict[str, str] = {}
+    for vol in volumes:
+        if str(vol.get("role") or "").lower() != "snap":
+            continue
+        source = str(vol.get("source_volume") or "").strip()
+        snap_name = str(vol.get("name") or "").strip()
+        if source and snap_name and source not in linked_snap_by_source:
+            linked_snap_by_source[source] = snap_name
     for vol in list(volumes):
         role = str(vol.get("role") or "source").lower()
         name = str(vol.get("name") or "")
         if role == "snap" or name.endswith(SNAP_SUFFIX):
             continue
-        target = snap_volume_name(name)
-        if target not in by_name:
-            snap = {
-                "name": target,
-                "capacity": vol.get("capacity") or "",
-                "pool": vol.get("pool") or "",
-                "uid": "",
-                "protocol": vol.get("protocol") or "SCSI",
-                "role": "snap",
-                "source_volume": name,
-            }
-            volumes.append(snap)
-            by_name[target] = snap
+        if name in linked_snap_by_source:
+            target = linked_snap_by_source[name]
+        else:
+            target = snap_volume_name(name)
+            if target not in by_name:
+                snap = {
+                    "name": target,
+                    "capacity": vol.get("capacity") or "",
+                    "pool": vol.get("pool") or "",
+                    "uid": "",
+                    "protocol": vol.get("protocol") or "SCSI",
+                    "role": "snap",
+                    "source_volume": name,
+                }
+                volumes.append(snap)
+                by_name[target] = snap
+                linked_snap_by_source[name] = target
         source_maps = [
             m
             for m in maps
