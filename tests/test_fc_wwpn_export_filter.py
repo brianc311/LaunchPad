@@ -1,4 +1,9 @@
-from launchpad.fc_wwpn_export import filter_cards_for_fc_export
+from launchpad.fc_wwpn_export import (
+    DEFAULT_FC_EXPORT_GROUPS,
+    cards_for_fc_export,
+    filter_cards_for_fc_export,
+    parse_fc_export_groups,
+)
 
 
 def _card(cid: int, name: str) -> dict:
@@ -32,3 +37,18 @@ def test_filter_cards_for_fc_export_card_id_wins_over_name():
 def test_filter_cards_for_fc_export_unknown_id_returns_empty():
     cards = [_card(1, "Hartford, CT")]
     assert filter_cards_for_fc_export(cards, card_id="99") == []
+
+
+def test_parse_fc_export_groups_defaults_and_empty():
+    assert parse_fc_export_groups({}) == set(DEFAULT_FC_EXPORT_GROUPS)
+    assert parse_fc_export_groups({"groups": [""]}) == set()
+    assert parse_fc_export_groups({"groups": ["wag1,other"]}) == {"wag1", "other"}
+
+
+def test_cards_for_fc_export_wag1_only():
+    cards = [
+        {"name": "WAG1-A", "category": "", "host": "", "model": "", "device_profile": ""},
+        {"name": "WAG2-B", "category": "", "host": "", "model": "", "device_profile": ""},
+    ]
+    kept = cards_for_fc_export(cards, {"wag1"})
+    assert [c["name"] for c in kept] == ["WAG1-A"]

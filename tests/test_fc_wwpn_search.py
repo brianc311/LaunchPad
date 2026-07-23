@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from launchpad import health_server as health_server_mod
 from launchpad.fc_wwpn_search import (
     card_matches_fc_query,
     find_cards_matching_fc_query,
@@ -87,6 +90,13 @@ def test_space_formatted_wwpn_field_matches_normalized_query():
         "fc_fabric": [],
     }
     assert card_matches_fc_query(card, "10000000c9a1b2c3") is True
+
+
+def test_health_server_exposes_fc_wwpn_find_route():
+    source = Path(health_server_mod.__file__).read_text(encoding="utf-8")
+    assert 'path == "/api/fc-wwpn-find"' in source
+    assert "find_cards_matching_fc_query" in source
+    assert '"q required"' in source
 
 
 def test_concatenated_wwpn_fields_do_not_false_positive():
