@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,6 +39,127 @@ def filter_cards_for_fc_export(
             if str(card.get("name") or "").strip().lower() == name
         ]
     return list(cards)
+
+
+MAPPINGS_HOST_HEADERS = (
+    "ID",
+    "Host",
+    "Status",
+    "Protocol",
+    "WWPN count",
+    "Host WWPNs",
+)
+MAPPINGS_LUN_HEADERS = (
+    "Host",
+    "Volume / VDisk",
+    "SCSI / LUN ID",
+    "VDisk ID",
+    "Host WWPNs",
+)
+MAPPINGS_FABRIC_HEADERS = (
+    "Node",
+    "Local WWPN",
+    "Remote WWPN",
+    "Host",
+    "State",
+    "Local port",
+)
+
+
+def mappings_rows_from_card(
+    card: dict[str, Any],
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], list[tuple[Any, ...]]]:
+    hosts: list[tuple[Any, ...]] = []
+    maps: list[tuple[Any, ...]] = []
+    fabric: list[tuple[Any, ...]] = []
+    for fc_host in card.get("fc_hosts") or []:
+        hosts.append(
+            (
+                fc_host.get("host_id"),
+                fc_host.get("host_name"),
+                fc_host.get("status"),
+                fc_host.get("protocol"),
+                fc_host.get("wwpn_count"),
+                fc_host.get("wwpns"),
+            )
+        )
+    for mapping in card.get("fc_mappings") or []:
+        maps.append(
+            (
+                mapping.get("host_name"),
+                mapping.get("vdisk_name"),
+                mapping.get("scsi_id"),
+                mapping.get("vdisk_id"),
+                mapping.get("host_wwpns"),
+            )
+        )
+    for login in card.get("fc_fabric") or []:
+        fabric.append(
+            (
+                login.get("node_name"),
+                login.get("local_wwpn"),
+                login.get("remote_wwpn"),
+                login.get("host_name"),
+                login.get("state"),
+                login.get("local_port"),
+            )
+        )
+    return hosts, maps, fabric
+
+
+def build_fc_mappings_workbook(
+    cards: list[dict[str, Any]],
+) -> tuple[Workbook, int, int, int]:
+    host_rows: list[tuple[Any, ...]] = []
+    map_rows: list[tuple[Any, ...]] = []
+    fabric_rows: list[tuple[Any, ...]] = []
+    for card in cards:
+        hosts, maps, fabric = mappings_rows_from_card(card)
+        host_rows.extend(hosts)
+        map_rows.extend(maps)
+        fabric_rows.extend(fabric)
+
+    wb = Workbook()
+    ws_hosts = wb.active
+    ws_hosts.title = "Hosts"
+    _write_rows(ws_hosts, MAPPINGS_HOST_HEADERS, host_rows)
+    ws_maps = wb.create_sheet("LUN Mappings")
+    _write_rows(ws_maps, MAPPINGS_LUN_HEADERS, map_rows)
+    ws_fabric = wb.create_sheet("Fabric Logins")
+    _write_rows(ws_fabric, MAPPINGS_FABRIC_HEADERS, fabric_rows)
+    return wb, len(host_rows), len(map_rows), len(fabric_rows)
+
+
+def _mappings_csv_bytes(headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> bytes:
+    output = StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return output.getvalue().encode("utf-8-sig")
+
+
+def export_fc_mappings_csv_zip(cards: list[dict[str, Any]]) -> bytes:
+    host_rows: list[tuple[Any, ...]] = []
+    map_rows: list[tuple[Any, ...]] = []
+    fabric_rows: list[tuple[Any, ...]] = []
+    for card in cards:
+        hosts, maps, fabric = mappings_rows_from_card(card)
+        host_rows.extend(hosts)
+        map_rows.extend(maps)
+        fabric_rows.extend(fabric)
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "hosts.csv", _mappings_csv_bytes(MAPPINGS_HOST_HEADERS, host_rows)
+        )
+        archive.writestr(
+            "lun_mappings.csv", _mappings_csv_bytes(MAPPINGS_LUN_HEADERS, map_rows)
+        )
+        archive.writestr(
+            "fabric_logins.csv",
+            _mappings_csv_bytes(MAPPINGS_FABRIC_HEADERS, fabric_rows),
+        )
+    return output.getvalue()
 
 
 @dataclass(frozen=True)

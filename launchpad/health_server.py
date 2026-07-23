@@ -1967,6 +1967,83 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=filename,
             )
             return
+        if path == "/api/fc-wwpn-mappings-export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+            from launchpad.fc_wwpn_export import (
+                build_fc_mappings_workbook,
+                export_fc_mappings_csv_zip,
+                filter_cards_for_fc_export,
+                workbook_to_bytes,
+            )
+            from launchpad.storage_presets import is_svc_fc_profile
+
+            query = parse_qs(parsed.query)
+            card_id = (query.get("card_id") or [""])[0].strip()
+            if not card_id:
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            export_format = (query.get("format") or ["xlsx"])[0].strip().lower()
+            if export_format not in {"xlsx", "csv"}:
+                self._send_json(
+                    {"error": "format must be xlsx or csv"}, status=400
+                )
+                return
+            open_after = (query.get("open") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                server.sync_from_app()
+                cards = [
+                    card
+                    for card in server.list_cards(allow_sync=False)
+                    if is_svc_fc_profile(str(card.get("device_profile") or ""))
+                    or bool(card.get("fc_available"))
+                ]
+                cards = filter_cards_for_fc_export(cards, card_id=card_id)
+                if not cards:
+                    self._send_json({"error": "Unknown card_id"}, status=400)
+                    return
+                site_name = str(cards[0].get("name") or card_id)
+                safe_name = re.sub(r"[^\w\-]+", "_", site_name).strip("_") or "site"
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+                if export_format == "csv":
+                    body = export_fc_mappings_csv_zip(cards)
+                    filename = f"FC_Mappings_{safe_name}_{stamp}.zip"
+                    content_type = "application/zip"
+                else:
+                    wb, host_count, map_count, fabric_count = build_fc_mappings_workbook(
+                        cards
+                    )
+                    body = workbook_to_bytes(wb)
+                    filename = f"FC_Mappings_{safe_name}_{stamp}.xlsx"
+                    content_type = (
+                        "application/vnd.openxmlformats-officedocument"
+                        ".spreadsheetml.sheet"
+                    )
+                    if open_after:
+                        try:
+                            TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                            saved = TEMP_DIR / filename
+                            saved.write_bytes(body)
+                            open_exported_workbook(saved)
+                            _log(
+                                f"FC mappings Excel opened: {saved} "
+                                f"({host_count} hosts, {map_count} maps, "
+                                f"{fabric_count} fabric)"
+                            )
+                        except Exception as open_exc:
+                            _log(
+                                "FC mappings Excel saved for download but "
+                                f"could not open: {open_exc}"
+                            )
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:

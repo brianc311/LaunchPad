@@ -102,6 +102,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer; font-weight: 600;
     }
     .tab.active { border-color: var(--accent); color: var(--accent2); }
+    #modal-print { display: none; }
     @media print {
       body { background: #fff; color: #111; }
       .hero, .site { border-color: #ccc; background: #fff; box-shadow: none; }
@@ -110,6 +111,11 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       th { background: #eee; color: #333; }
       th, td { border-color: #bbb; }
       .site { page-break-inside: avoid; }
+      body.printing-modal-mappings .hero,
+      body.printing-modal-mappings #sites,
+      body.printing-modal-mappings .footer { display: none !important; }
+      body.printing-modal-mappings #modal-print { display: block !important; }
+      body.printing-modal-mappings #modal-print h4 { margin: 16px 0 8px; color: #c2410c; }
     }
   </style>
 </head>
@@ -140,9 +146,16 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     <p class="footer">LaunchPad FC WWPN v{{APP_VERSION}} · Keep LaunchPad running while refreshing.</p>
   </div>
 
+  <div id="modal-print"></div>
+
   <div class="modal-backdrop" id="modal" role="dialog" aria-modal="true">
     <div class="modal">
-      <button type="button" class="btn secondary modal-close" id="modal-close">Close</button>
+      <div class="modal-actions no-print" style="float:right;display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn secondary" id="modal-export-excel-btn">Export Excel</button>
+        <button type="button" class="btn secondary" id="modal-export-csv-btn">Export CSV</button>
+        <button type="button" class="btn secondary" id="modal-print-btn">Print / Save PDF</button>
+        <button type="button" class="btn secondary modal-close" id="modal-close">Close</button>
+      </div>
       <h3 id="modal-title">Mappings</h3>
       <p class="sub" id="modal-sub"></p>
       <div class="tabs no-print">
@@ -165,6 +178,10 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     const modalTitle = document.getElementById("modal-title");
     const modalSub = document.getElementById("modal-sub");
     const modalBody = document.getElementById("modal-body");
+    const modalExportExcelBtn = document.getElementById("modal-export-excel-btn");
+    const modalExportCsvBtn = document.getElementById("modal-export-csv-btn");
+    const modalPrintBtn = document.getElementById("modal-print-btn");
+    const modalPrintEl = document.getElementById("modal-print");
     let cardsCache = [];
     let activeCard = null;
     let activeTab = "hosts";
@@ -352,6 +369,86 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
+    function setModalExportEnabled(enabled) {
+      modalExportExcelBtn.disabled = !enabled;
+      modalExportCsvBtn.disabled = !enabled;
+      modalPrintBtn.disabled = !enabled;
+    }
+
+    async function downloadModalMappings(format) {
+      if (!activeCard || activeCard.id == null) return;
+      const btn = format === "csv" ? modalExportCsvBtn : modalExportExcelBtn;
+      btn.disabled = true;
+      statusEl.textContent = format === "csv"
+        ? "Building mappings CSV ZIP…"
+        : "Building mappings Excel…";
+      try {
+        const params = new URLSearchParams({ open: format === "xlsx" ? "1" : "0" });
+        params.set("card_id", String(activeCard.id));
+        params.set("format", format);
+        const res = await fetch(`/api/fc-wwpn-mappings-export?${params.toString()}`);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err && err.error) detail = err.error;
+          } catch (_err) { /* ignore */ }
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, "");
+        const safe = String(activeCard.name || activeCard.id).replace(/[^\\w\\-]+/g, "_");
+        a.href = url;
+        a.download = format === "csv"
+          ? `FC_Mappings_${safe}_${stamp}.zip`
+          : `FC_Mappings_${safe}_${stamp}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = format === "csv"
+          ? "Mappings CSV ZIP downloaded (hosts / lun_mappings / fabric_logins)."
+          : "Mappings Excel downloaded (Hosts / LUN Mappings / Fabric Logins).";
+      } catch (err) {
+        statusEl.textContent = `Mappings export failed: ${err.message || err}`;
+      } finally {
+        setModalExportEnabled(Boolean(activeCard));
+      }
+    }
+
+    function printModalMappings() {
+      if (!activeCard) return;
+      const hostRows = (activeCard.fc_hosts || []).map((h) => [
+        h.host_id, h.host_name, h.status, h.protocol, h.wwpn_count, h.wwpns,
+      ]);
+      const mapRows = (activeCard.fc_mappings || []).map((m) => [
+        m.host_name, m.vdisk_name, m.scsi_id, m.vdisk_id, m.host_wwpns,
+      ]);
+      const fabricRows = (activeCard.fc_fabric || []).map((f) => [
+        f.node_name, f.local_wwpn, f.remote_wwpn, f.host_name, f.state, f.local_port,
+      ]);
+      modalPrintEl.innerHTML = `
+        <h3>${escapeHtml(activeCard.name)} — Hosts &amp; LUN Mappings</h3>
+        <h4>Hosts & WWPNs</h4>
+        ${tableFromRows(["ID", "Host", "Status", "Protocol", "WWPN count", "Host WWPNs"], hostRows)}
+        <h4>LUN Mappings</h4>
+        ${tableFromRows(["Host", "Volume / VDisk", "SCSI / LUN ID", "VDisk ID", "Host WWPNs"], mapRows)}
+        <h4>Fabric Logins</h4>
+        ${tableFromRows(["Node", "Local WWPN", "Remote WWPN", "Host", "State", "Local port"], fabricRows)}
+      `;
+      document.body.classList.add("printing-modal-mappings");
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        document.body.classList.remove("printing-modal-mappings");
+        window.removeEventListener("afterprint", cleanup);
+      };
+      window.addEventListener("afterprint", cleanup);
+      setTimeout(cleanup, 2000);
+      window.print();
+    }
+
     function openModal(card) {
       if (!card) return;
       activeCard = card;
@@ -362,12 +459,15 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         t.classList.toggle("active", t.getAttribute("data-tab") === activeTab);
       });
       renderModalBody();
+      setModalExportEnabled(true);
       modal.classList.add("open");
     }
 
     function closeModal() {
       modal.classList.remove("open");
+      modalPrintEl.innerHTML = "";
       activeCard = null;
+      setModalExportEnabled(false);
     }
 
     async function downloadExcel() {
@@ -482,6 +582,10 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       });
     });
     document.getElementById("modal-close").addEventListener("click", closeModal);
+    modalExportExcelBtn.addEventListener("click", () => downloadModalMappings("xlsx"));
+    modalExportCsvBtn.addEventListener("click", () => downloadModalMappings("csv"));
+    modalPrintBtn.addEventListener("click", printModalMappings);
+    setModalExportEnabled(false);
     modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
     refreshBtn.addEventListener("click", refreshMonitored);
     printBtn.addEventListener("click", () => window.print());
