@@ -62,6 +62,8 @@ def test_consistency_groups_ui_label_keeps_contingency_path():
     assert "<h1>Consistency Groups</h1>" in CONTINGENCY_GROUPS_HTML
     assert "LaunchPad Consistency Groups" in CONTINGENCY_GROUPS_HTML
     assert 'aria-label="Consistency group"' in CONTINGENCY_GROUPS_HTML
+    assert 'window.confirm("Delete this consistency group?")' in CONTINGENCY_GROUPS_HTML
+    assert 'statusEl.textContent = "Syncing Consistency Group via SSH…";' in CONTINGENCY_GROUPS_HTML
     assert "/api/contingency-groups" in CONTINGENCY_GROUPS_HTML
 
 

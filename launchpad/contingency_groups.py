@@ -445,7 +445,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     async function deleteGroup() {
       if (!currentId) return;
       const deletingId = currentId;
-      if (!window.confirm("Delete this contingency group?")) return;
+      if (!window.confirm("Delete this consistency group?")) return;
       groups = groups.filter((group) => group.id !== deletingId);
       currentId = groups[0] ? groups[0].id : "";
       saveLocal();
@@ -630,7 +630,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       );
       if (cardName === null) return;
       if (!cardName.trim()) { statusEl.textContent = "Card name is required for Sync from array."; return; }
-      statusEl.textContent = "Syncing Contingency Group via SSH…";
+      statusEl.textContent = "Syncing Consistency Group via SSH…";
       try {
         const response = await fetch("/api/contingency-groups/sync-inventory", {
           method: "POST",
