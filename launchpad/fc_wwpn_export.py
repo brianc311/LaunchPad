@@ -20,6 +20,25 @@ from launchpad.storage_presets import DEVICE_PROFILES
 ProgressCallback = Callable[[str, int, int], None]
 
 
+def filter_cards_for_fc_export(
+    cards: list[dict[str, Any]],
+    *,
+    card_id: str | None = None,
+    card_name: str | None = None,
+) -> list[dict[str, Any]]:
+    cid = str(card_id or "").strip()
+    if cid:
+        return [card for card in cards if str(card.get("id", "")) == cid]
+    name = str(card_name or "").strip().lower()
+    if name:
+        return [
+            card
+            for card in cards
+            if str(card.get("name") or "").strip().lower() == name
+        ]
+    return list(cards)
+
+
 @dataclass(frozen=True)
 class FcExportResult:
     path: Path

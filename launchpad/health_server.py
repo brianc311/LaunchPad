@@ -1916,7 +1916,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == "/api/fc-wwpn-export":
             from launchpad.capacity_export import open_exported_workbook
             from launchpad.config import TEMP_DIR
-            from launchpad.fc_wwpn_export import build_fc_wwpn_workbook, workbook_to_bytes
+            from launchpad.fc_wwpn_export import (
+                build_fc_wwpn_workbook,
+                filter_cards_for_fc_export,
+                workbook_to_bytes,
+            )
             from launchpad.storage_presets import is_svc_fc_profile
 
             query = parse_qs(parsed.query)
@@ -1933,6 +1937,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     if is_svc_fc_profile(str(card.get("device_profile") or ""))
                     or bool(card.get("fc_available"))
                 ]
+                card_id = (query.get("card_id") or [""])[0].strip()
+                card_name = (query.get("card_name") or [""])[0].strip()
+                cards = filter_cards_for_fc_export(
+                    cards, card_id=card_id or None, card_name=card_name or None
+                )
                 wb, port_count, host_count, map_count = build_fc_wwpn_workbook(cards)
                 body = workbook_to_bytes(wb)
             except Exception as exc:
