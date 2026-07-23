@@ -69,6 +69,27 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
                 pool = ""
             volumes.append({"name": name, "pool_or_cpg": pool})
         return volumes
+
+    # Whitespace table fallback (no comma/colon delimiters in header).
+    cols = header.split()
+    name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "vvname", "vv_name"}), None)
+    cpg_i = next(
+        (i for i, c in enumerate(cols) if c.lower() in {"usrcpg", "cpg", "snpcpg", "usr_cpg"}),
+        None,
+    )
+    if name_i is None:
+        return []
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) <= name_i:
+            continue
+        name = parts[name_i]
+        if not name or name.lower() == "name":
+            continue
+        pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
+        if pool in {"-", "--"}:
+            pool = ""
+        volumes.append({"name": name, "pool_or_cpg": pool})
     return volumes
 
 

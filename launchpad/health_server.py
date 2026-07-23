@@ -85,6 +85,7 @@ from launchpad.snapshot_schedule_overrides import (
 )
 from launchpad.ssh_commands import run_remote_command_suite, run_remote_ssh_command
 from launchpad.ssh_launcher import _log
+from launchpad.ssh_paramiko import run_ssh_auth_hpe_commands
 from launchpad.storage_presets import (
     DEVICE_PROFILES,
     HPE_SHELL_PROFILES,
@@ -3435,11 +3436,20 @@ class HealthServer:
                 continue
             profile = str(card.device_profile or "")
             try:
-                run = self._lun_run_command(card)
                 if vendor_for_profile(profile) == "hpe":
-                    output = run("showvv")
+                    outputs = run_ssh_auth_hpe_commands(
+                        card.host,
+                        card.port,
+                        card.username,
+                        ["showvv"],
+                        password=card.password,
+                        key_path=card.key_path,
+                        key_passphrase=card.key_passphrase,
+                    )
+                    output = outputs[0] if outputs else ""
                     vols = parse_showvv_volumes(output)
                 else:
+                    run = self._lun_run_command(card)
                     output = run("svcinfo lsvdisk -delim :")
                     vols = [
                         {

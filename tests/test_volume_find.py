@@ -44,6 +44,20 @@ def test_parse_showvv_volumes_basic():
     assert any(v.get("pool_or_cpg") == "SSD_r5" for v in vols if v["name"] == "vv_data_1")
 
 
+def test_parse_showvv_volumes_whitespace_table():
+    output = (
+        "Id Name     Rd   Mstr   HostDisp VV_WWN   Prov Type CopyOf BsId UsrCPG SnpCPG\n"
+        "0  vv_data_1 ---- normal 0        5000ABCD full base --     0    SSD_r5 -\n"
+        "1  vv_data_2 ---- normal 0        5000ABCE full base --     0    FC_r1  -\n"
+    )
+    vols = parse_showvv_volumes(output)
+    by_name = {v["name"]: v for v in vols}
+    assert "vv_data_1" in by_name
+    assert "vv_data_2" in by_name
+    assert by_name["vv_data_1"]["pool_or_cpg"] == "SSD_r5"
+    assert by_name["vv_data_2"]["pool_or_cpg"] == "FC_r1"
+
+
 def test_volumes_from_command_results_ibm_lsvdisk():
     results = [
         {

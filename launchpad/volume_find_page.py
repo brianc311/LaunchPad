@@ -84,7 +84,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     <section class="hero">
       <h1>Volume Find</h1>
       <p>
-        Search volume names across monitor-on IBM FlashSystem / Storwize / SVC and HPE 3PAR / Primera / Alletra SSH cards.
+        Search volume names across monitor-on IBM FlashSystem / Storwize / SVC and HPE 3PAR / Primera SSH cards.
         Find uses cached health command output; Search live runs SSH queries after LaunchPad is unlocked.
       </p>
       <div class="hero-actions">
