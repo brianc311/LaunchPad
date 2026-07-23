@@ -90,6 +90,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         <button type="button" id="export-btn" class="secondary">Export Excel</button>
         <button type="button" id="export-all-btn" class="secondary">Export All Excel</button>
         <button type="button" id="fc-wwpn-btn" class="secondary">Open in FC WWPN</button>
+        <button type="button" id="sync-array-btn" class="secondary">Sync from array</button>
         <a class="btn secondary" href="/">Health Dashboard</a>
       </div>
     </section>
@@ -619,6 +620,36 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         statusEl.textContent = data.ok ? "Create completed; see the log for details." : "Create did not complete; see the log and warnings.";
       } catch (error) { statusEl.textContent = `Unable to run _snap create: ${error.message || error}`; }
     }
+    async function syncFromArray() {
+      if (!currentId) { statusEl.textContent = "Select a group to sync."; return; }
+      if (!persisted) { statusEl.textContent = "Unlock LaunchPad before syncing from the array."; return; }
+      const group = activeGroup();
+      const cardName = window.prompt(
+        "Storage card name (required):",
+        (group.storage_hint || group.name || "").trim()
+      );
+      if (cardName === null) return;
+      if (!cardName.trim()) { statusEl.textContent = "Card name is required for Sync from array."; return; }
+      statusEl.textContent = "Syncing Contingency Group via SSH…";
+      try {
+        const response = await fetch("/api/contingency-groups/sync-inventory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ group_id: currentId, card_name: cardName.trim() }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        groups = Array.isArray(data.groups) ? data.groups : groups;
+        saveLocal();
+        render();
+        const p = data.pulled || {};
+        statusEl.textContent =
+          `Synced hosts=${p.hosts||0} volumes=${p.volumes||0} maps=${p.maps||0}` +
+          ` skipped_snaps=${p.skipped_snaps||0} live_snaps=${p.live_snaps||0}. CG updated.`;
+      } catch (error) {
+        statusEl.textContent = `Sync from array failed: ${error.message || error}`;
+      }
+    }
     async function loadGroups() {
       const localGroups = loadLocal();
       groups = localGroups;
@@ -719,6 +750,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     document.getElementById("fc-wwpn-btn").addEventListener("click", () => {
       if (currentId) window.location.assign(`/fc-wwpn?group=${encodeURIComponent(currentId)}`);
     });
+    document.getElementById("sync-array-btn").addEventListener("click", syncFromArray);
     loadGroups();
   </script>
 </body>

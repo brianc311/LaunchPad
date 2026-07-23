@@ -509,6 +509,69 @@ def new_group_id(name: str, existing: list[dict]) -> str:
     return candidate
 
 
+def group_matches_card(group: dict, card: dict) -> bool:
+    card_candidates: list[str] = []
+    card_name = str(card.get("name") or "").strip().lower()
+    if card_name:
+        card_candidates.append(card_name)
+        card_candidates.append(_slugify(card_name))
+    card_id = str(card.get("id") or "").strip().lower()
+    if card_id:
+        card_candidates.append(card_id)
+        card_candidates.append(_slugify(card_id))
+    if not card_candidates:
+        return False
+    group_fields = [
+        str(group.get("id") or "").strip().lower(),
+        str(group.get("name") or "").strip().lower(),
+        str(group.get("location") or "").strip().lower(),
+        str(group.get("storage_hint") or "").strip().lower(),
+        _slugify(str(group.get("name") or "")),
+    ]
+    return any(candidate in group_fields for candidate in card_candidates)
+
+
+def stub_group_for_card(card: dict, existing: list[dict]) -> dict:
+    card_name = str(card.get("name") or "").strip()
+    group_id = new_group_id(card_name, existing)
+    stub = normalize_group(
+        {
+            "id": group_id,
+            "name": card_name,
+            "location": card_name,
+            "storage_hint": card_name,
+            "notes": "",
+            "updated_at": "",
+            "hosts": [],
+            "volumes": [],
+            "maps": [],
+        }
+    )
+    return stub or {
+        "id": group_id,
+        "name": card_name,
+        "location": card_name,
+        "storage_hint": card_name,
+        "notes": "",
+        "updated_at": "",
+        "hosts": [],
+        "volumes": [],
+        "maps": [],
+    }
+
+
+def ensure_groups_for_cards(groups: list[dict], cards: list[dict]) -> list[dict]:
+    out = list(groups)
+    for card in cards:
+        card_name = str(card.get("name") or "").strip()
+        if not card_name:
+            continue
+        if any(group_matches_card(group, card) for group in out):
+            continue
+        out.append(stub_group_for_card(card, out))
+    return normalize_groups(out)
+
+
 def _group_host_names(group: dict) -> set[str]:
     names: set[str] = set()
     for host in group.get("hosts") or []:
