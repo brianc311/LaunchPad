@@ -223,6 +223,17 @@ def test_lun_builder_exposes_template_picker_ux():
     assert "Save as new before exporting a template." in LUN_BUILDER_HTML
 
 
+def test_lun_builder_exposes_find_search():
+    for text in (
+        'id="lun-search"',
+        'id="lun-search-btn"',
+        "function runLunSearch(",
+        "Search volume, purpose, or host",
+        "No matching hosts, volumes, or purposes",
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
 def test_lun_builder_page_wires_preview_and_confirmed_create():
     for text in (
         "/api/lun-builds/preview",

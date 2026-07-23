@@ -44,6 +44,9 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:.85rem; font-weight:600; }
     select, input, textarea { width:100%; padding:8px 9px; color:var(--text); background:#0f141d; border:1px solid var(--border); border-radius:8px; font:inherit; }
     .picker select { width:auto; min-width:240px; }
+    #lun-search {
+      width:min(420px, 100%); height:34px; padding:0 12px; border-radius:10px;
+    }
     textarea { min-height:70px; resize:vertical; }
     .summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
     .notes { grid-column:1 / -1; }
@@ -130,6 +133,8 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       <div class="picker">
         <label for="build-picker">Build <select id="build-picker" aria-label="LUN build"></select></label>
         <button type="button" class="secondary" id="new-btn">New</button>
+        <input type="search" id="lun-search" placeholder="Search volume, purpose, or host…" aria-label="Search LUN build">
+        <button type="button" class="secondary" id="lun-search-btn">Find</button>
         <span class="status" id="status" aria-live="polite"></span>
       </div>
       <p class="template-banner" id="template-banner" hidden>Template — use Save as new to keep an editable copy.</p>
@@ -247,6 +252,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     let builds = [];
     let templates = [];
     let currentId = "";
+    let lunSearchQuery = "";
     let persisted = false;
     let previewRequestId = 0;
     let wizardStep = 0;
@@ -416,6 +422,89 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       }
       return names;
     }
+    // Keep host/lun/build match helpers in sync with launchpad.lun_builder_search
+    function normalizeSearchQuery(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+    function fieldMatchesText(field, q) {
+      if (!q) return false;
+      const text = String(field || "").trim().toLowerCase();
+      return Boolean(text) && text.includes(q);
+    }
+    function hostRowMatches(host, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      return fieldMatchesText(host?.lpar_name, q);
+    }
+    function lunRowMatches(lun, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      if (fieldMatchesText(lun?.purpose, q)) return true;
+      for (const name of lun?.host_names || []) {
+        if (fieldMatchesText(name, q)) return true;
+      }
+      for (const name of expandLunBatch(lun || {})) {
+        if (fieldMatchesText(name, q)) return true;
+      }
+      return false;
+    }
+    function buildMatches(build, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      if ((build?.hosts || []).some((host) => host && hostRowMatches(host, query))) return true;
+      if ((build?.luns || []).some((lun) => lun && lunRowMatches(lun, query))) return true;
+      return false;
+    }
+    function applyLunSearchFilter(build) {
+      if (!lunSearchQuery) return;
+      hostsBody.querySelectorAll("tr").forEach((tr) => {
+        const indexAttr = tr.querySelector("[data-index]")?.dataset?.index;
+        if (indexAttr === undefined) return;
+        const host = (build.hosts || [])[Number(indexAttr)];
+        if (!host || !hostRowMatches(host, lunSearchQuery)) tr.style.display = "none";
+      });
+      lunsBody.querySelectorAll("tr").forEach((tr) => {
+        const indexAttr = tr.querySelector("[data-index]")?.dataset?.index;
+        if (indexAttr === undefined) return;
+        const lun = (build.luns || [])[Number(indexAttr)];
+        if (!lun || !lunRowMatches(lun, lunSearchQuery)) tr.style.display = "none";
+      });
+    }
+    function runLunSearch() {
+      const searchInput = document.getElementById("lun-search");
+      const raw = (searchInput?.value || "").trim();
+      lunSearchQuery = raw;
+      if (!raw) {
+        render();
+        statusEl.textContent = "Search cleared.";
+        return;
+      }
+      if (buildMatches(activeBuild(), raw)) {
+        render();
+        statusEl.textContent = "Showing matching rows";
+        return;
+      }
+      const catalog = [...templates, ...builds];
+      const matches = catalog
+        .filter((item) => item && buildMatches(item, raw))
+        .slice()
+        .sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+        );
+      if (!matches.length) {
+        render();
+        statusEl.textContent = "No matching hosts, volumes, or purposes";
+        return;
+      }
+      const first = matches[0];
+      currentId = String(first.id || "");
+      invalidatePreview();
+      render();
+      const extra = matches.length - 1;
+      statusEl.textContent = extra
+        ? `Found in ${first.name || first.id} (also in ${extra} other build(s))`
+        : `Found in ${first.name || first.id}`;
+    }
     function normalizeHostName(value) {
       return String(value || "").trim().toLowerCase();
     }
@@ -527,6 +616,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`;
       }).join("") : '<tr><td colspan="13" class="empty">No LUN specs yet.</td></tr>';
       (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
+      applyLunSearchFilter(build);
       renderPlanTable(build);
       updateSectionHeadings(build);
       document.getElementById("delete-btn").disabled = !currentId || Boolean(build.is_template);
@@ -886,6 +976,10 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     }
     picker.addEventListener("change", () => { currentId = picker.value; invalidatePreview(); render(); });
     document.getElementById("new-btn").addEventListener("click", () => { builds.push(emptyBuild()); currentId = ""; invalidatePreview(); render(); });
+    document.getElementById("lun-search-btn").addEventListener("click", runLunSearch);
+    document.getElementById("lun-search").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") runLunSearch();
+    });
     document.getElementById("save-btn").addEventListener("click", () => save(false));
     document.getElementById("save-new-btn").addEventListener("click", () => save(true));
     document.getElementById("delete-btn").addEventListener("click", removeBuild);
