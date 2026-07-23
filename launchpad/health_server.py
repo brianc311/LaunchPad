@@ -89,6 +89,13 @@ from launchpad.storage_presets import (
     HPE_SHELL_PROFILES,
     SVC_PROFILES,
 )
+from launchpad.volume_find import (
+    find_volumes_in_cards,
+    is_volume_find_eligible,
+    parse_showvv_volumes,
+    vendor_for_profile,
+    volume_name_matches,
+)
 
 DEFAULT_PORT = 18765
 PREFERRED_PORTS = (18765, 18766, 18767, 18768)
@@ -120,6 +127,7 @@ class HealthCard:
         return {
             "id": self.card_id,
             "name": self.name,
+            "card_type": "ssh",
             "host": self.host,
             "port": self.port,
             "username": self.username,
@@ -1948,6 +1956,20 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=f"Snapshot_Schedule_{group_label}_{stamp}.xlsx",
             )
             return
+        if path == "/api/volume-find":
+            query = parse_qs(parsed.query)
+            q = (query.get("q") or [""])[0]
+            mode = (query.get("mode") or ["cache"])[0]
+            try:
+                payload = server.find_volumes(q, mode=mode)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
         if path == "/api/fc-wwpn-find":
             from launchpad.fc_wwpn_search import find_cards_matching_fc_query
             from launchpad.storage_presets import is_svc_fc_profile
@@ -2534,6 +2556,10 @@ class HealthServer:
         with self._lock:
             self._get_setting = get_setting
             self._set_setting = set_setting
+
+    def is_unlocked(self) -> bool:
+        with self._lock:
+            return self._get_setting is not None
 
     def snapshot_schedule_persist_available(self) -> bool:
         with self._lock:
@@ -3366,6 +3392,87 @@ class HealthServer:
         with self._lock:
             return self._monitor_enabled.get(card_id, False)
 
+    def find_volumes(self, query: str, *, mode: str = "cache") -> dict[str, Any]:
+        q = str(query or "").strip()
+        if not q:
+            return {"matches": [], "errors": []}
+        mode_key = str(mode or "cache").strip().lower()
+        if mode_key not in {"cache", "live"}:
+            raise ValueError("mode must be cache or live")
+        self.sync_from_app()
+        cards = self.list_cards(allow_sync=False)
+        monitor = {
+            c["id"]: self.is_monitor_enabled(int(c["id"]))
+            for c in cards
+            if c.get("id") is not None
+        }
+        if mode_key == "cache":
+            return {
+                "matches": find_volumes_in_cards(
+                    cards, q, monitor_enabled=monitor, source="cache"
+                ),
+                "errors": [],
+            }
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to search volumes live.")
+        matches: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            card_id = card_dict.get("id")
+            if card_id is None:
+                continue
+            monitor_on = bool(
+                monitor.get(card_id, monitor.get(str(card_id), False))
+            )
+            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            card = self._cards.get(int(card_id))
+            if card is None:
+                continue
+            profile = str(card.device_profile or "")
+            try:
+                run = self._lun_run_command(card)
+                if vendor_for_profile(profile) == "hpe":
+                    output = run("showvv")
+                    vols = parse_showvv_volumes(output)
+                else:
+                    output = run("svcinfo lsvdisk -delim :")
+                    vols = [
+                        {
+                            "name": r["name"],
+                            "pool_or_cpg": r.get("pool") or "",
+                        }
+                        for r in parse_lsvdisk_volumes(output)
+                    ]
+                for vol in vols:
+                    if volume_name_matches(vol["name"], q):
+                        matches.append(
+                            {
+                                "card_id": card.card_id,
+                                "card_name": card.name,
+                                "profile": profile,
+                                "vendor": vendor_for_profile(profile),
+                                "volume": vol["name"],
+                                "pool_or_cpg": vol.get("pool_or_cpg") or "",
+                                "source": "live",
+                            }
+                        )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": str(exc),
+                    }
+                )
+        matches.sort(
+            key=lambda m: (
+                str(m.get("card_name") or "").lower(),
+                str(m.get("volume") or "").lower(),
+            )
+        )
+        return {"matches": matches, "errors": errors}
+
     def sync_from_app(self) -> int:
         with self._lock:
             provider = self._sync_provider
@@ -3553,6 +3660,7 @@ class HealthServer:
                     {
                         "id": card.card_id,
                         "name": card.name,
+                        "card_type": "ssh",
                         "host": card.host,
                         "port": card.port,
                         "username": card.username,
