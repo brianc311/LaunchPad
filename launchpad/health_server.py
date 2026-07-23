@@ -1918,22 +1918,51 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=f"Snapshot_Schedule_{group_label}_{stamp}.xlsx",
             )
             return
+        if path == "/api/fc-wwpn-find":
+            from launchpad.fc_wwpn_search import find_cards_matching_fc_query
+            from launchpad.storage_presets import is_svc_fc_profile
+
+            query = parse_qs(parsed.query)
+            q = (query.get("q") or [""])[0]
+            if not str(q).strip():
+                self._send_json({"error": "q required"}, status=400)
+                return
+            server.sync_from_app()
+            cards = [
+                card
+                for card in server.list_cards(allow_sync=False)
+                if is_svc_fc_profile(str(card.get("device_profile") or ""))
+                or bool(card.get("fc_available"))
+            ]
+            matches = find_cards_matching_fc_query(cards, q)
+            self._send_json(
+                {
+                    "query": q,
+                    "matches": [
+                        {"id": c.get("id"), "name": c.get("name")} for c in matches
+                    ],
+                }
+            )
+            return
         if path == "/api/fc-wwpn-export":
             from launchpad.capacity_export import open_exported_workbook
             from launchpad.config import TEMP_DIR
             from launchpad.fc_wwpn_export import (
                 build_fc_wwpn_workbook,
+                cards_for_fc_export,
                 filter_cards_for_fc_export,
+                parse_fc_export_groups,
                 workbook_to_bytes,
             )
             from launchpad.storage_presets import is_svc_fc_profile
 
-            query = parse_qs(parsed.query)
+            query = parse_qs(parsed.query, keep_blank_values=True)
             open_after = (query.get("open") or ["1"])[0].strip().lower() in {
                 "1",
                 "true",
                 "yes",
             }
+            groups = parse_fc_export_groups(query)
             try:
                 server.sync_from_app()
                 cards = [
@@ -1942,6 +1971,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     if is_svc_fc_profile(str(card.get("device_profile") or ""))
                     or bool(card.get("fc_available"))
                 ]
+                cards = cards_for_fc_export(cards, groups)
                 card_id = (query.get("card_id") or [""])[0].strip()
                 card_name = (query.get("card_name") or [""])[0].strip()
                 cards = filter_cards_for_fc_export(

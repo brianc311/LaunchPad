@@ -54,6 +54,29 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       background: #0f141d; color: var(--text); border: 1px solid var(--border);
       border-radius: 10px; height: 34px; padding: 0 10px; font: inherit;
     }
+    .site-filters {
+      display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+      margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+    }
+    .site-filters .filter-label {
+      color: var(--muted); font-size: 0.85rem; font-weight: 700;
+      letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .site-filters label.filter-check {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--text); font-size: 0.92rem; cursor: pointer; user-select: none;
+      background: #0f141d; border: 1px solid var(--border); border-radius: 999px;
+      padding: 6px 12px;
+    }
+    .site-filters label.filter-check input {
+      width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;
+    }
+    .site-filters .filter-hint { color: var(--muted); font-size: 0.82rem; }
+    #fc-search {
+      width: min(420px, 100%); background: #0f141d; color: var(--text);
+      border: 1px solid var(--border); border-radius: 10px; height: 34px;
+      padding: 0 12px; font: inherit;
+    }
     .site {
       background: var(--card); border: 1px solid var(--border); border-radius: 16px;
       padding: 18px 20px; margin-bottom: 16px; break-inside: avoid;
@@ -135,11 +158,29 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
         <a class="btn secondary" href="/contingency-groups">Contingency Groups</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
+        <input type="search" id="fc-search" placeholder="Search WWPN, remote WWPN, host, or volume…" aria-label="Search FC inventory">
+        <button type="button" id="fc-search-btn" class="btn secondary">Find</button>
         <label for="site-select" class="status">Site</label>
         <select id="site-select" class="group-filter" aria-label="Site">
           <option value="">None</option>
         </select>
         <span id="status" class="status"></span>
+      </div>
+      <div class="site-filters no-print" id="site-filters">
+        <span class="filter-label">Include in list / Excel</span>
+        <label class="filter-check" for="filter-wag1">
+          <input type="checkbox" id="filter-wag1" checked>
+          WAG1
+        </label>
+        <label class="filter-check" for="filter-wag2">
+          <input type="checkbox" id="filter-wag2" checked>
+          WAG2
+        </label>
+        <label class="filter-check" for="filter-other">
+          <input type="checkbox" id="filter-other" checked>
+          Other sites
+        </label>
+        <span class="filter-hint">Uncheck a group to hide it from the report and export.</span>
       </div>
     </section>
     <div id="sites"></div>
@@ -174,6 +215,11 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     const printBtn = document.getElementById("print-btn");
     const excelBtn = document.getElementById("excel-btn");
     const siteSelect = document.getElementById("site-select");
+    const searchInput = document.getElementById("fc-search");
+    const searchBtn = document.getElementById("fc-search-btn");
+    const filterWag1 = document.getElementById("filter-wag1");
+    const filterWag2 = document.getElementById("filter-wag2");
+    const filterOther = document.getElementById("filter-other");
     const modal = document.getElementById("modal");
     const modalTitle = document.getElementById("modal-title");
     const modalSub = document.getElementById("modal-sub");
@@ -214,10 +260,162 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       return cards.filter((card) => String(card.id) === id);
     }
 
+    // Keep siteGroup in sync with launchpad.snapshot_schedule_export.site_group
+    function siteGroup(card) {
+      const hay = [
+        card.name,
+        card.category,
+        card.host,
+        card.model,
+        card.device_profile,
+      ]
+        .map((part) => String(part || "").toLowerCase())
+        .join(" ");
+      if (hay.includes("wag1")) return "wag1";
+      if (hay.includes("wag2")) return "wag2";
+      return "other";
+    }
+
+    function includedGroups() {
+      const groups = new Set();
+      if (filterWag1.checked) groups.add("wag1");
+      if (filterWag2.checked) groups.add("wag2");
+      if (filterOther.checked) groups.add("other");
+      return groups;
+    }
+
+    function normalizeWwpn(value) {
+      return String(value || "").replace(/[\\s:]/g, "").toUpperCase();
+    }
+
+    function wwpnFieldTokens(field) {
+      const text = String(field || "").trim();
+      if (!text) return [];
+      return text
+        .split(/[;,]+/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map(normalizeWwpn);
+    }
+
+    function fieldMatchesText(field, qText) {
+      if (!qText) return false;
+      const text = String(field || "").trim();
+      if (!text) return false;
+      return text.toLowerCase().includes(qText);
+    }
+
+    function fieldMatchesWwpn(field, qWwpn) {
+      if (!qWwpn) return false;
+      return wwpnFieldTokens(field).some((token) => token.includes(qWwpn));
+    }
+
+    // Keep cardMatchesQuery in sync with launchpad.fc_wwpn_search.card_matches_fc_query
+    function cardMatchesQuery(card, query) {
+      const raw = String(query || "").trim();
+      if (!raw) return true;
+      const qText = raw.toLowerCase();
+      const qWwpn = normalizeWwpn(raw);
+
+      const textFields = [];
+      const wwpnFields = [];
+
+      for (const port of card.fc_ports || []) {
+        wwpnFields.push(port.wwpn);
+        wwpnFields.push(port.remote_wwpns);
+      }
+      for (const node of card.fc_ports_by_node || []) {
+        for (const port of node.ports || []) {
+          wwpnFields.push(port.wwpn);
+          wwpnFields.push(port.remote_wwpns);
+        }
+      }
+      for (const host of card.fc_hosts || []) {
+        textFields.push(host.host_name || host.name);
+        wwpnFields.push(host.wwpns);
+        wwpnFields.push(host.wwpn);
+        wwpnFields.push(host.host_wwpns);
+      }
+      for (const mapping of card.fc_mappings || []) {
+        textFields.push(mapping.vdisk_name || mapping.volume);
+        textFields.push(mapping.host_name || mapping.host);
+        wwpnFields.push(mapping.host_wwpns);
+      }
+      for (const login of card.fc_fabric || []) {
+        textFields.push(login.host_name);
+        wwpnFields.push(login.local_wwpn);
+        wwpnFields.push(login.remote_wwpn);
+      }
+
+      if (textFields.some((field) => fieldMatchesText(field, qText))) return true;
+      if (wwpnFields.some((field) => fieldMatchesWwpn(field, qWwpn))) return true;
+      return false;
+    }
+
+    function runFcSearch() {
+      const q = (searchInput.value || "").trim();
+      if (!q) {
+        statusEl.textContent = "Enter a WWPN, host, or volume to find.";
+        return;
+      }
+      let matches = cardsCache.filter(isSvcLike).filter((c) => cardMatchesQuery(c, q));
+      const finish = (list, serverMatches) => {
+        if (!list.length) {
+          if (serverMatches && serverMatches.length) {
+            const first = serverMatches[0];
+            activeSiteId = String(first.id);
+            updateSiteOptions();
+            render();
+            const extra = serverMatches.length - 1;
+            statusEl.textContent = extra
+              ? `Found on ${first.name} (also on ${extra} other site(s))`
+              : `Found on ${first.name}`;
+            return;
+          }
+          activeSiteId = "";
+          updateSiteOptions();
+          render();
+          statusEl.textContent = `WWPN not found — can't locate site`;
+          return;
+        }
+        list = list.slice().sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+        );
+        activeSiteId = String(list[0].id);
+        updateSiteOptions();
+        render();
+        const extra = list.length - 1;
+        statusEl.textContent = extra
+          ? `Found on ${list[0].name} (also on ${extra} other site(s))`
+          : `Found on ${list[0].name}`;
+      };
+      if (matches.length) {
+        finish(matches);
+        return;
+      }
+      fetch(`/api/fc-wwpn-find?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((payload) => {
+          const ids = new Set((payload.matches || []).map((m) => String(m.id)));
+          finish(
+            cardsCache.filter((c) => ids.has(String(c.id))),
+            payload.matches || [],
+          );
+        })
+        .catch((err) => {
+          statusEl.textContent = `Search failed: ${err.message || err}`;
+        });
+    }
+
     function updateSiteOptions() {
-      const svcCards = cardsCache.filter(isSvcLike).slice().sort((a, b) =>
-        String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
-      );
+      const allowed = includedGroups();
+      const svcCards = cardsCache
+        .filter(isSvcLike)
+        .filter((card) => allowed.has(siteGroup(card)))
+        .slice()
+        .sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+        );
       const selected = svcCards.some((card) => String(card.id) === String(activeSiteId))
         ? String(activeSiteId) : "";
       activeSiteId = selected;
@@ -308,7 +506,10 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     }
 
     function render() {
-      const all = cardsCache.filter(isSvcLike);
+      const allowed = includedGroups();
+      const all = cardsCache
+        .filter(isSvcLike)
+        .filter((card) => allowed.has(siteGroup(card)));
       updateSiteOptions();
       const cards = filterCardsBySite(all, activeSiteId);
       if (!all.length) {
@@ -471,12 +672,17 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     }
 
     async function downloadExcel() {
+      const groups = [...includedGroups()];
+      if (!groups.length) {
+        statusEl.textContent = "Select at least one group (WAG1, WAG2, or Other) before exporting.";
+        return;
+      }
       excelBtn.disabled = true;
       statusEl.textContent = "Building Excel workbook…";
       try {
-        const params = new URLSearchParams({ open: "1" });
-        if (activeSiteId) params.set("card_id", activeSiteId);
-        const res = await fetch(`/api/fc-wwpn-export?${params.toString()}`);
+        let exportUrl = `/api/fc-wwpn-export?open=1&groups=${encodeURIComponent(groups.join(","))}`;
+        if (activeSiteId) exportUrl += `&card_id=${encodeURIComponent(activeSiteId)}`;
+        const res = await fetch(exportUrl);
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
           try {
@@ -590,6 +796,13 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     refreshBtn.addEventListener("click", refreshMonitored);
     printBtn.addEventListener("click", () => window.print());
     excelBtn.addEventListener("click", downloadExcel);
+    searchBtn.addEventListener("click", runFcSearch);
+    searchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") runFcSearch();
+    });
+    filterWag1.addEventListener("change", render);
+    filterWag2.addEventListener("change", render);
+    filterOther.addEventListener("change", render);
     siteSelect.addEventListener("change", () => {
       activeSiteId = siteSelect.value;
       const url = new URL(window.location.href);
