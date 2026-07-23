@@ -716,7 +716,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       window.location.assign("/api/contingency-groups-export");
     });
     document.getElementById("fc-wwpn-btn").addEventListener("click", () => {
-      if (currentId) window.location.assign(`/fc-wwpn?group=${encodeURIComponent(currentId)}`);
+      window.location.assign("/fc-wwpn");
     });
     loadGroups();
   </script>

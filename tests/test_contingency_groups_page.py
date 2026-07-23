@@ -57,25 +57,45 @@ def test_fc_wwpn_report_links_to_contingency_groups():
     assert 'href="/contingency-groups">Contingency Groups</a>' in FC_WWPN_REPORT_HTML
 
 
-def test_fc_wwpn_report_exposes_contingency_group_filter_contract():
+def test_fc_wwpn_report_exposes_site_picker_contract():
     for text in (
-        'id="group-select"',
-        'fetch("/api/contingency-groups")',
-        'new URLSearchParams(window.location.search)',
-        "function groupMatchesHost(",
-        "function groupMatchesVolume(",
-        "function filterCardByGroup(",
+        'id="site-select"',
+        'aria-label="Site"',
+        ">Site</label>",
+        'option value="">None</option>',
+        "function updateSiteOptions(",
+        "function filterCardsBySite(",
+        'new URLSearchParams(window.location.search).get("site")',
+        'url.searchParams.set("site"',
+        'url.searchParams.delete("site")',
     ):
         assert text in FC_WWPN_REPORT_HTML
+    for text in (
+        'id="group-select"',
+        'aria-label="Contingency group"',
+        'fetch("/api/contingency-groups")',
+        "function filterCardByGroup(",
+        "function groupMatchesHost(",
+        "function loadGroups(",
+        'get("group")',
+    ):
+        assert text not in FC_WWPN_REPORT_HTML
 
 
-def test_fc_wwpn_map_modal_uses_group_filtered_card():
+def test_fc_wwpn_map_modal_uses_filtered_card_list():
     assert "openModal(cards.find((c) => c.id === id));" in FC_WWPN_REPORT_HTML
     assert "openModal(cardsCache.find((c) => c.id === id));" not in FC_WWPN_REPORT_HTML
 
 
-def test_fc_wwpn_filter_mappings_match_host_wwpns():
-    assert "mapping.host_wwpns || \"\"" in FC_WWPN_REPORT_HTML
+def test_fc_wwpn_excel_passes_selected_site():
+    assert "function downloadExcel(" in FC_WWPN_REPORT_HTML
+    assert 'params.set("card_id", activeSiteId)' in FC_WWPN_REPORT_HTML
+    assert 'fetch(`/api/fc-wwpn-export?${params.toString()}`)' in FC_WWPN_REPORT_HTML
+
+
+def test_contingency_groups_open_fc_wwpn_without_group_query():
+    assert 'window.location.assign(`/fc-wwpn?group=${encodeURIComponent(currentId)}`)' not in CONTINGENCY_GROUPS_HTML
+    assert 'window.location.assign("/fc-wwpn")' in CONTINGENCY_GROUPS_HTML
 
 
 def test_contingency_groups_snap_modal_stays_hidden_by_default():
