@@ -158,11 +158,86 @@ def _windsor() -> dict[str, Any]:
     }
 
 
+def _woodland_hills_ca() -> dict[str, Any]:
+    esx_hosts = [
+        "PEN-WODESX-VM01",
+        "PEN-WODESX-VM02",
+        "PEN-WODESX-VM03",
+        "PEN-WODESX-VM04",
+    ]
+    vio_hosts = ["pwoovio01a", "pwoovio01b", "pwoovio02a", "pwoovio02b"]
+    hosts = [
+        _host("AWD1_New_as400", port_count=8, wwpns=[]),
+        *[_host(name, port_count=2, wwpns=[]) for name in esx_hosts],
+        *[_host(name, port_count=2, wwpns=[]) for name in vio_hosts],
+    ]
+    esx_uids = {
+        1: "60050768128100A7D000000000000000",
+        2: "60050768128100A7D000000000000001",
+        3: "60050768128100A7D000000000000002",
+        4: "60050768128100A7D000000000000017",
+    }
+    volumes: list[dict[str, Any]] = [
+        _volume(f"AWD1_AS400_{i}", pool="WOO_Pool1", capacity="500.00 GiB")
+        for i in range(1, 7)
+    ]
+    volumes.extend(
+        _volume(
+            f"WOO_ESX_DataStore_{i}",
+            pool="WOO_Pool1",
+            capacity="4.00 TiB",
+            uid=esx_uids[i],
+        )
+        for i in range(1, 5)
+    )
+    for vio in vio_hosts:
+        for n in (1, 2):
+            uid = ""
+            if vio == "pwoovio02b" and n == 1:
+                uid = "60050768128100A7D00000000000000F"
+            elif vio == "pwoovio02b" and n == 2:
+                uid = "60050768128100A7D000000000000010"
+            volumes.append(
+                _volume(
+                    f"{vio}_root_{n}",
+                    pool="WOO_Pool1",
+                    capacity="100.00 GiB",
+                    uid=uid,
+                )
+            )
+    maps: list[dict[str, str]] = []
+    for i in range(1, 7):
+        maps.extend(
+            _maps_all_hosts(f"AWD1_AS400_{i}", ["AWD1_New_as400"], str(i - 1))
+        )
+    for i in range(1, 5):
+        maps.extend(
+            _maps_all_hosts(f"WOO_ESX_DataStore_{i}", esx_hosts, str(i - 1))
+        )
+    for vio in vio_hosts:
+        for n in (1, 2):
+            maps.extend(
+                _maps_all_hosts(f"{vio}_root_{n}", [vio], str(n - 1))
+            )
+    return {
+        "id": "woodland-hills-ca",
+        "name": "Woodland Hills, CA",
+        "location": "Woodland Hills, CA",
+        "storage_hint": "v5kwoo-g3c1",
+        "notes": "",
+        "updated_at": _SEED_UPDATED_AT,
+        "hosts": hosts,
+        "volumes": volumes,
+        "maps": maps,
+    }
+
+
 def seed_contingency_groups() -> list[dict]:
     return [
         generate_snap_rows(_hartford_ct()),
         generate_snap_rows(_houston_tx()),
         generate_snap_rows(_windsor()),
+        generate_snap_rows(_woodland_hills_ca()),
     ]
 
 
