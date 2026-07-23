@@ -2,7 +2,7 @@
 from pathlib import Path
 
 APP_NAME = "LaunchPad"
-APP_VERSION = "1.6.53"
+APP_VERSION = "1.6.54"
 DEFAULT_APP_NAME = APP_NAME
 
 APP_DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME

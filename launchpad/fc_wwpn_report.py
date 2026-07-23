@@ -156,7 +156,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="print-btn" class="btn secondary">Print / Save PDF</button>
         <button type="button" id="excel-btn" class="btn secondary">Export Excel</button>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
-        <a class="btn secondary" href="/contingency-groups">Contingency Groups</a>
+        <a class="btn secondary" href="/contingency-groups">Consistency Groups</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <input type="search" id="fc-search" placeholder="Search WWPN, remote WWPN, host, or volume…" aria-label="Search FC inventory">
         <button type="button" id="fc-search-btn" class="btn secondary">Find</button>

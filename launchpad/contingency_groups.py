@@ -7,7 +7,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LaunchPad Contingency Groups</title>
+  <title>LaunchPad Consistency Groups</title>
   <style>
     :root { --bg:#0b0f14; --panel:#121821; --text:#e8edf5; --muted:#8b98ab; --accent:#ff6b00; --accent2:#ff8533; --ok:#4ade80; --border:#2a3444; --card:#151c27; --danger:#f87171; }
     * { box-sizing:border-box; }
@@ -29,6 +29,9 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     button:disabled { cursor:not-allowed; opacity:.6; }
     select, input, textarea { width:100%; color:var(--text); background:#0f141d; border:1px solid var(--border); border-radius:8px; padding:8px 9px; font:inherit; }
     select { width:auto; min-width:240px; }
+    #cg-search {
+      width:min(420px, 100%); height:34px; padding:0 12px; border-radius:10px;
+    }
     input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent); }
     textarea { min-height:74px; resize:vertical; }
     .summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
@@ -74,13 +77,15 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
 <body>
   <main class="wrap">
     <section class="hero">
-      <h1>Contingency Groups</h1>
-      <p class="lede">Maintain a planning reference for contingency hosts, volumes, and mappings. By default these entries are planning-only; Run Create (after Preview) can create _snap volumes and start FlashCopy on the linked array.</p>
+      <h1>Consistency Groups</h1>
+      <p class="lede">Maintain a planning reference for site hosts, volumes, and mappings. By default these entries are planning-only; Run Create (after Preview) can create _snap volumes and start FlashCopy on the linked array.</p>
       <div class="picker">
         <label for="group-picker">Group
-          <select id="group-picker" aria-label="Contingency group"></select>
+          <select id="group-picker" aria-label="Consistency group"></select>
         </label>
         <button type="button" class="secondary" id="new-group-btn">New group</button>
+        <input type="search" id="cg-search" placeholder="Search group, host, or volume…" aria-label="Search consistency groups">
+        <button type="button" class="secondary" id="cg-search-btn">Find</button>
         <span class="status" id="status" aria-live="polite"></span>
       </div>
       <div class="actions">
@@ -167,7 +172,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         <pre id="cli-commands" hidden></pre>
       </details>
     </section>
-    <p class="footer">LaunchPad Contingency Groups v{{APP_VERSION}} · _snap creation is operator-initiated and only runs after confirmation.</p>
+    <p class="footer">LaunchPad Consistency Groups v{{APP_VERSION}} · _snap creation is operator-initiated and only runs after confirmation.</p>
   </main>
   <div id="snap-modal-backdrop" class="modal-backdrop" hidden>
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="snap-modal-title">
@@ -195,6 +200,8 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     const wizardLabels = ["1 Source", "2 Target", "3 Create & Map"];
     let groups = [];
     let currentId = "";
+    let cgSearchQuery = "";
+    let cgFilterContent = false;
     let persisted = false;
     let wizardStep = 1;
     let advancedOpen = false;
@@ -224,6 +231,142 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     }
     function activeGroup() {
       return groups.find((group) => String(group.id) === currentId) || emptyGroup();
+    }
+    // Keep identity/content match helpers in sync with launchpad.contingency_groups_search
+    function normalizeSearchQuery(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+    function fieldMatchesText(field, q) {
+      if (!q) return false;
+      const text = String(field || "").trim().toLowerCase();
+      return Boolean(text) && text.includes(q);
+    }
+    function wwpnMatches(field, q) {
+      if (!q) return false;
+      const qNorm = String(q).replace(/[\\s:]/g, "").toUpperCase();
+      const parts = Array.isArray(field)
+        ? field
+        : String(field || "").split(/[;,\\s]+/);
+      for (const part of parts) {
+        const token = String(part || "").replace(/[\\s:]/g, "").toUpperCase();
+        if (token && token.includes(qNorm)) return true;
+      }
+      return false;
+    }
+    function groupIdentityMatches(group, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      return fieldMatchesText(group?.name, q) || fieldMatchesText(group?.location, q);
+    }
+    function hostRowMatches(host, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      return fieldMatchesText(host?.name, q) || wwpnMatches(host?.wwpns, q);
+    }
+    function volumeRowMatches(volume, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      return fieldMatchesText(volume?.name, q);
+    }
+    function mapRowMatches(mapping, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      return fieldMatchesText(mapping?.volume, q) || fieldMatchesText(mapping?.host, q);
+    }
+    function groupContentMatches(group, query) {
+      const q = normalizeSearchQuery(query);
+      if (!q) return true;
+      if ((group?.hosts || []).some((host) => host && hostRowMatches(host, query))) return true;
+      if ((group?.volumes || []).some((volume) => volume && volumeRowMatches(volume, query))) return true;
+      if ((group?.maps || []).some((mapping) => mapping && mapRowMatches(mapping, query))) return true;
+      return false;
+    }
+    function findGroupsMatchingIdentity(query) {
+      if (!String(query || "").trim()) return [];
+      return groups
+        .filter((group) => group && groupIdentityMatches(group, query))
+        .slice()
+        .sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+        );
+    }
+    function findGroupsMatchingContent(query) {
+      if (!String(query || "").trim()) return [];
+      return groups
+        .filter((group) => group && groupContentMatches(group, query))
+        .slice()
+        .sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+        );
+    }
+    function applyCgSearchFilter(group) {
+      if (!cgFilterContent || !cgSearchQuery) return;
+      hostsBody.querySelectorAll("tr").forEach((tr) => {
+        const indexAttr = tr.querySelector("[data-index]")?.dataset?.index;
+        if (indexAttr === undefined) return;
+        const host = (group.hosts || [])[Number(indexAttr)];
+        if (!host || !hostRowMatches(host, cgSearchQuery)) tr.style.display = "none";
+      });
+      volumesBody.querySelectorAll("tr").forEach((tr) => {
+        const indexAttr = tr.querySelector("[data-index]")?.dataset?.index;
+        if (indexAttr === undefined) return;
+        const volume = (group.volumes || [])[Number(indexAttr)];
+        if (!volume || !volumeRowMatches(volume, cgSearchQuery)) tr.style.display = "none";
+      });
+      mapsBody.querySelectorAll("tr").forEach((tr) => {
+        const indexAttr = tr.querySelector("[data-index]")?.dataset?.index;
+        if (indexAttr === undefined) return;
+        const mapping = (group.maps || [])[Number(indexAttr)];
+        if (!mapping || !mapRowMatches(mapping, cgSearchQuery)) tr.style.display = "none";
+      });
+    }
+    function selectMatchedGroup(group) {
+      currentId = String(group.id || "");
+      wizardStep = 1;
+      showWizardErrors([]);
+      window.__lastSnapPreviewOk = false;
+      clearCliPanel();
+    }
+    function runCgSearch() {
+      const searchInput = document.getElementById("cg-search");
+      const raw = (searchInput?.value || "").trim();
+      if (!raw) {
+        cgSearchQuery = "";
+        cgFilterContent = false;
+        render();
+        statusEl.textContent = "Search cleared.";
+        return;
+      }
+      const identityMatches = findGroupsMatchingIdentity(raw);
+      if (identityMatches.length) {
+        const first = identityMatches[0];
+        cgSearchQuery = raw;
+        cgFilterContent = false;
+        selectMatchedGroup(first);
+        render();
+        const extra = identityMatches.length - 1;
+        statusEl.textContent = extra
+          ? `Selected ${first.name || first.id} (also ${extra} other group(s))`
+          : `Selected ${first.name || first.id}`;
+        return;
+      }
+      const contentMatches = findGroupsMatchingContent(raw);
+      if (contentMatches.length) {
+        const first = contentMatches[0];
+        cgSearchQuery = raw;
+        cgFilterContent = true;
+        selectMatchedGroup(first);
+        render();
+        const extra = contentMatches.length - 1;
+        statusEl.textContent = extra
+          ? `Found in ${first.name || first.id} (also in ${extra} other group(s))`
+          : `Found in ${first.name || first.id}`;
+        return;
+      }
+      cgSearchQuery = "";
+      cgFilterContent = false;
+      render();
+      statusEl.textContent = "No matching groups, hosts, or volumes";
     }
     function updatePicker() {
       picker.innerHTML = groups.length
@@ -379,6 +522,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       document.getElementById("snap-preview-btn").disabled = !currentId;
       document.getElementById("snap-create-btn").disabled = !currentId || !window.__lastSnapPreviewOk;
       renderWizard();
+      applyCgSearchFilter(group);
     }
     function setFieldValue(event) {
       const input = event.target;
@@ -445,7 +589,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     async function deleteGroup() {
       if (!currentId) return;
       const deletingId = currentId;
-      if (!window.confirm("Delete this contingency group?")) return;
+      if (!window.confirm("Delete this consistency group?")) return;
       groups = groups.filter((group) => group.id !== deletingId);
       currentId = groups[0] ? groups[0].id : "";
       saveLocal();
@@ -630,7 +774,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       );
       if (cardName === null) return;
       if (!cardName.trim()) { statusEl.textContent = "Card name is required for Sync from array."; return; }
-      statusEl.textContent = "Syncing Contingency Group via SSH…";
+      statusEl.textContent = "Syncing Consistency Group via SSH…";
       try {
         const response = await fetch("/api/contingency-groups/sync-inventory", {
           method: "POST",
@@ -683,6 +827,10 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     }
     picker.addEventListener("change", () => { currentId = picker.value; wizardStep = 1; showWizardErrors([]); window.__lastSnapPreviewOk = false; clearCliPanel(); render(); });
     document.getElementById("new-group-btn").addEventListener("click", () => { groups.push(emptyGroup()); currentId = ""; wizardStep = 1; showWizardErrors([]); window.__lastSnapPreviewOk = false; clearCliPanel(); render(); });
+    document.getElementById("cg-search-btn").addEventListener("click", runCgSearch);
+    document.getElementById("cg-search").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") runCgSearch();
+    });
     document.getElementById("add-host-btn").addEventListener("click", () => addRow("hosts"));
     document.getElementById("add-volume-btn").addEventListener("click", () => addRow("volumes"));
     document.getElementById("add-map-btn").addEventListener("click", () => addRow("maps"));

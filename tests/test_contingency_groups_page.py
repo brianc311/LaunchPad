@@ -54,7 +54,17 @@ def test_contingency_groups_hero_lede_describes_planning_and_create():
 
 
 def test_fc_wwpn_report_links_to_contingency_groups():
-    assert 'href="/contingency-groups">Contingency Groups</a>' in FC_WWPN_REPORT_HTML
+    assert 'href="/contingency-groups">Consistency Groups</a>' in FC_WWPN_REPORT_HTML
+
+
+def test_consistency_groups_ui_label_keeps_contingency_path():
+    assert CONTINGENCY_GROUPS_PATH == "/contingency-groups"
+    assert "<h1>Consistency Groups</h1>" in CONTINGENCY_GROUPS_HTML
+    assert "LaunchPad Consistency Groups" in CONTINGENCY_GROUPS_HTML
+    assert 'aria-label="Consistency group"' in CONTINGENCY_GROUPS_HTML
+    assert 'window.confirm("Delete this consistency group?")' in CONTINGENCY_GROUPS_HTML
+    assert 'statusEl.textContent = "Syncing Consistency Group via SSH…";' in CONTINGENCY_GROUPS_HTML
+    assert "/api/contingency-groups" in CONTINGENCY_GROUPS_HTML
 
 
 def test_fc_wwpn_report_exposes_site_picker_contract():
@@ -217,3 +227,19 @@ def test_contingency_groups_page_has_sync_from_array():
     assert "Sync from array" in CONTINGENCY_GROUPS_HTML
     assert 'id="sync-array-btn"' in CONTINGENCY_GROUPS_HTML
     assert "/api/contingency-groups/sync-inventory" in CONTINGENCY_GROUPS_HTML
+
+
+def test_consistency_groups_exposes_find_search():
+    for text in (
+        'id="cg-search"',
+        'id="cg-search-btn"',
+        "function runCgSearch(",
+        "Search group, host, or volume",
+        "No matching groups, hosts, or volumes",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+    run_cg_search = CONTINGENCY_GROUPS_HTML.split("function runCgSearch(", 1)[1]
+    assert 'cgSearchQuery = ""' in run_cg_search
+    assert run_cg_search.index('cgSearchQuery = ""') < run_cg_search.index(
+        "No matching groups, hosts, or volumes"
+    )

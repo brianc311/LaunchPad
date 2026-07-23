@@ -194,7 +194,7 @@ class DashboardView(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions,
-            text="Contingency Groups",
+            text="Consistency Groups",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_contingency_groups,
@@ -1319,26 +1319,26 @@ class DashboardView(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_contingency_groups(self) -> None:
-        self.status_label.configure(text="Opening contingency groups…")
+        self.status_label.configure(text="Opening Consistency Groups…")
         self.update_idletasks()
         try:
             ensure_health_dashboard_registered(self.db, self.crypto_key)
         except Exception as exc:
-            _log(f"Contingency groups register failed: {exc}")
+            _log(f"Consistency Groups register failed: {exc}")
 
         def worker() -> None:
             try:
                 server = get_health_server()
                 server.sync_from_app()
                 url = server.open_contingency_groups()
-                summary = "Contingency Groups opened — reference library only; it does not modify arrays."
+                summary = "Consistency Groups opened — reference library only; it does not modify arrays."
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
             except Exception as exc:
-                _log(f"Contingency groups failed: {exc}")
+                _log(f"Consistency Groups failed: {exc}")
                 self.after(
                     0,
-                    lambda: self._set_status(f"Contingency groups failed: {exc}"),
+                    lambda: self._set_status(f"Consistency Groups failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()
