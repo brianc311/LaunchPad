@@ -295,6 +295,28 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       });
     }
 
+    function expandClampedCellsMatching(query, root) {
+      const scope = root || document.getElementById("sites");
+      if (!scope) return;
+      const raw = String(query || "").trim();
+      if (!raw) return;
+      const qText = raw.toLowerCase();
+      const qWwpn = normalizeWwpn(raw);
+      let first = null;
+      scope.querySelectorAll("td.cell-clamp").forEach((td) => {
+        const text = td.textContent || "";
+        const hit = fieldMatchesText(text, qText) || fieldMatchesWwpn(text, qWwpn);
+        if (!hit) return;
+        td.classList.add("is-expanded");
+        td.setAttribute("aria-expanded", "true");
+        td.title = "Click to collapse";
+        if (!first) first = td;
+      });
+      if (first && typeof first.scrollIntoView === "function") {
+        first.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    }
+
     function isSvcLike(card) {
       const p = String(card.device_profile || "").toLowerCase();
       if (p.includes("ds8884") || p.includes("xiv") || p.includes("ds8")) {
@@ -409,7 +431,8 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     function runFcSearch() {
       const q = (searchInput.value || "").trim();
       if (!q) {
-        statusEl.textContent = "Enter a WWPN, host, or volume to find.";
+        collapseAllClampedCells();
+        statusEl.textContent = "Search cleared.";
         return;
       }
       let matches = cardsCache.filter(isSvcLike).filter((c) => cardMatchesQuery(c, q));
@@ -420,6 +443,8 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
             activeSiteId = String(first.id);
             updateSiteOptions();
             render();
+            applyCellClamps();
+            expandClampedCellsMatching(q);
             const extra = serverMatches.length - 1;
             statusEl.textContent = extra
               ? `Found on ${first.name} (also on ${extra} other site(s))`
@@ -429,6 +454,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
           activeSiteId = "";
           updateSiteOptions();
           render();
+          applyCellClamps();
           statusEl.textContent = `WWPN not found — can't locate site`;
           return;
         }
@@ -438,6 +464,8 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         activeSiteId = String(list[0].id);
         updateSiteOptions();
         render();
+        applyCellClamps();
+        expandClampedCellsMatching(q);
         const extra = list.length - 1;
         statusEl.textContent = extra
           ? `Found on ${list[0].name} (also on ${extra} other site(s))`
