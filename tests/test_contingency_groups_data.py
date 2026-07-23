@@ -1,8 +1,10 @@
 from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
+    ensure_groups_for_cards,
     filter_fc_card,
     generate_snap_rows,
+    group_matches_card,
     group_matches_host,
     group_matches_volume,
     normalize_group,
@@ -12,6 +14,7 @@ from launchpad.contingency_groups_data import (
     snap_pairs,
     snap_volume_name,
     source_volumes,
+    stub_group_for_card,
     upsert_group,
     validate_wizard_step1,
     validate_wizard_step2,
@@ -282,6 +285,77 @@ def test_generate_snap_rows_still_creates_placeholder_when_no_live_snap():
     }
     out = generate_snap_rows(group)
     assert any(v["name"] == "solo_snap" and v.get("role") == "snap" for v in out["volumes"])
+
+
+def test_group_matches_card_by_name_and_hint():
+    group = {
+        "id": "moreno-valley-ca",
+        "name": "Moreno Valley, CA",
+        "storage_hint": "v7kmv",
+        "location": "Moreno Valley, CA",
+    }
+    assert group_matches_card(group, {"name": "Moreno Valley, CA"}) is True
+    assert group_matches_card(group, {"name": "v7kmv"}) is True  # storage_hint
+    assert group_matches_card(group, {"name": "Unrelated Site"}) is False
+
+
+def test_group_matches_card_by_id():
+    group = {
+        "id": "12",
+        "name": "Legacy Group",
+        "location": "Elsewhere",
+        "storage_hint": "array-12",
+    }
+    assert group_matches_card(group, {"id": 12, "name": "Moreno Valley, CA"}) is True
+    assert group_matches_card(group, {"id": 13, "name": "Moreno Valley, CA"}) is False
+
+
+def test_ensure_groups_for_cards_matches_by_card_id_without_duping():
+    existing = [
+        {
+            "id": "12",
+            "name": "Legacy Group",
+            "location": "Elsewhere",
+            "storage_hint": "array-12",
+            "hosts": [{"name": "keep-me", "status": "Online", "host_type": "Generic", "port_count": 2, "protocol": "SCSI", "wwpns": []}],
+            "volumes": [],
+            "maps": [],
+        }
+    ]
+    cards = [{"id": 12, "name": "Moreno Valley, CA", "device_profile": "flashsystem_7200"}]
+    out = ensure_groups_for_cards(existing, cards)
+    assert len(out) == 1
+    legacy = out[0]
+    assert legacy["id"] == "12"
+    assert legacy["name"] == "Legacy Group"
+    assert legacy["hosts"][0]["name"] == "keep-me"
+
+
+def test_ensure_groups_for_cards_adds_stubs_without_duping():
+    existing = [
+        {
+            "id": "windsor",
+            "name": "Windsor",
+            "location": "Windsor",
+            "storage_hint": "v5kwin-g3v1",
+            "hosts": [{"name": "keep-me", "status": "Online", "host_type": "Generic", "port_count": 2, "protocol": "SCSI", "wwpns": []}],
+            "volumes": [],
+            "maps": [],
+        }
+    ]
+    cards = [
+        {"name": "Windsor", "device_profile": "flashsystem_7200"},
+        {"name": "Moreno Valley, CA", "device_profile": "flashsystem_7200"},
+        {"name": "Woodland Hills, CA", "device_profile": "flashsystem_7200"},
+    ]
+    out = ensure_groups_for_cards(existing, cards)
+    names = {g["name"] for g in out}
+    assert "Windsor" in names and "Moreno Valley, CA" in names and "Woodland Hills, CA" in names
+    windsor = next(g for g in out if g["name"] == "Windsor")
+    assert windsor["hosts"][0]["name"] == "keep-me"
+    moreno = next(g for g in out if g["name"] == "Moreno Valley, CA")
+    assert moreno["storage_hint"] == "Moreno Valley, CA"
+    assert moreno["hosts"] == [] and moreno["volumes"] == []
 
 
 def test_filter_fc_card_keeps_mapping_when_host_matches_by_wwpn_only():
