@@ -4,18 +4,20 @@ import hashlib
 import json
 import re
 import socket
+import tempfile
 import threading
 import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from launchpad.capacity_report import CAPACITY_REPORT_HTML, CAPACITY_REPORT_PATH
 from launchpad.command_format import resolve_card_commands
-from launchpad.config import APP_VERSION
+from launchpad.config import APP_VERSION, TEMP_DIR
 from launchpad.contingency_groups_data import (
     CONTINGENCY_GROUPS_SETTING,
     delete_group,
@@ -3537,6 +3539,73 @@ class HealthServer:
                     }
                 )
         return results
+
+    def export_capacity_excel_bytes(
+        self, *, include_monitor_off: bool = False
+    ) -> tuple[bytes, str]:
+        """Build the browser-facing Storage Capacity workbook from registered cards.
+
+        Returns (xlsx_bytes, filename). Refresh failures are captured per-card
+        as an `ExportSite.error` string instead of aborting the whole export.
+        """
+        # Inline import: capacity_export -> monitor -> health_server is a
+        # circular dependency, so this module can't import capacity_export
+        # at top level.
+        from launchpad.capacity_export import (
+            ExportSite,
+            export_storage_capacity_excel_from_sites,
+        )
+
+        with self._lock:
+            card_ids = sorted(self._cards.keys())
+        monitor_enabled = {
+            card_id: self.is_monitor_enabled(card_id) for card_id in card_ids
+        }
+        included_ids = [
+            card_id
+            for card_id in card_ids
+            if include_monitor_off or monitor_enabled.get(card_id, False)
+        ]
+
+        sites: list[ExportSite] = []
+        for card_id in included_ids:
+            with self._lock:
+                card = self._cards.get(card_id)
+            if card is None:
+                continue
+            try:
+                card = self.refresh_card(card_id)
+                error = card.error
+            except Exception as exc:
+                error = str(exc)
+            analysis = analyze_health(card.name, card.command_results, card.metrics)
+            pools = pool_capacity_from_commands(card.command_results)
+            sites.append(
+                ExportSite(
+                    card_id=card_id,
+                    name=card.name,
+                    host=card.host,
+                    serial_number=card.serial_number,
+                    category=card.category,
+                    device_profile=card.device_profile,
+                    capacity_summary=analysis.get("capacity_summary"),
+                    pools=pools,
+                    error=error,
+                )
+            )
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        filename = f"Storage_Capacity_Report_{stamp}.xlsx"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir) / filename
+            export_storage_capacity_excel_from_sites(
+                sites,
+                tmp_path,
+                include_monitor_off=include_monitor_off,
+                monitor_enabled=monitor_enabled,
+            )
+            body = tmp_path.read_bytes()
+        return body, filename
 
     def open_browser_once(self) -> str:
         """Open the health dashboard in the default browser (every call)."""
