@@ -15,3 +15,38 @@ def test_fc_wwpn_exposes_search_and_wag_controls():
         "groups=",
     ):
         assert text in FC_WWPN_REPORT_HTML
+
+
+def test_fc_wwpn_exposes_cell_clamp_controls():
+    for text in (
+        ".cell-clamp",
+        "is-expanded",
+        "function applyCellClamps(",
+        "function collapseAllClampedCells(",
+        "function cellNeedsClamp(",
+        'aria-expanded',
+        "Click to expand",
+    ):
+        assert text in FC_WWPN_REPORT_HTML
+    assert "@media print" in FC_WWPN_REPORT_HTML
+    # print must disable clamp
+    assert "cell-clamp" in FC_WWPN_REPORT_HTML
+    print_block = FC_WWPN_REPORT_HTML[
+        FC_WWPN_REPORT_HTML.index("@media print") : FC_WWPN_REPORT_HTML.index("</style>")
+    ]
+    assert "line-clamp: none" in print_block or "-webkit-line-clamp: unset" in print_block or "overflow: visible" in print_block
+
+
+def test_fc_wwpn_find_expands_and_clears_clamped_cells():
+    for text in (
+        "function expandClampedCellsMatching(",
+        "collapseAllClampedCells(",
+        "Search cleared.",
+    ):
+        assert text in FC_WWPN_REPORT_HTML
+    # empty query path must collapse
+    assert "if (!q)" in FC_WWPN_REPORT_HTML
+    empty_idx = FC_WWPN_REPORT_HTML.index("function runFcSearch(")
+    chunk = FC_WWPN_REPORT_HTML[empty_idx : empty_idx + 2500]
+    assert "collapseAllClampedCells(" in chunk
+    assert "expandClampedCellsMatching(" in chunk
