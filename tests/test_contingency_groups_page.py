@@ -89,8 +89,9 @@ def test_fc_wwpn_map_modal_uses_filtered_card_list():
 
 def test_fc_wwpn_excel_passes_selected_site():
     assert "function downloadExcel(" in FC_WWPN_REPORT_HTML
-    assert 'params.set("card_id", activeSiteId)' in FC_WWPN_REPORT_HTML
-    assert 'fetch(`/api/fc-wwpn-export?${params.toString()}`)' in FC_WWPN_REPORT_HTML
+    assert "groups=" in FC_WWPN_REPORT_HTML
+    assert "`&card_id=${encodeURIComponent(activeSiteId)}`" in FC_WWPN_REPORT_HTML
+    assert "/api/fc-wwpn-export?" in FC_WWPN_REPORT_HTML
 
 
 def test_contingency_groups_open_fc_wwpn_without_group_query():
