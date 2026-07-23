@@ -56,6 +56,7 @@ def test_build_inventory_sync_replaces_shaped_lun_and_cg():
         storage_hint="v7kand-g3v1",
     )
     assert result["pulled"]["skipped_snaps"] == 1
+    assert result["pulled"]["live_snaps"] == 0
     assert result["defaults"]["default_pool_or_cpg"] == "G3_AND_Pool"
     assert result["defaults"]["default_card_hint"] == "Williamston (Anderson)"
     names = [expand_lun_batch(lun)[0]["name"] for lun in result["luns"]]
@@ -142,3 +143,66 @@ def test_build_inventory_sync_refuses_empty_inventory_unless_allowed():
     result = build_inventory_sync(**kwargs, allow_empty=True)
     assert result["hosts"] == []
     assert result["luns"] == []
+
+
+def test_flashcopy_source_candidate():
+    from launchpad.inventory_sync import flashcopy_source_candidate
+
+    assert flashcopy_source_candidate("volA_Snap1") == "volA"
+    assert flashcopy_source_candidate("vol_a_snap") == "vol_a"
+    assert flashcopy_source_candidate("ADC-Data01") is None
+
+
+def test_build_inventory_sync_prefers_live_snap_in_cg():
+    from launchpad.inventory_sync import build_inventory_sync
+    from launchpad.lun_builder_data import expand_lun_batch
+
+    result = build_inventory_sync(
+        hosts=[{"host_name": "esx1", "status": "online", "port_count": "2", "wwpns": "AA;BB"}],
+        volumes=[
+            {"name": "volA", "capacity": "1.00TB", "pool": "Pool1", "uid": "UID-SRC", "status": "online"},
+            {"name": "volA_Snap1", "capacity": "1.00TB", "pool": "Pool1", "uid": "UID-LIVE", "status": "online"},
+            {"name": "orphan_snap", "capacity": "10GB", "pool": "Pool1", "uid": "UID-ORPH", "status": "online"},
+            {"name": "volA_Snap2", "capacity": "1.00TB", "pool": "Pool1", "uid": "UID-2ND", "status": "online"},
+        ],
+        maps=[
+            {"host_name": "esx1", "vdisk_name": "volA", "scsi_id": "0"},
+            {"host_name": "esx1", "vdisk_name": "volA_Snap1", "scsi_id": "9"},
+        ],
+        card_name="Site",
+        storage_profile="flashsystem_7200",
+        storage_hint="hint",
+    )
+    assert result["pulled"]["skipped_snaps"] == 3
+    assert result["pulled"]["live_snaps"] == 1
+    lun_names = [expand_lun_batch(lun)[0]["name"] for lun in result["luns"]]
+    assert lun_names == ["volA"]
+    snaps = [v for v in result["group"]["volumes"] if v.get("role") == "snap"]
+    assert len(snaps) == 1
+    assert snaps[0]["name"] == "volA_Snap1"
+    assert snaps[0]["uid"] == "UID-LIVE"
+    assert snaps[0]["source_volume"] == "volA"
+    assert "orphan_snap" not in {v["name"] for v in result["group"]["volumes"]}
+    assert "volA_Snap2" not in {v["name"] for v in result["group"]["volumes"]}
+    assert "volA_snap" not in {v["name"] for v in result["group"]["volumes"]}
+    snap_maps = [m for m in result["group"]["maps"] if m.get("role") == "snap"]
+    assert snap_maps and all(m["volume"] == "volA_Snap1" for m in snap_maps)
+
+
+def test_build_inventory_sync_generates_snap_when_no_live_match():
+    from launchpad.inventory_sync import build_inventory_sync
+
+    result = build_inventory_sync(
+        hosts=[{"host_name": "esx1", "status": "online", "port_count": "2", "wwpns": "AA;BB"}],
+        volumes=[
+            {"name": "solo", "capacity": "50GB", "pool": "P", "uid": "U1", "status": "online"},
+        ],
+        maps=[{"host_name": "esx1", "vdisk_name": "solo", "scsi_id": "1"}],
+        card_name="Site",
+        storage_profile="flashsystem_7200",
+        storage_hint="hint",
+    )
+    assert result["pulled"]["live_snaps"] == 0
+    snaps = [v for v in result["group"]["volumes"] if v.get("role") == "snap"]
+    assert len(snaps) == 1
+    assert snaps[0]["name"] == "solo_snap"

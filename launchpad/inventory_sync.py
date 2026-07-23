@@ -15,6 +15,16 @@ def is_flashcopy_target_name(name: str) -> bool:
     return bool(re.search(r"(?i)(^|_)snap\d*(_|$)", text))
 
 
+def flashcopy_source_candidate(name: str) -> str | None:
+    text = str(name or "").strip()
+    if not is_flashcopy_target_name(text):
+        return None
+    candidate = re.sub(r"(?i)_snap\d*(?=_|$)", "", text)
+    candidate = re.sub(r"(?i)^snap\d*_?", "", candidate)
+    candidate = candidate.strip("_")
+    return candidate or None
+
+
 def _split_values(raw: Any) -> list[str]:
     if isinstance(raw, (list, tuple, set)):
         values = raw
@@ -203,6 +213,31 @@ def build_inventory_sync(
             }
         )
 
+    claimed_sources: set[str] = set()
+    live_snaps = 0
+    for volume in volumes:
+        name = str(volume.get("name") or "").strip()
+        if not is_flashcopy_target_name(name):
+            continue
+        candidate = flashcopy_source_candidate(name)
+        if candidate not in kept_names:
+            continue
+        if candidate in claimed_sources:
+            continue
+        cg_volumes.append(
+            {
+                "name": name,
+                "capacity": str(volume.get("capacity") or "").strip(),
+                "pool": str(volume.get("pool") or "").strip(),
+                "uid": str(volume.get("uid") or "").strip(),
+                "protocol": "SCSI",
+                "role": "snap",
+                "source_volume": candidate,
+            }
+        )
+        claimed_sources.add(candidate)
+        live_snaps += 1
+
     group = generate_snap_rows(
         {
             "id": group_id or _slugify(card_name),
@@ -230,6 +265,7 @@ def build_inventory_sync(
             "volumes": len(kept_volumes),
             "maps": len(source_maps),
             "skipped_snaps": skipped_snaps,
+            "live_snaps": live_snaps,
         },
         "warnings": warnings,
     }

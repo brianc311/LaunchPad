@@ -113,6 +113,17 @@ def test_lun_builder_section_header_counts():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_sync_inventory_status_includes_live_snaps():
+    sync_function = LUN_BUILDER_HTML.split("async function syncInventory()", 1)[1].split(
+        "async function load()", 1
+    )[0]
+    for text in (
+        "skipped_snaps=${p.skipped_snaps||0}",
+        "live_snaps=${p.live_snaps||0}",
+    ):
+        assert text in sync_function
+
+
 def test_lun_builder_page_contract():
     for text in (
         "LUN Builder",

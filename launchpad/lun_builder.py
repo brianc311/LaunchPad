@@ -864,7 +864,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         builds = data.builds; saveLocal(); invalidatePreview(); render();
         const p = data.pulled || {};
         importMessage(
-          `Synced hosts=${p.hosts||0} volumes=${p.volumes||0} maps=${p.maps||0} skipped_snaps=${p.skipped_snaps||0}. CG upserted. No create was run.`,
+          `Synced hosts=${p.hosts||0} volumes=${p.volumes||0} maps=${p.maps||0} skipped_snaps=${p.skipped_snaps||0} live_snaps=${p.live_snaps||0}. CG upserted. No create was run.`,
           data.warnings
         );
       } catch (error) {

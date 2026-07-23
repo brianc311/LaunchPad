@@ -188,24 +188,36 @@ def generate_snap_rows(group: dict) -> dict:
     volumes = list(g["volumes"])
     maps = list(g["maps"])
     by_name = {str(v.get("name") or ""): v for v in volumes}
+    linked_snap_by_source: dict[str, str] = {}
+    for vol in volumes:
+        if str(vol.get("role") or "").lower() != "snap":
+            continue
+        source = str(vol.get("source_volume") or "").strip()
+        snap_name = str(vol.get("name") or "").strip()
+        if source and snap_name and source not in linked_snap_by_source:
+            linked_snap_by_source[source] = snap_name
     for vol in list(volumes):
         role = str(vol.get("role") or "source").lower()
         name = str(vol.get("name") or "")
         if role == "snap" or name.endswith(SNAP_SUFFIX):
             continue
-        target = snap_volume_name(name)
-        if target not in by_name:
-            snap = {
-                "name": target,
-                "capacity": vol.get("capacity") or "",
-                "pool": vol.get("pool") or "",
-                "uid": "",
-                "protocol": vol.get("protocol") or "SCSI",
-                "role": "snap",
-                "source_volume": name,
-            }
-            volumes.append(snap)
-            by_name[target] = snap
+        if name in linked_snap_by_source:
+            target = linked_snap_by_source[name]
+        else:
+            target = snap_volume_name(name)
+            if target not in by_name:
+                snap = {
+                    "name": target,
+                    "capacity": vol.get("capacity") or "",
+                    "pool": vol.get("pool") or "",
+                    "uid": "",
+                    "protocol": vol.get("protocol") or "SCSI",
+                    "role": "snap",
+                    "source_volume": name,
+                }
+                volumes.append(snap)
+                by_name[target] = snap
+                linked_snap_by_source[name] = target
         source_maps = [
             m
             for m in maps
@@ -267,6 +279,17 @@ def source_maps_for_volume(group: dict, volume_name: str) -> list[dict]:
     return out
 
 
+def _resolve_snap_target(source_name: str, volumes: list, by_name: dict) -> dict | None:
+    for vol in volumes:
+        if (
+            isinstance(vol, dict)
+            and str(vol.get("role") or "").lower() == "snap"
+            and str(vol.get("source_volume") or "") == source_name
+        ):
+            return vol
+    return by_name.get(snap_volume_name(source_name))
+
+
 def snap_pairs(group: dict) -> list[dict]:
     pairs: list[dict] = []
     volumes = group.get("volumes") or []
@@ -278,12 +301,13 @@ def snap_pairs(group: dict) -> list[dict]:
     }
     for source in source_volumes(group):
         source_name = str(source.get("name") or "")
-        target_name = snap_volume_name(source_name)
-        target = by_name.get(target_name)
+        target = _resolve_snap_target(source_name, volumes, by_name)
+        target_name = str(target.get("name") or "") if isinstance(target, dict) else ""
         snap_maps = [
             mapping
             for mapping in maps
             if isinstance(mapping, dict)
+            and target_name
             and str(mapping.get("volume") or "") == target_name
             and str(mapping.get("role") or "").lower() == "snap"
         ]
@@ -322,8 +346,7 @@ def validate_wizard_step2(group: dict) -> list[str]:
     }
     for source in source_volumes(group):
         source_name = str(source.get("name") or "")
-        target_name = snap_volume_name(source_name)
-        target = by_name.get(target_name)
+        target = _resolve_snap_target(source_name, volumes, by_name)
         if target is None or not is_snap_volume(target):
             warnings.append(f"Missing target volume for source {source_name}")
     return warnings
