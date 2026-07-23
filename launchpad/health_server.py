@@ -52,7 +52,7 @@ from launchpad.flashsystem_fc import (
     parse_host_lun_maps,
     parse_lsvdisk_volumes,
 )
-from launchpad.flashsystem_health import analyze_health
+from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
@@ -2108,6 +2108,44 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=500)
                 return
             self._send_bytes(body, content_type=content_type, filename=filename)
+            return
+        if path == "/api/capacity-export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            include_off = (query.get("include_off") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            open_after = (query.get("open") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                server.sync_from_app()
+                body, filename = server.export_capacity_excel_bytes(
+                    include_monitor_off=include_off
+                )
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Capacity Excel opened: {saved}")
+                except Exception as open_exc:
+                    _log(f"Capacity Excel saved for download but could not open: {open_exc}")
+            self._send_bytes(
+                body,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
             return
         self.send_error(404)
 
