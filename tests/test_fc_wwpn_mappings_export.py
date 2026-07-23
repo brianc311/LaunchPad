@@ -4,6 +4,7 @@ from io import BytesIO, StringIO
 from pathlib import Path
 
 from launchpad import health_server as health_server_mod
+from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML
 from launchpad.fc_wwpn_export import (
     MAPPINGS_FABRIC_HEADERS,
     MAPPINGS_HOST_HEADERS,
@@ -86,6 +87,26 @@ def test_export_fc_mappings_csv_zip_contains_three_files():
         )
         assert fabric[0] == list(MAPPINGS_FABRIC_HEADERS)
         assert fabric[1][0] == "node1"
+
+
+def test_fc_wwpn_modal_exposes_mappings_export_controls():
+    for text in (
+        'id="modal-export-excel-btn"',
+        'id="modal-export-csv-btn"',
+        'id="modal-print-btn"',
+        "Export Excel",
+        "Export CSV",
+        "Print / Save PDF",
+        "/api/fc-wwpn-mappings-export",
+        'params.set("card_id", String(activeCard.id))',
+        'params.set("format", format)',
+        "function printModalMappings(",
+        "Hosts & WWPNs",
+        "LUN Mappings",
+        "Fabric Logins",
+        "window.print()",
+    ):
+        assert text in FC_WWPN_REPORT_HTML
 
 
 def test_health_server_exposes_fc_wwpn_mappings_export_route():
