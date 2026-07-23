@@ -1,7 +1,9 @@
 import csv
 import zipfile
 from io import BytesIO, StringIO
+from pathlib import Path
 
+from launchpad import health_server as health_server_mod
 from launchpad.fc_wwpn_export import (
     MAPPINGS_FABRIC_HEADERS,
     MAPPINGS_HOST_HEADERS,
@@ -84,3 +86,13 @@ def test_export_fc_mappings_csv_zip_contains_three_files():
         )
         assert fabric[0] == list(MAPPINGS_FABRIC_HEADERS)
         assert fabric[1][0] == "node1"
+
+
+def test_health_server_exposes_fc_wwpn_mappings_export_route():
+    source = Path(health_server_mod.__file__).read_text(encoding="utf-8")
+    assert 'path == "/api/fc-wwpn-mappings-export"' in source
+    assert "build_fc_mappings_workbook" in source
+    assert "export_fc_mappings_csv_zip" in source
+    assert '{"error": "card_id required"}' in source or '"card_id required"' in source
+    assert '"Unknown card_id"' in source
+    assert '"format must be xlsx or csv"' in source
