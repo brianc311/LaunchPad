@@ -111,9 +111,11 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       th { background: #eee; color: #333; }
       th, td { border-color: #bbb; }
       .site { page-break-inside: avoid; }
-      #modal-print { display: block !important; }
-      #modal-print h4 { margin: 16px 0 8px; color: #c2410c; }
-      .modal-actions, .tabs, #modal-body { display: none !important; }
+      body.printing-modal-mappings .hero,
+      body.printing-modal-mappings #sites,
+      body.printing-modal-mappings .footer { display: none !important; }
+      body.printing-modal-mappings #modal-print { display: block !important; }
+      body.printing-modal-mappings #modal-print h4 { margin: 16px 0 8px; color: #c2410c; }
     }
   </style>
 </head>
@@ -144,6 +146,8 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     <p class="footer">LaunchPad FC WWPN v{{APP_VERSION}} · Keep LaunchPad running while refreshing.</p>
   </div>
 
+  <div id="modal-print"></div>
+
   <div class="modal-backdrop" id="modal" role="dialog" aria-modal="true">
     <div class="modal">
       <div class="modal-actions no-print" style="float:right;display:flex;gap:8px;flex-wrap:wrap;">
@@ -160,7 +164,6 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" class="tab" data-tab="fabric">Fabric Logins</button>
       </div>
       <div id="modal-body"></div>
-      <div id="modal-print"></div>
     </div>
   </div>
 
@@ -433,6 +436,16 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <h4>Fabric Logins</h4>
         ${tableFromRows(["Node", "Local WWPN", "Remote WWPN", "Host", "State", "Local port"], fabricRows)}
       `;
+      document.body.classList.add("printing-modal-mappings");
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        document.body.classList.remove("printing-modal-mappings");
+        window.removeEventListener("afterprint", cleanup);
+      };
+      window.addEventListener("afterprint", cleanup);
+      setTimeout(cleanup, 2000);
       window.print();
     }
 

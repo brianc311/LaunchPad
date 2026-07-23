@@ -105,8 +105,17 @@ def test_fc_wwpn_modal_exposes_mappings_export_controls():
         "LUN Mappings",
         "Fabric Logins",
         "window.print()",
+        'classList.add("printing-modal-mappings")',
+        "afterprint",
+        "body.printing-modal-mappings #modal-print",
     ):
         assert text in FC_WWPN_REPORT_HTML
+
+    modal_print_pos = FC_WWPN_REPORT_HTML.index('<div id="modal-print"></div>')
+    backdrop_pos = FC_WWPN_REPORT_HTML.index('<div class="modal-backdrop"')
+    assert modal_print_pos < backdrop_pos
+    backdrop_section = FC_WWPN_REPORT_HTML[backdrop_pos:]
+    assert '<div id="modal-print"></div>' not in backdrop_section
 
 
 def test_health_server_exposes_fc_wwpn_mappings_export_route():
