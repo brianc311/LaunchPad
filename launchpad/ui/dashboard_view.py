@@ -262,7 +262,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self.on_admin,
-        ).grid(row=0, column=9, padx=6)
+        ).grid(row=0, column=10, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -270,7 +270,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["danger"],
             hover_color="#B91C1C",
             command=self.on_lock,
-        ).grid(row=0, column=10, padx=6)
+        ).grid(row=0, column=11, padx=6)
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
