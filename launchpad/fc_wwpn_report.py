@@ -101,6 +101,23 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     }
     th { background: #0f141d; color: var(--muted); font-weight: 700; }
     td.mono { font-family: Consolas, monospace; letter-spacing: 0.02em; }
+    td.cell-clamp {
+      cursor: pointer;
+      max-width: 28rem;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: normal;
+      word-break: break-all;
+    }
+    td.cell-clamp.is-expanded {
+      display: table-cell;
+      -webkit-line-clamp: unset;
+      overflow: visible;
+      max-width: none;
+    }
     .empty {
       color: var(--muted); border: 1px dashed var(--border); border-radius: 12px;
       padding: 14px 16px; background: rgba(15,20,29,0.45);
@@ -139,6 +156,12 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       body.printing-modal-mappings .footer { display: none !important; }
       body.printing-modal-mappings #modal-print { display: block !important; }
       body.printing-modal-mappings #modal-print h4 { margin: 16px 0 8px; color: #c2410c; }
+      td.cell-clamp, td.cell-clamp.is-expanded {
+        display: table-cell;
+        -webkit-line-clamp: unset;
+        overflow: visible;
+        max-width: none;
+      }
     }
   </style>
 </head>
@@ -240,6 +263,36 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function cellNeedsClamp(td) {
+      const text = (td.textContent || "").trim();
+      if (!text) return false;
+      if (text.includes("\n") || text.includes(";")) return true;
+      return td.scrollHeight > td.clientHeight + 1;
+    }
+
+    function collapseAllClampedCells(root) {
+      const scope = root || document.getElementById("sites");
+      if (!scope) return;
+      scope.querySelectorAll("td.cell-clamp.is-expanded").forEach((td) => {
+        td.classList.remove("is-expanded");
+        td.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    function applyCellClamps(root) {
+      const scope = root || document.getElementById("sites");
+      if (!scope) return;
+      scope.querySelectorAll("td").forEach((td) => {
+        td.classList.remove("cell-clamp", "is-expanded");
+        td.removeAttribute("aria-expanded");
+        td.removeAttribute("title");
+        if (!cellNeedsClamp(td)) return;
+        td.classList.add("cell-clamp");
+        td.setAttribute("aria-expanded", "false");
+        td.title = "Click to expand";
+      });
     }
 
     function isSvcLike(card) {
@@ -515,10 +568,12 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       const cards = filterCardsBySite(all, activeSiteId);
       if (!all.length) {
         sitesEl.innerHTML = '<p class="empty">No storage sites with FC data. Register IBM FlashSystem/Storwize/SVC cards, load presets, monitor, and refresh.</p>';
+        applyCellClamps();
         return;
       }
       if (activeSiteId && !cards.length) {
         sitesEl.innerHTML = '<p class="empty">Selected site not found in the loaded card list.</p>';
+        applyCellClamps();
         return;
       }
       sitesEl.innerHTML = cards.map(renderSite).join("");
@@ -531,6 +586,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       if (activeSiteId) {
         statusEl.textContent = `Showing ${cards.length} of ${all.length} site(s)`;
       }
+      applyCellClamps();
     }
 
     function tableFromRows(headers, rows) {
@@ -804,6 +860,14 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     filterWag1.addEventListener("change", render);
     filterWag2.addEventListener("change", render);
     filterOther.addEventListener("change", render);
+    sitesEl.addEventListener("click", (event) => {
+      const td = event.target.closest("td.cell-clamp");
+      if (!td || !sitesEl.contains(td)) return;
+      const open = !td.classList.contains("is-expanded");
+      td.classList.toggle("is-expanded", open);
+      td.setAttribute("aria-expanded", open ? "true" : "false");
+      td.title = open ? "Click to collapse" : "Click to expand";
+    });
     siteSelect.addEventListener("change", () => {
       activeSiteId = siteSelect.value;
       const url = new URL(window.location.href);
