@@ -7,7 +7,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LaunchPad Contingency Groups</title>
+  <title>LaunchPad Consistency Groups</title>
   <style>
     :root { --bg:#0b0f14; --panel:#121821; --text:#e8edf5; --muted:#8b98ab; --accent:#ff6b00; --accent2:#ff8533; --ok:#4ade80; --border:#2a3444; --card:#151c27; --danger:#f87171; }
     * { box-sizing:border-box; }
@@ -74,11 +74,11 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
 <body>
   <main class="wrap">
     <section class="hero">
-      <h1>Contingency Groups</h1>
-      <p class="lede">Maintain a planning reference for contingency hosts, volumes, and mappings. By default these entries are planning-only; Run Create (after Preview) can create _snap volumes and start FlashCopy on the linked array.</p>
+      <h1>Consistency Groups</h1>
+      <p class="lede">Maintain a planning reference for site hosts, volumes, and mappings. By default these entries are planning-only; Run Create (after Preview) can create _snap volumes and start FlashCopy on the linked array.</p>
       <div class="picker">
         <label for="group-picker">Group
-          <select id="group-picker" aria-label="Contingency group"></select>
+          <select id="group-picker" aria-label="Consistency group"></select>
         </label>
         <button type="button" class="secondary" id="new-group-btn">New group</button>
         <span class="status" id="status" aria-live="polite"></span>
@@ -167,7 +167,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         <pre id="cli-commands" hidden></pre>
       </details>
     </section>
-    <p class="footer">LaunchPad Contingency Groups v{{APP_VERSION}} · _snap creation is operator-initiated and only runs after confirmation.</p>
+    <p class="footer">LaunchPad Consistency Groups v{{APP_VERSION}} · _snap creation is operator-initiated and only runs after confirmation.</p>
   </main>
   <div id="snap-modal-backdrop" class="modal-backdrop" hidden>
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="snap-modal-title">

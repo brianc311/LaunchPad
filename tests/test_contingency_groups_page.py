@@ -54,7 +54,15 @@ def test_contingency_groups_hero_lede_describes_planning_and_create():
 
 
 def test_fc_wwpn_report_links_to_contingency_groups():
-    assert 'href="/contingency-groups">Contingency Groups</a>' in FC_WWPN_REPORT_HTML
+    assert 'href="/contingency-groups">Consistency Groups</a>' in FC_WWPN_REPORT_HTML
+
+
+def test_consistency_groups_ui_label_keeps_contingency_path():
+    assert CONTINGENCY_GROUPS_PATH == "/contingency-groups"
+    assert "<h1>Consistency Groups</h1>" in CONTINGENCY_GROUPS_HTML
+    assert "LaunchPad Consistency Groups" in CONTINGENCY_GROUPS_HTML
+    assert 'aria-label="Consistency group"' in CONTINGENCY_GROUPS_HTML
+    assert "/api/contingency-groups" in CONTINGENCY_GROUPS_HTML
 
 
 def test_fc_wwpn_report_exposes_site_picker_contract():

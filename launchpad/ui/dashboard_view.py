@@ -194,7 +194,7 @@ class DashboardView(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions,
-            text="Contingency Groups",
+            text="Consistency Groups",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_contingency_groups,
@@ -1331,7 +1331,7 @@ class DashboardView(ctk.CTkFrame):
                 server = get_health_server()
                 server.sync_from_app()
                 url = server.open_contingency_groups()
-                summary = "Contingency Groups opened — reference library only; it does not modify arrays."
+                summary = "Consistency Groups opened — reference library only; it does not modify arrays."
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
             except Exception as exc:
