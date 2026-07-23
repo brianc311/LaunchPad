@@ -40,6 +40,46 @@ def test_expand_single_keeps_purpose_name():
     assert rows[0]["name"] == "caavg_private"
 
 
+def test_exact_name_expand_uses_purpose_as_volume_name():
+    rows = expand_lun_batch(
+        {
+            "purpose": "WOO_ESX_DataStore_1",
+            "count": 1,
+            "size": "1TB",
+            "shared": True,
+            "host_names": ["a", "b"],
+            "exact_name": True,
+            "name_prefix": "",
+            "storage_profile": "flashsystem_5200",
+            "pool_or_cpg": "WOO_Pool1",
+            "card_hint": "Woodland Hills, CA",
+            "scsi_or_lun_id": "0",
+            "cluster": "",
+        }
+    )
+    assert len(rows) == 1
+    assert rows[0]["name"] == "WOO_ESX_DataStore_1"
+
+
+def test_normalize_lun_row_preserves_exact_name():
+    build = normalize_build(
+        {
+            "id": "lab",
+            "name": "Lab",
+            "hosts": [],
+            "luns": [
+                {
+                    "purpose": "WOO_ESX_DataStore_1",
+                    "count": 1,
+                    "size": "1TB",
+                    "exact_name": True,
+                }
+            ],
+        }
+    )
+    assert build["luns"][0]["exact_name"] is True
+
+
 def test_expand_infers_pcon_prefix_from_host():
     rows = expand_lun_batch(
         {
@@ -179,7 +219,7 @@ def test_normalize_keeps_command_done_map():
 
 def test_hartford_template_identity():
     templates = seed_lun_builder_templates()
-    assert len(templates) == 5
+    assert len(templates) == 15
     hartford = next(t for t in templates if t["id"] == "template-hartford-ct")
     assert hartford["id"] == "template-hartford-ct"
     assert hartford["name"] == "Hartford, CT (Template)"
