@@ -31,6 +31,7 @@ HP_3PAR_COMMANDS: list[tuple[str, str]] = [
     ("Health - Alerts", "showalert"),
     ("Capacity - System", "showsys -d"),
     ("Capacity - CPG %", "showcpg -sdg"),
+    ("Volumes - VV list", "showvv"),
     ("CPU - Load", "statcpu"),
     ("Health - Disks", "showpd"),
     ("Health - Nodes", "shownode -d"),
@@ -44,6 +45,7 @@ HPE_PRIMERA_COMMANDS: list[tuple[str, str]] = [
     ("Health - Disks", "showpd -status"),
     ("Capacity - System %", "showspace"),
     ("Capacity - CPG %", "showspace -cpg"),
+    ("Volumes - VV list", "showvv"),
     ("CPU - All Nodes %", "statcpu -iter 1"),
     ("Memory - Cache %", "statcache -iter 1"),
 ]

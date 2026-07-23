@@ -56,6 +56,7 @@ from launchpad.flashsystem_health import analyze_health, pool_capacity_from_comm
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
+from launchpad.volume_find_page import VOLUME_FIND_HTML, VOLUME_FIND_PATH
 from launchpad.lun_builder_data import (
     LUN_BUILDS_SETTING,
     delete_build,
@@ -84,10 +85,18 @@ from launchpad.snapshot_schedule_overrides import (
 )
 from launchpad.ssh_commands import run_remote_command_suite, run_remote_ssh_command
 from launchpad.ssh_launcher import _log
+from launchpad.ssh_paramiko import run_ssh_auth_hpe_commands
 from launchpad.storage_presets import (
     DEVICE_PROFILES,
     HPE_SHELL_PROFILES,
     SVC_PROFILES,
+)
+from launchpad.volume_find import (
+    find_volumes_in_cards,
+    is_volume_find_eligible,
+    parse_showvv_volumes,
+    vendor_for_profile,
+    volume_name_matches,
 )
 
 DEFAULT_PORT = 18765
@@ -120,6 +129,7 @@ class HealthCard:
         return {
             "id": self.card_id,
             "name": self.name,
+            "card_type": "ssh",
             "host": self.host,
             "port": self.port,
             "username": self.username,
@@ -1751,6 +1761,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == LUN_BUILDER_PATH:
             self._send_html(LUN_BUILDER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == VOLUME_FIND_PATH:
+            self._send_html(VOLUME_FIND_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == FC_WWPN_REPORT_PATH:
             self._send_html(FC_WWPN_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
@@ -1947,6 +1960,20 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 filename=f"Snapshot_Schedule_{group_label}_{stamp}.xlsx",
             )
+            return
+        if path == "/api/volume-find":
+            query = parse_qs(parsed.query)
+            q = (query.get("q") or [""])[0]
+            mode = (query.get("mode") or ["cache"])[0]
+            try:
+                payload = server.find_volumes(q, mode=mode)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
             return
         if path == "/api/fc-wwpn-find":
             from launchpad.fc_wwpn_search import find_cards_matching_fc_query
@@ -2534,6 +2561,10 @@ class HealthServer:
         with self._lock:
             self._get_setting = get_setting
             self._set_setting = set_setting
+
+    def is_unlocked(self) -> bool:
+        with self._lock:
+            return self._get_setting is not None
 
     def snapshot_schedule_persist_available(self) -> bool:
         with self._lock:
@@ -3366,6 +3397,96 @@ class HealthServer:
         with self._lock:
             return self._monitor_enabled.get(card_id, False)
 
+    def find_volumes(self, query: str, *, mode: str = "cache") -> dict[str, Any]:
+        q = str(query or "").strip()
+        if not q:
+            return {"matches": [], "errors": []}
+        mode_key = str(mode or "cache").strip().lower()
+        if mode_key not in {"cache", "live"}:
+            raise ValueError("mode must be cache or live")
+        self.sync_from_app()
+        cards = self.list_cards(allow_sync=False)
+        monitor = {
+            c["id"]: self.is_monitor_enabled(int(c["id"]))
+            for c in cards
+            if c.get("id") is not None
+        }
+        if mode_key == "cache":
+            return {
+                "matches": find_volumes_in_cards(
+                    cards, q, monitor_enabled=monitor, source="cache"
+                ),
+                "errors": [],
+            }
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to search volumes live.")
+        matches: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            card_id = card_dict.get("id")
+            if card_id is None:
+                continue
+            monitor_on = bool(
+                monitor.get(card_id, monitor.get(str(card_id), False))
+            )
+            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            card = self._cards.get(int(card_id))
+            if card is None:
+                continue
+            profile = str(card.device_profile or "")
+            try:
+                if vendor_for_profile(profile) == "hpe":
+                    outputs = run_ssh_auth_hpe_commands(
+                        card.host,
+                        card.port,
+                        card.username,
+                        ["showvv"],
+                        password=card.password,
+                        key_path=card.key_path,
+                        key_passphrase=card.key_passphrase,
+                    )
+                    output = outputs[0] if outputs else ""
+                    vols = parse_showvv_volumes(output)
+                else:
+                    run = self._lun_run_command(card)
+                    output = run("svcinfo lsvdisk -delim :")
+                    vols = [
+                        {
+                            "name": r["name"],
+                            "pool_or_cpg": r.get("pool") or "",
+                        }
+                        for r in parse_lsvdisk_volumes(output)
+                    ]
+                for vol in vols:
+                    if volume_name_matches(vol["name"], q):
+                        matches.append(
+                            {
+                                "card_id": card.card_id,
+                                "card_name": card.name,
+                                "profile": profile,
+                                "vendor": vendor_for_profile(profile),
+                                "volume": vol["name"],
+                                "pool_or_cpg": vol.get("pool_or_cpg") or "",
+                                "source": "live",
+                            }
+                        )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": str(exc),
+                    }
+                )
+        matches.sort(
+            key=lambda m: (
+                str(m.get("card_name") or "").lower(),
+                str(m.get("volume") or "").lower(),
+            )
+        )
+        return {"matches": matches, "errors": errors}
+
     def sync_from_app(self) -> int:
         with self._lock:
             provider = self._sync_provider
@@ -3399,6 +3520,10 @@ class HealthServer:
     @property
     def lun_builder_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{LUN_BUILDER_PATH}"
+
+    @property
+    def volume_find_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{VOLUME_FIND_PATH}"
 
     @property
     def fc_consistgrp_url(self) -> str:
@@ -3553,6 +3678,7 @@ class HealthServer:
                     {
                         "id": card.card_id,
                         "name": card.name,
+                        "card_type": "ssh",
                         "host": card.host,
                         "port": card.port,
                         "username": card.username,
@@ -3691,6 +3817,13 @@ class HealthServer:
         webbrowser.open(self.lun_builder_url)
         _log(f"Opened LUN Builder in browser: {self.lun_builder_url}")
         return self.lun_builder_url
+
+    def open_volume_find(self) -> str:
+        """Open the Volume Find page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.volume_find_url)
+        _log(f"Opened Volume Find in browser: {self.volume_find_url}")
+        return self.volume_find_url
 
     def open_fc_consistgrp(self, card_id: int | None = None) -> str:
         """Open the FlashCopy consistency groups page in the default browser."""
