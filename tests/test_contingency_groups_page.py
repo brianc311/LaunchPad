@@ -227,3 +227,19 @@ def test_contingency_groups_page_has_sync_from_array():
     assert "Sync from array" in CONTINGENCY_GROUPS_HTML
     assert 'id="sync-array-btn"' in CONTINGENCY_GROUPS_HTML
     assert "/api/contingency-groups/sync-inventory" in CONTINGENCY_GROUPS_HTML
+
+
+def test_consistency_groups_exposes_find_search():
+    for text in (
+        'id="cg-search"',
+        'id="cg-search-btn"',
+        "function runCgSearch(",
+        "Search group, host, or volume",
+        "No matching groups, hosts, or volumes",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+    run_cg_search = CONTINGENCY_GROUPS_HTML.split("function runCgSearch(", 1)[1]
+    assert 'cgSearchQuery = ""' in run_cg_search
+    assert run_cg_search.index('cgSearchQuery = ""') < run_cg_search.index(
+        "No matching groups, hosts, or volumes"
+    )
