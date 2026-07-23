@@ -168,6 +168,60 @@ def parse_fabric_logins(output: str) -> list[dict[str, str]]:
     return logins
 
 
+def _norm_node(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _attach_fabric_logins_to_ports(
+    ports: list[dict[str, str]],
+    fabric: list[dict[str, str]],
+) -> None:
+    """Fill logged_in_count / remote_wwpns / fabric_hosts on each port.
+
+    Prefer WWPN match. When lsportfc physical WWPN differs from lsfabric NPIV
+    local_wwpn (common on FlashSystem), also match node + local_port to
+    fc_io_port_id or port_id.
+    """
+    by_wwpn: dict[str, list[dict[str, str]]] = {}
+    by_node_port: dict[tuple[str, str], list[dict[str, str]]] = {}
+    for login in fabric:
+        local = login.get("local_wwpn") or ""
+        if local:
+            by_wwpn.setdefault(local, []).append(login)
+        node = _norm_node(login.get("node_name"))
+        local_port = str(login.get("local_port") or "").strip()
+        if node and local_port:
+            by_node_port.setdefault((node, local_port), []).append(login)
+            stripped = local_port.lstrip("0") or "0"
+            if stripped != local_port:
+                by_node_port.setdefault((node, stripped), []).append(login)
+
+    for port in ports:
+        wwpn = port.get("wwpn") or ""
+        matched: list[dict[str, str]] = list(by_wwpn.get(wwpn, []))
+        seen = {id(login) for login in matched}
+        node = _norm_node(port.get("node_name"))
+        fc_io = str(port.get("fc_io_port_id") or "").strip()
+        # lsfabric local_port aligns with fc_io_port_id on FlashSystem; lsportfc
+        # "id" is a different index and must not be used when fc_io_port_id exists.
+        port_tokens = [fc_io] if fc_io else [str(port.get("port_id") or "").strip()]
+        for token in port_tokens:
+            if not node or not token:
+                continue
+            for candidate in (token, token.lstrip("0") or "0"):
+                for login in by_node_port.get((node, candidate), []):
+                    if id(login) not in seen:
+                        matched.append(login)
+                        seen.add(id(login))
+        port["logged_in_count"] = str(len(matched))
+        port["remote_wwpns"] = "; ".join(
+            sorted({login["remote_wwpn"] for login in matched if login.get("remote_wwpn")})
+        )
+        port["fabric_hosts"] = "; ".join(
+            sorted({login["host_name"] for login in matched if login.get("host_name")})
+        )
+
+
 def analyze_fc_inventory(
     command_results: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
@@ -196,24 +250,7 @@ def analyze_fc_inventory(
     mappings = parse_host_lun_maps(maps_out)
     fabric = parse_fabric_logins(fabric_out)
 
-    # Attach logged-in remote WWPNs to ports via local WWPN
-    remotes_by_local: dict[str, list[dict[str, str]]] = {}
-    for login in fabric:
-        local = login.get("local_wwpn") or ""
-        if not local:
-            continue
-        remotes_by_local.setdefault(local, []).append(login)
-
-    for port in ports:
-        wwpn = port.get("wwpn") or ""
-        logins = remotes_by_local.get(wwpn, [])
-        port["logged_in_count"] = str(len(logins))
-        port["remote_wwpns"] = "; ".join(
-            sorted({login["remote_wwpn"] for login in logins if login.get("remote_wwpn")})
-        )
-        port["fabric_hosts"] = "; ".join(
-            sorted({login["host_name"] for login in logins if login.get("host_name")})
-        )
+    _attach_fabric_logins_to_ports(ports, fabric)
 
     # Host initiator WWPNs from fabric (name → remote_wwpn)
     host_wwpns: dict[str, set[str]] = {}
