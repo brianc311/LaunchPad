@@ -1,3 +1,4 @@
+from launchpad.storage_presets import HP_3PAR_COMMANDS, HPE_PRIMERA_COMMANDS, preset_commands_for_profile
 from launchpad.volume_find import (
     find_volumes_in_cards,
     is_volume_find_eligible,
@@ -54,6 +55,13 @@ def test_volumes_from_command_results_ibm_lsvdisk():
     ]
     vols = volumes_from_command_results(results, "flashsystem_7200")
     assert any(v["name"] == "pconsps_archvg_1" for v in vols)
+
+
+def test_hpe_presets_include_showvv():
+    assert any("showvv" in cmd for _, cmd in HP_3PAR_COMMANDS)
+    assert any("showvv" in cmd for _, cmd in HPE_PRIMERA_COMMANDS)
+    cmds = preset_commands_for_profile("hpe_3par_8450")
+    assert any("showvv" in cmd for _, cmd in cmds)
 
 
 def test_find_volumes_in_cards_sorted():
