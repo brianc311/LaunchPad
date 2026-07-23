@@ -492,6 +492,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
           String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
         );
       if (!matches.length) {
+        lunSearchQuery = "";
         render();
         statusEl.textContent = "No matching hosts, volumes, or purposes";
         return;

@@ -232,6 +232,13 @@ def test_lun_builder_exposes_find_search():
         "No matching hosts, volumes, or purposes",
     ):
         assert text in LUN_BUILDER_HTML
+    run_lun_search = LUN_BUILDER_HTML.split("function runLunSearch(", 1)[1].split(
+        "function normalizeHostName", 1
+    )[0]
+    assert 'lunSearchQuery = ""' in run_lun_search
+    assert run_lun_search.index('lunSearchQuery = ""') < run_lun_search.index(
+        "No matching hosts, volumes, or purposes"
+    )
 
 
 def test_lun_builder_page_wires_preview_and_confirmed_create():
