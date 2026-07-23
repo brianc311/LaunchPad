@@ -209,11 +209,19 @@ class DashboardView(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions,
+            text="FlashCopy CGs",
+            fg_color=self.theme["surface_alt"],
+            hover_color=self.theme["border"],
+            command=self._open_fc_consistgrp,
+        ).grid(row=0, column=4, padx=6)
+
+        ctk.CTkButton(
+            actions,
             text="LUN Builder",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_lun_builder,
-        ).grid(row=0, column=4, padx=6)
+        ).grid(row=0, column=5, padx=6)
 
         self.export_excel_btn = ctk.CTkButton(
             actions,
@@ -223,7 +231,7 @@ class DashboardView(ctk.CTkFrame):
             command=self._open_export_excel_menu,
             width=140,
         )
-        self.export_excel_btn.grid(row=0, column=5, padx=6)
+        self.export_excel_btn.grid(row=0, column=6, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -231,14 +239,14 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._fetch_all_ssh_stats,
-        ).grid(row=0, column=6, padx=6)
+        ).grid(row=0, column=7, padx=6)
 
         self.theme_switch = ctk.CTkSwitch(
             actions,
             text="Light mode" if self.theme_name == "dark" else "Dark mode",
             command=self._toggle_theme,
         )
-        self.theme_switch.grid(row=0, column=7, padx=6)
+        self.theme_switch.grid(row=0, column=8, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -246,7 +254,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self.on_admin,
-        ).grid(row=0, column=8, padx=6)
+        ).grid(row=0, column=9, padx=6)
 
         ctk.CTkButton(
             actions,
@@ -254,7 +262,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["danger"],
             hover_color="#B91C1C",
             command=self.on_lock,
-        ).grid(row=0, column=9, padx=6)
+        ).grid(row=0, column=10, padx=6)
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -1409,6 +1417,33 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self._set_status(f"Consistency Groups failed: {exc}"),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_fc_consistgrp(self) -> None:
+        self.status_label.configure(text="Opening FlashCopy CGs…")
+        self.update_idletasks()
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"FlashCopy CGs register failed: {exc}")
+
+        def worker() -> None:
+            try:
+                server = get_health_server()
+                server.sync_from_app()
+                url = server.open_fc_consistgrp()
+                summary = (
+                    "FlashCopy CGs opened — confirmed actions mutate arrays on the linked array."
+                )
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+            except Exception as exc:
+                _log(f"FlashCopy CGs failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self._set_status(f"FlashCopy CGs failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()

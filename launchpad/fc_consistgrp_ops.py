@@ -1,0 +1,372 @@
+"""Parse FlashCopy consistency group inventory and build preview/run CLI steps."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from launchpad.contingency_snap_create import SnapStep, cli_token
+from launchpad.flashsystem_fc import _get, _table_records
+
+ACTIONS = frozenset(
+    {"create_group", "assign_maps", "remove_maps", "start_group", "delete_group"}
+)
+
+_STANDALONE_CONSISTGRP = frozenset({"", "0", "no", "none"})
+
+
+def _normalize_map_count(value: str | int | None) -> str | int:
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return int(text)
+    return text
+
+
+def _is_standalone_consistgrp(consistgrp: str) -> bool:
+    return (consistgrp or "").strip().lower() in _STANDALONE_CONSISTGRP
+
+
+def parse_lsfcconsistgrp(output: str) -> list[dict]:
+    """Parse svcinfo lsfcconsistgrp rows into consistency group records."""
+    groups: list[dict] = []
+    for record in _table_records(output):
+        name = _get(record, "name")
+        if not name:
+            continue
+        groups.append(
+            {
+                "id": _get(record, "id"),
+                "name": name,
+                "status": _get(record, "status", "state"),
+                "map_count": _normalize_map_count(
+                    _get(
+                        record,
+                        "FC_mapping_count",
+                        "fc_mapping_count",
+                        "mapping_count",
+                        "map_count",
+                    )
+                ),
+            }
+        )
+    return groups
+
+
+def parse_lsfcmap_rows(output: str) -> list[dict]:
+    """Parse svcinfo lsfcmap rows into FlashCopy map records."""
+    maps: list[dict] = []
+    for record in _table_records(output):
+        name = _get(record, "name")
+        if not name:
+            continue
+        maps.append(
+            {
+                "id": _get(record, "id"),
+                "name": name,
+                "source": _get(
+                    record,
+                    "source_vdisk_name",
+                    "source",
+                    "source_volume",
+                ),
+                "target": _get(
+                    record,
+                    "target_vdisk_name",
+                    "target",
+                    "target_volume",
+                ),
+                "status": _get(record, "status", "state"),
+                "progress": _get(record, "progress"),
+                "consistgrp": _get(
+                    record,
+                    "group_name",
+                    "consistgrp",
+                    "FC_group_name",
+                    "fc_group_name",
+                ),
+            }
+        )
+    return maps
+
+
+def partition_maps(maps: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split maps into group members and stand-alone maps."""
+    in_groups: list[dict] = []
+    stand_alone: list[dict] = []
+    for mapping in maps:
+        consistgrp = str(mapping.get("consistgrp") or "")
+        if _is_standalone_consistgrp(consistgrp):
+            stand_alone.append(mapping)
+        else:
+            in_groups.append(mapping)
+    return in_groups, stand_alone
+
+
+def enrich_group_map_counts(groups: list[dict], maps: list[dict]) -> list[dict]:
+    """Set group map_count from parsed map membership when available."""
+    membership_counts: dict[str, int] = {}
+    for mapping in maps:
+        consistgrp = str(mapping.get("consistgrp") or "").strip()
+        if _is_standalone_consistgrp(consistgrp):
+            continue
+        membership_counts[consistgrp] = membership_counts.get(consistgrp, 0) + 1
+
+    enriched: list[dict] = []
+    for group in groups:
+        updated = dict(group)
+        name = str(updated.get("name") or "")
+        membership = membership_counts.get(name, 0)
+        existing = updated.get("map_count")
+        existing_numeric = (
+            int(existing)
+            if existing is not None and str(existing).strip().isdigit()
+            else 0
+        )
+        if membership > 0:
+            updated["map_count"] = membership
+        elif existing is None or existing_numeric == 0:
+            updated["map_count"] = membership
+        enriched.append(updated)
+    return enriched
+
+
+def collect_fc_consistgrp_inventory(
+    run_cmd: Callable[[str], str],
+) -> tuple[list[dict], list[dict]]:
+    """Collect and parse `lsfcconsistgrp` + `lsfcmap` inventory over SSH."""
+    groups_output = run_cmd("svcinfo lsfcconsistgrp -delim :")
+    if not groups_output.strip():
+        groups_output = run_cmd("svcinfo lsfcconsistgrp")
+    maps_output = run_cmd("svcinfo lsfcmap -delim :")
+    if not maps_output.strip():
+        maps_output = run_cmd("svcinfo lsfcmap")
+
+    groups = parse_lsfcconsistgrp(groups_output)
+    maps = parse_lsfcmap_rows(maps_output)
+    groups = enrich_group_map_counts(groups, maps)
+    return groups, maps
+
+
+def preview_ok(steps: list[SnapStep], warnings: list[str]) -> bool:
+    """Return True when preview has no hard blocking errors."""
+    return not any(w.startswith("ERROR:") for w in warnings)
+
+
+def _group_names(groups: list[dict]) -> set[str]:
+    return {str(group.get("name") or "") for group in groups if group.get("name")}
+
+
+def _maps_by_name(maps: list[dict]) -> dict[str, dict]:
+    return {str(mapping.get("name") or ""): mapping for mapping in maps if mapping.get("name")}
+
+
+def _maps_in_group(maps: list[dict], group_name: str) -> list[dict]:
+    return [
+        mapping
+        for mapping in maps
+        if str(mapping.get("consistgrp") or "").strip() == group_name
+    ]
+
+
+def _safe_token(value: str, warnings: list[str], *, label: str) -> str | None:
+    try:
+        return cli_token(str(value or "").strip())
+    except ValueError as exc:
+        warnings.append(f"ERROR: {label}: {exc}")
+        return None
+
+
+def build_fc_consistgrp_steps(
+    action: str,
+    payload: dict,
+    *,
+    groups: list[dict],
+    maps: list[dict],
+) -> tuple[list[SnapStep], list[str]]:
+    """Build ordered CLI steps and advisory/blocking warnings for a CG action."""
+    warnings: list[str] = []
+    steps: list[SnapStep] = []
+
+    if action not in ACTIONS:
+        warnings.append(f"ERROR: Unknown action {action!r}")
+        return steps, warnings
+
+    group_names = _group_names(groups)
+    maps_by_name = _maps_by_name(maps)
+
+    if action == "create_group":
+        name = _safe_token(str(payload.get("name") or ""), warnings, label="group name")
+        if name is None:
+            return steps, warnings
+        cmd = f"svctask mkfcconsistgrp -name {name}"
+        if name in group_names:
+            steps.append(
+                SnapStep(
+                    kind="mkfcconsistgrp",
+                    purpose="create consistency group",
+                    cmd=cmd,
+                    skip=True,
+                    reason="consistency group already exists",
+                )
+            )
+        else:
+            steps.append(
+                SnapStep(
+                    kind="mkfcconsistgrp",
+                    purpose="create consistency group",
+                    cmd=cmd,
+                )
+            )
+        return steps, warnings
+
+    if action == "assign_maps":
+        group_name = _safe_token(
+            str(payload.get("group_name") or ""), warnings, label="group name"
+        )
+        if group_name is None:
+            return steps, warnings
+        if group_name not in group_names:
+            warnings.append(f"ERROR: Consistency group {group_name} not found")
+            return steps, warnings
+
+        map_names = payload.get("map_names") or []
+        if not isinstance(map_names, list):
+            warnings.append("ERROR: map_names must be a list")
+            return steps, warnings
+
+        for raw_map_name in map_names:
+            map_name = _safe_token(str(raw_map_name or ""), warnings, label="map name")
+            if map_name is None:
+                continue
+            mapping = maps_by_name.get(map_name)
+            if mapping is None:
+                warnings.append(f"ERROR: FlashCopy map {map_name} not found")
+                continue
+
+            current_group = str(mapping.get("consistgrp") or "").strip()
+            if current_group == group_name:
+                steps.append(
+                    SnapStep(
+                        kind="chfcmap",
+                        purpose=f"assign map {map_name} to consistency group",
+                        cmd=f"svctask chfcmap -consistgrp {group_name} {map_name}",
+                        skip=True,
+                        reason=f"map already in consistency group {group_name}",
+                    )
+                )
+                continue
+            if current_group and not _is_standalone_consistgrp(current_group):
+                warnings.append(
+                    f"Map {map_name} is already in consistency group {current_group}"
+                )
+
+            steps.append(
+                SnapStep(
+                    kind="chfcmap",
+                    purpose=f"assign map {map_name} to consistency group",
+                    cmd=f"svctask chfcmap -consistgrp {group_name} {map_name}",
+                )
+            )
+        return steps, warnings
+
+    if action == "remove_maps":
+        map_names = payload.get("map_names") or []
+        if not isinstance(map_names, list):
+            warnings.append("ERROR: map_names must be a list")
+            return steps, warnings
+
+        for raw_map_name in map_names:
+            map_name = _safe_token(str(raw_map_name or ""), warnings, label="map name")
+            if map_name is None:
+                continue
+            mapping = maps_by_name.get(map_name)
+            if mapping is None:
+                warnings.append(f"ERROR: FlashCopy map {map_name} not found")
+                continue
+
+            current_group = str(mapping.get("consistgrp") or "").strip()
+            if _is_standalone_consistgrp(current_group):
+                steps.append(
+                    SnapStep(
+                        kind="chfcmap",
+                        purpose=f"remove map {map_name} from consistency group",
+                        cmd=f"svctask chfcmap -consistgrp null {map_name}",
+                        skip=True,
+                        reason="map is already stand-alone",
+                    )
+                )
+                continue
+
+            steps.append(
+                SnapStep(
+                    kind="chfcmap",
+                    purpose=f"remove map {map_name} from consistency group",
+                    cmd=f"svctask chfcmap -consistgrp null {map_name}",
+                )
+            )
+        return steps, warnings
+
+    if action == "start_group":
+        group_name = _safe_token(
+            str(payload.get("group_name") or ""), warnings, label="group name"
+        )
+        if group_name is None:
+            return steps, warnings
+        if group_name not in group_names:
+            warnings.append(f"ERROR: Consistency group {group_name} not found")
+            return steps, warnings
+
+        steps.extend(
+            [
+                SnapStep(
+                    kind="prestartfcconsistgrp",
+                    purpose="prepare consistency group start",
+                    cmd=f"svctask prestartfcconsistgrp {group_name}",
+                ),
+                SnapStep(
+                    kind="startfcconsistgrp",
+                    purpose="start consistency group",
+                    cmd=f"svctask startfcconsistgrp {group_name}",
+                ),
+            ]
+        )
+        return steps, warnings
+
+    if action == "delete_group":
+        group_name = _safe_token(
+            str(payload.get("group_name") or ""), warnings, label="group name"
+        )
+        if group_name is None:
+            return steps, warnings
+
+        member_maps = _maps_in_group(maps, group_name)
+        if member_maps:
+            warnings.append(f"ERROR: Consistency group {group_name} is not empty")
+            return steps, warnings
+
+        cmd = f"svctask rmfcconsistgrp {group_name}"
+        if group_name not in group_names:
+            steps.append(
+                SnapStep(
+                    kind="rmfcconsistgrp",
+                    purpose="delete consistency group",
+                    cmd=cmd,
+                    skip=True,
+                    reason="consistency group already absent",
+                )
+            )
+        else:
+            steps.append(
+                SnapStep(
+                    kind="rmfcconsistgrp",
+                    purpose="delete consistency group",
+                    cmd=cmd,
+                )
+            )
+        return steps, warnings
+
+    warnings.append(f"ERROR: Unhandled action {action!r}")
+    return steps, warnings

@@ -96,6 +96,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         <button type="button" id="export-all-btn" class="secondary">Export All Excel</button>
         <button type="button" id="fc-wwpn-btn" class="secondary">Open in FC WWPN</button>
         <button type="button" id="sync-array-btn" class="secondary">Sync from array</button>
+        <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
       </div>
     </section>

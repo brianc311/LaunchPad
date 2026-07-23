@@ -383,6 +383,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
+        <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <label class="toggle-row" for="monitor-all-toggle" title="Connect over SSH only for sites you turn on.">
           <input type="checkbox" id="monitor-all-toggle">
