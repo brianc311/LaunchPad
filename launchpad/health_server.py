@@ -56,6 +56,7 @@ from launchpad.flashsystem_health import analyze_health, pool_capacity_from_comm
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
+from launchpad.volume_find_page import VOLUME_FIND_HTML, VOLUME_FIND_PATH
 from launchpad.lun_builder_data import (
     LUN_BUILDS_SETTING,
     delete_build,
@@ -1758,6 +1759,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == LUN_BUILDER_PATH:
             self._send_html(LUN_BUILDER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
+        if path == VOLUME_FIND_PATH:
+            self._send_html(VOLUME_FIND_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == FC_WWPN_REPORT_PATH:
             self._send_html(FC_WWPN_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
@@ -3508,6 +3512,10 @@ class HealthServer:
         return f"http://127.0.0.1:{self._port}{LUN_BUILDER_PATH}"
 
     @property
+    def volume_find_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{VOLUME_FIND_PATH}"
+
+    @property
     def fc_consistgrp_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{FC_CONSISTGRP_PATH}"
 
@@ -3799,6 +3807,13 @@ class HealthServer:
         webbrowser.open(self.lun_builder_url)
         _log(f"Opened LUN Builder in browser: {self.lun_builder_url}")
         return self.lun_builder_url
+
+    def open_volume_find(self) -> str:
+        """Open the Volume Find page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.volume_find_url)
+        _log(f"Opened Volume Find in browser: {self.volume_find_url}")
+        return self.volume_find_url
 
     def open_fc_consistgrp(self, card_id: int | None = None) -> str:
         """Open the FlashCopy consistency groups page in the default browser."""
