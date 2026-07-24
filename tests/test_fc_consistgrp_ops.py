@@ -59,6 +59,7 @@ def test_collect_fc_consistgrp_inventory_parses_delimited_tables():
     responses = {
         "svcinfo lsfcconsistgrp -delim :": CG_SAMPLE.strip(),
         "svcinfo lsfcmap -delim :": MAP_SAMPLE.strip(),
+        "svcinfo lsvdisk -delim :": LSVDISK_SAMPLE.strip(),
     }
     calls: list[str] = []
 
@@ -71,10 +72,13 @@ def test_collect_fc_consistgrp_inventory_parses_delimited_tables():
     assert [g["name"] for g in groups] == ["AWD1_AS400_CG", "empty_cg"]
     assert groups[0]["map_count"] == 2
     assert [m["name"] for m in maps] == ["fcmap0", "fcmap1", "standalone1"]
-    assert all(cmd.endswith("-delim :") for cmd in calls)
+    by_name = {m["name"]: m for m in maps}
+    assert by_name["fcmap0"]["source_size"] == "100.00GB"
+    assert by_name["fcmap0"]["source_size_bytes"] == int(100 * (1024**3))
     assert calls == [
         "svcinfo lsfcconsistgrp -delim :",
         "svcinfo lsfcmap -delim :",
+        "svcinfo lsvdisk -delim :",
     ]
 
 
@@ -84,6 +88,8 @@ def test_collect_fc_consistgrp_inventory_falls_back_when_delimited_empty():
         "svcinfo lsfcconsistgrp": CG_SAMPLE.strip(),
         "svcinfo lsfcmap -delim :": "   \n  ",
         "svcinfo lsfcmap": MAP_SAMPLE.strip(),
+        "svcinfo lsvdisk -delim :": "",
+        "svcinfo lsvdisk": LSVDISK_SAMPLE.strip(),
     }
     calls: list[str] = []
 
@@ -95,12 +101,31 @@ def test_collect_fc_consistgrp_inventory_falls_back_when_delimited_empty():
 
     assert [g["name"] for g in groups] == ["AWD1_AS400_CG", "empty_cg"]
     assert len(maps) == 3
+    by_name = {m["name"]: m for m in maps}
+    assert by_name["fcmap1"]["source_size"] == "200.00GB"
     assert calls == [
         "svcinfo lsfcconsistgrp -delim :",
         "svcinfo lsfcconsistgrp",
         "svcinfo lsfcmap -delim :",
         "svcinfo lsfcmap",
+        "svcinfo lsvdisk -delim :",
+        "svcinfo lsvdisk",
     ]
+
+
+def test_collect_inventory_lsvdisk_failure_still_returns_maps():
+    def run_cmd(cmd: str) -> str:
+        if "lsfcconsistgrp" in cmd:
+            return CG_SAMPLE
+        if "lsfcmap" in cmd:
+            return MAP_SAMPLE
+        if "lsvdisk" in cmd:
+            raise RuntimeError("ssh failed")
+        return ""
+
+    groups, maps = collect_fc_consistgrp_inventory(run_cmd)
+    assert groups and maps
+    assert not maps[0].get("source_size")
 
 
 def _inv():

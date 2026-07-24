@@ -200,6 +200,16 @@ def collect_fc_consistgrp_inventory(
     groups = parse_lsfcconsistgrp(groups_output)
     maps = parse_lsfcmap_rows(maps_output)
     groups = enrich_group_map_counts(groups, maps)
+
+    index: dict = {}
+    try:
+        vols_output = run_cmd("svcinfo lsvdisk -delim :")
+        if not str(vols_output or "").strip():
+            vols_output = run_cmd("svcinfo lsvdisk")
+        index = volume_capacity_index(vols_output)
+    except Exception:
+        index = {}
+    maps = enrich_maps_with_source_size(maps, index)
     return groups, maps
 
 
