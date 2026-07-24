@@ -267,3 +267,104 @@ def test_api_volume_find_card_host_route_declared():
 
     src = inspect.getsource(_HealthHandler.do_POST)
     assert "/api/volume-find/card-host" in src
+
+
+def test_find_hosts_cache_uses_fc_hosts(monkeypatch):
+    server = HealthServer()
+    card = HealthCard(
+        card_id=1,
+        name="Woodland Hills, CA",
+        host="10.244.66.227",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_9500",
+        command_results=[
+            {
+                "command": "svcinfo lshost -delim :",
+                "output": "id:name:port_count\n0:woo_esx_cluster:2\n",
+            }
+        ],
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    result = server.find_volumes("woo", mode="cache", find_type="host")
+    assert result["errors"] == []
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["host_name"] == "woo_esx_cluster"
+    assert match["source"] == "cache"
+    assert match["host"] == "10.244.66.227"
+
+
+def test_find_hosts_live_requires_unlock(monkeypatch):
+    server = HealthServer()
+    monkeypatch.setattr(server, "is_unlocked", lambda: False)
+    try:
+        server.find_volumes("x", mode="live", find_type="host")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "unlock" in str(exc).lower()
+        assert "host" in str(exc).lower()
+
+
+def test_find_hosts_live_ibm_happy_path(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    card = HealthCard(
+        card_id=1,
+        name="Woodland Hills, CA",
+        host="10.244.66.227",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_9500",
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    def _runner(_card):
+        return lambda command: (
+            "id:name:port_count\n0:woo_esx_cluster:2\n"
+            if "lshost" in command
+            else ""
+        )
+
+    monkeypatch.setattr(server, "_lun_run_command", _runner)
+    result = server.find_volumes("woo", mode="live", find_type="host")
+    assert result["errors"] == []
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["host_name"] == "woo_esx_cluster"
+    assert match["source"] == "live"
+    assert match["vendor"] == "ibm"
+    assert match["host"] == "10.244.66.227"
+    assert match.get("wwpns", "") == ""
+
+
+def test_find_volumes_default_type_unchanged(monkeypatch):
+    server = HealthServer()
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+        command_results=[
+            {
+                "command": "svcinfo lsvdisk -delim :",
+                "output": "id:name:mdisk_grp_name\n0:pconsps_archvg_1:Pool0\n",
+            }
+        ],
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    result = server.find_volumes("archvg", mode="cache")
+    assert result["matches"]
+    assert result["matches"][0]["volume"] == "pconsps_archvg_1"
+    assert "host_name" not in result["matches"][0]
