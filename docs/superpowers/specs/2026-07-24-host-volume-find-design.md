@@ -1,7 +1,7 @@
 # Host / Volume Find — Host search on Volume Find page
 
 **Date:** 2026-07-24  
-**Status:** Approved for implementation (pending user review of this spec)  
+**Status:** Approved for implementation  
 **App version target:** 1.6.64  
 **Depends on:** Volume Find page/API (1.6.57+), Site IP edit (1.6.59+), IBM `lshost` / FC inventory, HPE presets  
 **Approach:** Same page + Volume | Host toggle (Approach 1); Host results = name + card/site + WWPNs when known (operator choice A)  
