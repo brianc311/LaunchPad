@@ -382,6 +382,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <button type="button" id="excel-btn" class="secondary">Export Excel</button>
+        <label>Site <select id="capacity-site-select"><option value="">None</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
@@ -433,6 +434,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const showPoolsToggle = document.getElementById("show-pools-toggle");
     const showTitleToggle = document.getElementById("show-title-toggle");
     const includeOffToggle = document.getElementById("include-off-toggle");
+    const capacitySiteSelectEl = document.getElementById("capacity-site-select");
     const excelBtn = document.getElementById("excel-btn");
     const reportTitleInput = document.getElementById("report-title-input");
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
@@ -756,6 +758,48 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       return `${card.host || ""}${port}`;
     }
 
+    function siteOptionLabel(card) {
+      return `${card.name} (${card.host || ""})`;
+    }
+
+    function selectedCapacitySiteId() {
+      if (!capacitySiteSelectEl) return null;
+      const raw = capacitySiteSelectEl.value;
+      if (!raw) return null;
+      const id = parseInt(raw, 10);
+      return Number.isFinite(id) ? id : null;
+    }
+
+    function populateCapacitySiteSelect(cards) {
+      if (!capacitySiteSelectEl) return;
+      const previous = capacitySiteSelectEl.value;
+      const sorted = [...cards].sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
+      );
+      capacitySiteSelectEl.innerHTML =
+        '<option value="">None</option>' +
+        sorted
+          .map(
+            (card) =>
+              `<option value="${card.id}">${escapeHtml(siteOptionLabel(card))}</option>`
+          )
+          .join("");
+      if (previous && sorted.some((card) => String(card.id) === previous)) {
+        capacitySiteSelectEl.value = previous;
+      } else {
+        capacitySiteSelectEl.value = "";
+      }
+    }
+
+    function applyCapacitySiteFilter() {
+      const siteId = selectedCapacitySiteId();
+      document.querySelectorAll(".site-block").forEach((section) => {
+        const id = parseInt(section.dataset.id, 10);
+        const visible = siteId == null || id === siteId;
+        section.style.display = visible ? "" : "none";
+      });
+    }
+
     function renderSite(card) {
       const updated = card.updated_at
         ? `Last updated: ${card.updated_at}`
@@ -829,8 +873,14 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       });
       sorted.forEach((card) => applyMonitorVisual(card.id));
       updateMasterMonitorToggle();
+      populateCapacitySiteSelect(visible);
+      applyCapacitySiteFilter();
       if (refreshStatusEl) {
-        refreshStatusEl.textContent = `${visible.length} of ${cards.length} site(s) shown`;
+        const siteId = selectedCapacitySiteId();
+        const shownCount = siteId == null
+          ? visible.length
+          : visible.filter((card) => card.id === siteId).length;
+        refreshStatusEl.textContent = `${shownCount} of ${cards.length} site(s) shown`;
       }
     }
 
@@ -840,9 +890,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Excel workbook…";
       try {
         const includeOff = includeOffToggle ? includeOffToggle.checked : false;
-        const res = await fetch(
-          `/api/capacity-export?include_off=${includeOff ? 1 : 0}&open=1`
-        );
+        const siteId = selectedCapacitySiteId();
+        let exportUrl =
+          `/api/capacity-export?include_off=${includeOff ? 1 : 0}&open=1`;
+        if (siteId != null) {
+          exportUrl += `&card_id=${siteId}`;
+        }
+        const res = await fetch(exportUrl);
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
           try {
@@ -982,6 +1036,21 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     if (includeOffToggle) {
       includeOffToggle.addEventListener("change", () => {
         renderAll(cardsCache);
+      });
+    }
+    if (capacitySiteSelectEl) {
+      capacitySiteSelectEl.addEventListener("change", () => {
+        applyCapacitySiteFilter();
+        if (refreshStatusEl && cardsCache.length) {
+          const visible = includeOffToggle && includeOffToggle.checked
+            ? cardsCache
+            : cardsCache.filter((c) => isMonitorOn(c.id));
+          const siteId = selectedCapacitySiteId();
+          const shownCount = siteId == null
+            ? visible.length
+            : visible.filter((card) => card.id === siteId).length;
+          refreshStatusEl.textContent = `${shownCount} of ${cardsCache.length} site(s) shown`;
+        }
       });
     }
     if (excelBtn) {

@@ -168,3 +168,40 @@ def test_capacity_report_html_has_export_and_include_off():
     assert "Include monitoring-off sites" in CAPACITY_REPORT_HTML
     assert 'id="excel-btn"' in CAPACITY_REPORT_HTML
     assert 'id="include-off-toggle"' in CAPACITY_REPORT_HTML
+
+
+def test_export_capacity_excel_bytes_filters_by_card_id(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "Alpha", monitor_on=True)
+    _register(server, 2, "Beta", monitor_on=True)
+    refreshed: list[int] = []
+
+    def _fake_refresh(card_id: int) -> HealthCard:
+        refreshed.append(card_id)
+        return server._cards[card_id]
+
+    monkeypatch.setattr(server, "refresh_card", _fake_refresh)
+
+    server.export_capacity_excel_bytes(include_monitor_off=False, card_id=2)
+
+    assert refreshed == [2]
+
+
+def test_get_capacity_export_route_filters_by_card_id(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "Alpha", monitor_on=True)
+    _register(server, 2, "Beta", monitor_on=True)
+    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    refreshed: list[int] = []
+
+    def _spy_refresh(card_id: int) -> HealthCard:
+        refreshed.append(card_id)
+        return server._cards[card_id]
+
+    monkeypatch.setattr(server, "refresh_card", _spy_refresh)
+
+    sent = _call_capacity_export_api(monkeypatch, server, "?include_off=0&card_id=2&open=0")
+
+    assert sent["status"] == 200
+    assert refreshed == [2]

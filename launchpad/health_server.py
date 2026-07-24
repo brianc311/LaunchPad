@@ -2362,6 +2362,14 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "true",
                 "yes",
             }
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "Invalid card_id"}, status=400)
+                    return
             open_after = (query.get("open") or ["0"])[0].strip().lower() in {
                 "1",
                 "true",
@@ -2370,7 +2378,8 @@ class _HealthHandler(BaseHTTPRequestHandler):
             try:
                 server.sync_from_app()
                 body, filename = server.export_capacity_excel_bytes(
-                    include_monitor_off=include_off
+                    include_monitor_off=include_off,
+                    card_id=card_id,
                 )
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
@@ -4119,7 +4128,7 @@ class HealthServer:
         return body, filename
 
     def export_capacity_excel_bytes(
-        self, *, include_monitor_off: bool = False
+        self, *, include_monitor_off: bool = False, card_id: int | None = None
     ) -> tuple[bytes, str]:
         """Build the browser-facing Storage Capacity workbook from registered cards.
 
@@ -4131,28 +4140,32 @@ class HealthServer:
         # at top level.
         from launchpad.capacity_export import (
             ExportSite,
+            card_ids_included_for_export,
             export_storage_capacity_excel_from_sites,
+            filter_capacity_entries_by_card_id,
         )
 
         with self._lock:
             card_ids = sorted(self._cards.keys())
         monitor_enabled = {
-            card_id: self.is_monitor_enabled(card_id) for card_id in card_ids
+            cid: self.is_monitor_enabled(cid) for cid in card_ids
         }
-        included_ids = [
-            card_id
-            for card_id in card_ids
-            if include_monitor_off or monitor_enabled.get(card_id, False)
-        ]
+        included = card_ids_included_for_export(
+            card_ids,
+            include_monitor_off=include_monitor_off,
+            monitor_enabled=monitor_enabled,
+        )
+        included = filter_capacity_entries_by_card_id(included, card_id=card_id)
+        included_ids = sorted(included)
 
         sites: list[ExportSite] = []
-        for card_id in included_ids:
+        for site_id in included_ids:
             with self._lock:
-                card = self._cards.get(card_id)
+                card = self._cards.get(site_id)
             if card is None:
                 continue
             try:
-                card = self.refresh_card(card_id)
+                card = self.refresh_card(site_id)
                 error = card.error
             except Exception as exc:
                 error = str(exc)
@@ -4160,7 +4173,7 @@ class HealthServer:
             pools = pool_capacity_from_commands(card.command_results)
             sites.append(
                 ExportSite(
-                    card_id=card_id,
+                    card_id=site_id,
                     name=card.name,
                     host=card.host,
                     serial_number=card.serial_number,

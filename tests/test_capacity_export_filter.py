@@ -8,6 +8,7 @@ from launchpad.capacity_export import (
     card_ids_included_for_export,
     export_storage_capacity_excel,
     export_storage_capacity_excel_from_sites,
+    filter_capacity_entries_by_card_id,
     keep_inventory_row,
 )
 from launchpad.database import Card
@@ -61,6 +62,13 @@ def test_missing_monitor_key_treated_as_off():
         monitor_enabled={},
     )
     assert ids == frozenset()
+
+
+def test_filter_capacity_entries_by_card_id():
+    included = frozenset({1, 2, 3})
+    assert filter_capacity_entries_by_card_id(included, card_id=None) == included
+    assert filter_capacity_entries_by_card_id(included, card_id=2) == frozenset({2})
+    assert filter_capacity_entries_by_card_id(included, card_id=9) == frozenset()
 
 
 def test_keep_inventory_row_rules():
@@ -258,3 +266,45 @@ def test_from_sites_respects_monitor_filter(tmp_path: Path):
     )
     assert "10.0.0.1" in blob or "A" in blob
     assert "10.0.0.2" not in blob
+
+
+def test_from_sites_filters_by_card_id(tmp_path: Path):
+    sites = [
+        ExportSite(
+            card_id=1,
+            name="A",
+            host="10.0.0.1",
+            serial_number="S1",
+            category="Remote",
+            device_profile="flashsystem",
+            capacity_summary={"name": "A", "used_pct": 2, "used_bytes": 2, "total_bytes": 100},
+            pools=[],
+            error=None,
+        ),
+        ExportSite(
+            card_id=2,
+            name="B",
+            host="10.0.0.2",
+            serial_number="S2",
+            category="Remote",
+            device_profile="flashsystem",
+            capacity_summary={"name": "B", "used_pct": 1, "used_bytes": 1, "total_bytes": 50},
+            pools=[],
+            error=None,
+        ),
+    ]
+    out = tmp_path / "one-site.xlsx"
+    export_storage_capacity_excel_from_sites(
+        sites,
+        out,
+        include_monitor_off=True,
+        monitor_enabled={1: True, 2: True},
+        card_id=2,
+    )
+    wb = load_workbook(out)
+    ws = wb["Storage Capacity"]
+    blob = "\n".join(
+        str(cell or "") for row in ws.iter_rows(values_only=True) for cell in row
+    )
+    assert "10.0.0.2" in blob or "B" in blob
+    assert "10.0.0.1" not in blob
