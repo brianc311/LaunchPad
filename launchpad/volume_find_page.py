@@ -1,4 +1,4 @@
-"""Volume Find page — search volume names across monitored arrays."""
+"""Host / Volume Find page — search volume and host names across monitored arrays."""
 
 VOLUME_FIND_PATH = "/volume-find"
 
@@ -7,7 +7,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LaunchPad Volume Find</title>
+  <title>LaunchPad Host / Volume Find</title>
   <style>
     :root {
       --bg: #0b0f14;
@@ -50,6 +50,22 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       background: #0f141d; color: var(--text); border: 1px solid var(--border);
     }
     button.btn:disabled { opacity: .55; cursor: not-allowed; }
+    .find-type-toggle {
+      display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    }
+    .find-type-option {
+      position: relative; display: inline-flex; align-items: center; margin: 0; cursor: pointer;
+    }
+    .find-type-option input {
+      position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
+    }
+    .find-type-option span {
+      display: inline-flex; align-items: center; height: 34px; padding: 0 14px;
+      font: inherit; font-weight: 600; color: var(--muted); background: #0f141d;
+    }
+    .find-type-option input:checked + span {
+      background: var(--accent); color: #111;
+    }
     #volume-search {
       width: min(420px, 100%); background: #0f141d; color: var(--text);
       border: 1px solid var(--border); border-radius: 10px; height: 34px;
@@ -93,12 +109,22 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
 <body>
   <main class="wrap">
     <section class="hero">
-      <h1>Volume Find</h1>
+      <h1>Host / Volume Find</h1>
       <p>
-        Search volume names across monitor-on IBM FlashSystem / Storwize / SVC and HPE 3PAR / Primera SSH cards.
+        Search volume or host names across monitor-on IBM FlashSystem / Storwize / SVC and HPE 3PAR / Primera SSH cards.
         Find uses cached health command output; Search live runs SSH queries after LaunchPad is unlocked.
       </p>
       <div class="hero-actions">
+        <div class="find-type-toggle" role="radiogroup" aria-label="Search type">
+          <label class="find-type-option">
+            <input type="radio" name="find-type" value="volume" checked>
+            <span>Volume</span>
+          </label>
+          <label class="find-type-option">
+            <input type="radio" name="find-type" value="host" id="find-type-host">
+            <span>Host</span>
+          </label>
+        </div>
         <input type="search" id="volume-search" placeholder="Search volume name…" aria-label="Search volumes">
         <button type="button" id="volume-find-btn" class="btn">Find</button>
         <button type="button" id="volume-live-btn" class="btn secondary">Search live</button>
@@ -114,7 +140,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       <div class="table-wrap">
         <table>
           <thead>
-            <tr>
+            <tr id="results-head-row">
               <th>Card</th>
               <th>Site IP</th>
               <th>Vendor</th>
@@ -130,7 +156,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <p class="footer">LaunchPad Volume Find v{{APP_VERSION}} · Keep LaunchPad running while searching live.</p>
+    <p class="footer">LaunchPad Host / Volume Find v{{APP_VERSION}} · Keep LaunchPad running while searching live.</p>
   </main>
 
   <script>
@@ -140,7 +166,43 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     const statusEl = document.getElementById("status");
     const errorsEl = document.getElementById("errors");
     const bodyEl = document.getElementById("results-body");
+    const headRowEl = document.getElementById("results-head-row");
     let lastMatches = [];
+    let lastFindType = "volume";
+
+    function getFindType() {
+      return document.querySelector('input[name="find-type"]:checked')?.value || "volume";
+    }
+
+    function updateSearchPlaceholder() {
+      const findType = getFindType();
+      searchEl.placeholder = findType === "host"
+        ? "Search host name…"
+        : "Search volume name…";
+      searchEl.setAttribute(
+        "aria-label",
+        findType === "host" ? "Search hosts" : "Search volumes"
+      );
+    }
+
+    function emptyPromptMessage(findType) {
+      return findType === "host"
+        ? "Enter a host name fragment and click Find."
+        : "Enter a volume name fragment and click Find.";
+    }
+
+    function renderTableHead(findType) {
+      if (findType === "host") {
+        headRowEl.innerHTML = (
+          "<th>Card</th><th>Site IP</th><th>Vendor</th><th>Host</th><th>WWPNs</th><th>Source</th>"
+        );
+      } else {
+        headRowEl.innerHTML = (
+          "<th>Card</th><th>Site IP</th><th>Vendor</th><th>Volume</th>"
+          + "<th>Pool / CPG</th><th>Source</th>"
+        );
+      }
+    }
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -227,7 +289,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       lastMatches.forEach((m) => {
         if (String(m.card_id) === String(cardId)) m.host = host;
       });
-      renderMatches(lastMatches);
+      renderMatches(lastMatches, lastFindType);
     }
 
     async function saveSiteIp(cell) {
@@ -262,10 +324,25 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       }
     }
 
-    function renderMatches(matches) {
+    function renderMatches(matches, findType) {
+      lastFindType = findType || getFindType();
       lastMatches = matches || [];
+      renderTableHead(lastFindType);
       if (!lastMatches.length) {
         bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
+        return;
+      }
+      if (lastFindType === "host") {
+        bodyEl.innerHTML = lastMatches.map((m) => (
+          "<tr>"
+          + "<td>" + escapeHtml(m.card_name || m.card_id || "") + "</td>"
+          + renderSiteIpCell(m.card_id, m.host || "")
+          + "<td>" + escapeHtml(m.vendor || "") + "</td>"
+          + "<td>" + escapeHtml(m.host_name || "") + "</td>"
+          + "<td>" + escapeHtml(m.wwpns || "") + "</td>"
+          + "<td>" + escapeHtml(m.source || "") + "</td>"
+          + "</tr>"
+        )).join("");
         return;
       }
       bodyEl.innerHTML = lastMatches.map((m) => (
@@ -280,12 +357,16 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       )).join("");
     }
 
-    async function runVolumeFind(mode) {
+    async function runSearch(mode) {
+      const findType = getFindType();
       const q = (searchEl.value || "").trim();
       if (!q) {
         statusEl.textContent = "Enter a search term.";
         renderErrors([]);
-        bodyEl.innerHTML = '<tr><td colspan="6" class="empty">Enter a volume name fragment and click Find.</td></tr>';
+        bodyEl.innerHTML = (
+          '<tr><td colspan="6" class="empty">' + emptyPromptMessage(findType) + "</td></tr>"
+        );
+        renderTableHead(findType);
         return;
       }
       setBusy(true);
@@ -293,19 +374,20 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       renderErrors([]);
       try {
         const url = "/api/volume-find?q=" + encodeURIComponent(q)
-          + (mode === "live" ? "&mode=live" : "&mode=cache");
+          + "&mode=" + mode + "&type=" + encodeURIComponent(findType);
         const res = await fetch(url);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const msg = data.error || ("Request failed (" + res.status + ")");
           statusEl.textContent = msg;
           renderErrors([{ card_name: "API", error: msg }]);
+          renderTableHead(findType);
           bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
           return;
         }
         const matches = data.matches || [];
         const errors = data.errors || [];
-        renderMatches(matches);
+        renderMatches(matches, findType);
         renderErrors(errors);
         if (matches.length) {
           const label = mode === "live" ? "live" : "cache";
@@ -322,6 +404,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       } catch (err) {
         statusEl.textContent = String(err && err.message ? err.message : err);
         renderErrors([{ card_name: "Network", error: String(err) }]);
+        renderTableHead(findType);
         bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
       } finally {
         setBusy(false);
@@ -342,12 +425,26 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       }
     });
 
-    findBtn.addEventListener("click", () => runVolumeFind("cache"));
-    liveBtn.addEventListener("click", () => runVolumeFind("live"));
+    document.querySelectorAll('input[name="find-type"]').forEach((el) => {
+      el.addEventListener("change", () => {
+        updateSearchPlaceholder();
+        lastMatches = [];
+        statusEl.textContent = "";
+        renderErrors([]);
+        const findType = getFindType();
+        renderTableHead(findType);
+        bodyEl.innerHTML = (
+          '<tr><td colspan="6" class="empty">' + emptyPromptMessage(findType) + "</td></tr>"
+        );
+      });
+    });
+
+    findBtn.addEventListener("click", () => runSearch("cache"));
+    liveBtn.addEventListener("click", () => runSearch("live"));
     searchEl.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
         ev.preventDefault();
-        runVolumeFind("cache");
+        runSearch("cache");
       }
     });
   </script>

@@ -178,7 +178,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="print-btn" class="btn secondary">Print / Save PDF</button>
         <button type="button" id="excel-btn" class="btn secondary">Export Excel</button>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
-        <a class="btn secondary" href="/volume-find">Volume Find</a>
+        <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/contingency-groups">Consistency Groups</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>

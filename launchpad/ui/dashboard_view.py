@@ -228,7 +228,7 @@ class DashboardView(ctk.CTkFrame):
 
         ctk.CTkButton(
             tools,
-            text="Volume Find",
+            text="Host / Volume Find",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_volume_find,
