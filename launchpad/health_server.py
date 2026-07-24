@@ -733,6 +733,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <span id="jiggler-status" class="refresh-status">Mouse jiggler: Off</span>
       </div>
       <div class="filter-bar no-print">
+        <label>Site <select id="health-site-select"><option value="">None</option></select></label>
         <input type="search" id="health-search" placeholder="Find sites for PDF (all sites stay visible)" aria-label="Search servers">
         <button type="button" id="select-visible-btn" class="secondary">Select matches</button>
         <button type="button" id="clear-selection-btn" class="secondary">Clear selection</button>
@@ -772,6 +773,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalCloseEl = document.getElementById("modal-close");
     const showAlertsToggle = document.getElementById("show-alerts-toggle");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
+    const healthSiteSelectEl = document.getElementById("health-site-select");
     const healthSearchEl = document.getElementById("health-search");
     const selectVisibleBtn = document.getElementById("select-visible-btn");
     const clearSelectionBtn = document.getElementById("clear-selection-btn");
@@ -961,6 +963,48 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `${card.name} ${card.host}${port} ${card.username || ""}`.toLowerCase();
     }
 
+    function siteOptionLabel(card) {
+      return `${card.name} (${card.host || ""})`;
+    }
+
+    function selectedSiteId() {
+      if (!healthSiteSelectEl) return null;
+      const raw = healthSiteSelectEl.value;
+      if (!raw) return null;
+      const id = parseInt(raw, 10);
+      return Number.isFinite(id) ? id : null;
+    }
+
+    function populateHealthSiteSelect(cards) {
+      if (!healthSiteSelectEl) return;
+      const previous = healthSiteSelectEl.value;
+      const sorted = [...cards].sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
+      );
+      healthSiteSelectEl.innerHTML =
+        '<option value="">None</option>' +
+        sorted
+          .map(
+            (card) =>
+              `<option value="${card.id}">${escapeHtml(siteOptionLabel(card))}</option>`
+          )
+          .join("");
+      if (previous && sorted.some((card) => String(card.id) === previous)) {
+        healthSiteSelectEl.value = previous;
+      } else {
+        healthSiteSelectEl.value = "";
+      }
+    }
+
+    function applySiteFilter() {
+      const siteId = selectedSiteId();
+      document.querySelectorAll(".server").forEach((section) => {
+        const id = parseInt(section.dataset.id, 10);
+        const visible = siteId == null || id === siteId;
+        section.style.display = visible ? "" : "none";
+      });
+    }
+
     function healthSearchQuery() {
       return (healthSearchEl?.value || "").toLowerCase().trim();
     }
@@ -1045,15 +1089,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function printSelectedHealth() {
-      if (!printSelectedIds.size) {
-        window.alert(
-          "Select at least one server to print.\\n\\nCheck PDF on each card, or search for sites and click Select matches."
-        );
+      const siteId = selectedSiteId();
+      let idsToPrint;
+      if (siteId != null) {
+        idsToPrint = new Set([siteId]);
+      } else if (printSelectedIds.size) {
+        idsToPrint = new Set(printSelectedIds);
+      } else {
+        idsToPrint = new Set(cardsCache.map((card) => card.id));
+      }
+      if (!idsToPrint.size) {
+        window.alert("No servers to print.");
         return;
       }
-      syncPrintSelectionClasses();
+      document.querySelectorAll(".server").forEach((section) => {
+        const id = parseInt(section.dataset.id, 10);
+        section.classList.toggle("print-selected", idsToPrint.has(id));
+      });
       if (printMetaEl) {
-        const names = [...printSelectedIds]
+        const names = [...idsToPrint]
           .map((id) => cardsCache.find((entry) => entry.id === id)?.name)
           .filter(Boolean);
         printMetaEl.textContent = `LaunchPad Health · ${names.join(" · ")} · ${new Date().toLocaleString()}`;
@@ -1061,6 +1115,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.body.classList.add("print-export");
       const afterPrint = () => {
         document.body.classList.remove("print-export");
+        syncPrintSelectionClasses();
         window.removeEventListener("afterprint", afterPrint);
       };
       window.addEventListener("afterprint", afterPrint);
@@ -1650,6 +1705,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderIssues(sorted);
       wireInteractiveButtons();
       wirePrintCheckboxes();
+      populateHealthSiteSelect(sorted);
+      applySiteFilter();
       applyHealthSearch();
       syncPrintSelectionClasses();
       updateSelectionCount();
@@ -1745,6 +1802,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       monitorAllToggle.addEventListener("change", () => {
         setAllMonitoring(monitorAllToggle.checked);
       });
+    }
+    if (healthSiteSelectEl) {
+      healthSiteSelectEl.addEventListener("change", applySiteFilter);
     }
     if (healthSearchEl) {
       healthSearchEl.addEventListener("input", applyHealthSearch);
