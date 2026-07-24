@@ -3,10 +3,14 @@ from launchpad.volume_find import (
     ANDERSON_DEFAULT_HOST,
     ANDERSON_TARGET_NAME,
     anderson_rename_plan,
+    find_hosts_in_cards,
     find_volumes_in_cards,
+    host_name_matches,
+    hosts_from_card,
     is_volume_find_eligible,
     is_williamston_anderson_name,
     normalize_site_host,
+    parse_showhost_hosts,
     parse_showvv_volumes,
     site_ip_href,
     vendor_for_profile,
@@ -167,3 +171,62 @@ def test_find_volumes_in_cards_sorted():
     ]
     assert all(m["host"] == "10.0.0.1" for m in found if m["card_name"] == "Alpha")
     assert all(m["host"] == "10.0.0.2" for m in found if m["card_name"] == "Zebra")
+
+
+def test_host_name_matches_substring_case_insensitive():
+    assert host_name_matches("woo_esx_cluster", "ESX") is True
+    assert host_name_matches("woo_esx_cluster", "nope") is False
+
+
+def test_parse_showhost_hosts_basic():
+    output = (
+        "Id,Name,Persona,Port_WWN\n"
+        "0,woo_esx_cluster,Generic,-,\n"
+        "1,other_host,Generic,100000109BEE31E2,\n"
+    )
+    rows = parse_showhost_hosts(output)
+    names = {r["host_name"] for r in rows}
+    assert "woo_esx_cluster" in names
+    assert "other_host" in names
+
+
+def test_hosts_from_card_ibm_fc_hosts():
+    card = {
+        "id": 1,
+        "name": "Woodland Hills, CA",
+        "card_type": "ssh",
+        "device_profile": "flashsystem_9500",
+        "host": "10.244.66.227",
+        "fc_hosts": [
+            {"host_name": "woo_esx_cluster", "wwpns": "100000109BEE31E2"},
+        ],
+        "command_results": [],
+    }
+    hosts = hosts_from_card(card)
+    assert hosts[0]["host_name"] == "woo_esx_cluster"
+    assert "100000109BEE31E2" in hosts[0]["wwpns"]
+
+
+def test_find_hosts_in_cards_sorted():
+    cards = [
+        {
+            "id": 2,
+            "name": "Zebra",
+            "card_type": "ssh",
+            "device_profile": "flashsystem_7200",
+            "host": "1.1.1.1",
+            "fc_hosts": [{"host_name": "b_host", "wwpns": ""}],
+        },
+        {
+            "id": 1,
+            "name": "Alpha",
+            "card_type": "ssh",
+            "device_profile": "flashsystem_7200",
+            "host": "2.2.2.2",
+            "fc_hosts": [{"host_name": "a_host", "wwpns": ""}],
+        },
+    ]
+    monitor = {1: True, 2: True}
+    found = find_hosts_in_cards(cards, "host", monitor_enabled=monitor, source="cache")
+    assert [m["card_name"] for m in found] == ["Alpha", "Zebra"]
+    assert found[0]["host_name"] == "a_host"

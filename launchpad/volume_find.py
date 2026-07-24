@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from launchpad.flashsystem_fc import parse_lsvdisk_volumes
+from launchpad.flashsystem_fc import parse_fc_hosts, parse_lsvdisk_volumes
 from launchpad.storage_presets import HPE_SHELL_PROFILES, is_svc_fc_profile
 
 ANDERSON_TARGET_NAME = "Anderson, SC"
@@ -92,6 +92,64 @@ def is_volume_find_eligible(card: dict[str, Any], *, monitor_on: bool) -> bool:
     return False
 
 
+def host_name_matches(name: str, query: str) -> bool:
+    return volume_name_matches(name, query)
+
+
+def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
+    """Parse HPE showhost CSV/table for Name (+ optional Port_WWN / WWN columns)."""
+    text = str(output or "").strip()
+    if not text:
+        return []
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return []
+    header = lines[0]
+    delim = "," if "," in header else (":" if ":" in header else None)
+    wwn_cols = {"port_wwn", "wwn", "wwpn", "port_wwpn", "host_wwn"}
+    hosts: list[dict[str, str]] = []
+    if delim:
+        cols = [c.strip() for c in header.split(delim)]
+        name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "hostname", "host_name"}), None)
+        wwn_indices = [i for i, c in enumerate(cols) if c.lower() in wwn_cols]
+        if name_i is None:
+            return []
+        for line in lines[1:]:
+            parts = [p.strip() for p in line.split(delim)]
+            if len(parts) <= name_i:
+                continue
+            name = parts[name_i]
+            if not name or name.lower() == "name":
+                continue
+            wwpns = [
+                parts[i]
+                for i in wwn_indices
+                if i < len(parts) and parts[i] and parts[i] not in {"-", "--"}
+            ]
+            hosts.append({"host_name": name, "wwpns": " ".join(wwpns)})
+        return hosts
+
+    cols = header.split()
+    name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "hostname", "host_name"}), None)
+    wwn_indices = [i for i, c in enumerate(cols) if c.lower() in wwn_cols]
+    if name_i is None:
+        return []
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) <= name_i:
+            continue
+        name = parts[name_i]
+        if not name or name.lower() == "name":
+            continue
+        wwpns = [
+            parts[i]
+            for i in wwn_indices
+            if i < len(parts) and parts[i] and parts[i] not in {"-", "--"}
+        ]
+        hosts.append({"host_name": name, "wwpns": " ".join(wwpns)})
+    return hosts
+
+
 def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
     """Parse HPE showvv CSV/delimited or whitespace table for Name + CPG."""
     text = str(output or "").strip()
@@ -174,6 +232,88 @@ def volumes_from_command_results(
             seen.add(name)
             out.append({"name": name, "pool_or_cpg": str(row.get("pool_or_cpg") or "")})
     return out
+
+
+def hosts_from_card(card: dict[str, Any]) -> list[dict[str, str]]:
+    profile = str(card.get("device_profile") or "")
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(host_name: str, wwpns: str = "") -> None:
+        name = str(host_name or "").strip()
+        if not name or name in seen:
+            return
+        seen.add(name)
+        out.append({"host_name": name, "wwpns": str(wwpns or "").strip()})
+
+    if vendor_for_profile(profile) == "ibm":
+        fc_hosts = card.get("fc_hosts")
+        if isinstance(fc_hosts, list) and fc_hosts:
+            for h in fc_hosts:
+                if isinstance(h, dict):
+                    add(h.get("host_name") or h.get("name") or "", h.get("wwpns") or "")
+            return out
+        for item in card.get("command_results") or []:
+            if not isinstance(item, dict) or item.get("error"):
+                continue
+            cmd = f"{item.get('label') or ''} {item.get('command') or ''}".lower()
+            if "lshostvdiskmap" in cmd or "lsvdiskhostmap" in cmd or "host lun" in cmd:
+                continue
+            if "lshost" in cmd or "fc - hosts" in cmd:
+                for row in parse_fc_hosts(str(item.get("output") or "")):
+                    add(row.get("host_name") or "", row.get("wwpns") or "")
+        return out
+
+    for item in card.get("command_results") or []:
+        if not isinstance(item, dict) or item.get("error"):
+            continue
+        cmd = f"{item.get('label') or ''} {item.get('command') or ''}".lower()
+        if "showhost" in cmd:
+            for row in parse_showhost_hosts(str(item.get("output") or "")):
+                add(row.get("host_name") or "", row.get("wwpns") or "")
+    return out
+
+
+def find_hosts_in_cards(
+    cards: list[dict[str, Any]],
+    query: str,
+    *,
+    monitor_enabled: dict[Any, bool],
+    source: str,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        card_id = card.get("id")
+        monitor_on = bool(
+            monitor_enabled.get(card_id, monitor_enabled.get(str(card_id), False))
+        )
+        if not is_volume_find_eligible(card, monitor_on=monitor_on):
+            continue
+        profile = str(card.get("device_profile") or "")
+        for host_row in hosts_from_card(card):
+            if not host_name_matches(host_row["host_name"], query):
+                continue
+            matches.append(
+                {
+                    "card_id": card_id,
+                    "card_name": str(card.get("name") or card_id or ""),
+                    "profile": profile,
+                    "vendor": vendor_for_profile(profile),
+                    "host_name": host_row["host_name"],
+                    "wwpns": host_row.get("wwpns") or "",
+                    "source": source,
+                    "host": str(card.get("host") or ""),
+                }
+            )
+    return sorted(
+        matches,
+        key=lambda m: (
+            str(m.get("card_name") or "").lower(),
+            str(m.get("host_name") or "").lower(),
+        ),
+    )
 
 
 def find_volumes_in_cards(

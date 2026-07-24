@@ -93,9 +93,12 @@ from launchpad.storage_presets import (
 )
 from launchpad.volume_find import (
     anderson_rename_plan,
+    find_hosts_in_cards,
     find_volumes_in_cards,
+    host_name_matches,
     is_volume_find_eligible,
     normalize_site_host,
+    parse_showhost_hosts,
     parse_showvv_volumes,
     vendor_for_profile,
     volume_name_matches,
@@ -2011,8 +2014,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             q = (query.get("q") or [""])[0]
             mode = (query.get("mode") or ["cache"])[0]
+            find_type = (query.get("type") or ["volume"])[0]
             try:
-                payload = server.find_volumes(q, mode=mode)
+                payload = server.find_volumes(q, mode=mode, find_type=find_type)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
@@ -3528,10 +3532,15 @@ class HealthServer:
                 card.host = new_host
         return plan
 
-    def find_volumes(self, query: str, *, mode: str = "cache") -> dict[str, Any]:
+    def find_volumes(
+        self, query: str, *, mode: str = "cache", find_type: str = "volume"
+    ) -> dict[str, Any]:
         q = str(query or "").strip()
         if not q:
             return {"matches": [], "errors": []}
+        type_key = str(find_type or "volume").strip().lower()
+        if type_key not in {"volume", "host"}:
+            raise ValueError("type must be volume or host")
         mode_key = str(mode or "cache").strip().lower()
         if mode_key not in {"cache", "live"}:
             raise ValueError("mode must be cache or live")
@@ -3547,6 +3556,79 @@ class HealthServer:
             for c in cards
             if c.get("id") is not None
         }
+        if type_key == "host":
+            if mode_key == "cache":
+                return {
+                    "matches": find_hosts_in_cards(
+                        cards, q, monitor_enabled=monitor, source="cache"
+                    ),
+                    "errors": [],
+                }
+            if not self.is_unlocked():
+                raise RuntimeError("LaunchPad must be unlocked to search hosts live.")
+            matches: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+            for card_dict in cards:
+                card_id = card_dict.get("id")
+                if card_id is None:
+                    continue
+                monitor_on = bool(
+                    monitor.get(card_id, monitor.get(str(card_id), False))
+                )
+                if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
+                    continue
+                card = self._cards.get(int(card_id))
+                if card is None:
+                    continue
+                profile = str(card.device_profile or "")
+                try:
+                    if vendor_for_profile(profile) == "hpe":
+                        outputs = run_ssh_auth_hpe_commands(
+                            card.host,
+                            card.port,
+                            card.username,
+                            ["showhost"],
+                            password=card.password,
+                            key_path=card.key_path,
+                            key_passphrase=card.key_passphrase,
+                        )
+                        output = outputs[0] if outputs else ""
+                        host_rows = parse_showhost_hosts(output)
+                    else:
+                        run = self._lun_run_command(card)
+                        output = run("svcinfo lshost -delim :")
+                        host_rows = parse_fc_hosts(output)
+                    for host_row in host_rows:
+                        host_name = host_row.get("host_name") or ""
+                        if not host_name_matches(host_name, q):
+                            continue
+                        matches.append(
+                            {
+                                "card_id": card.card_id,
+                                "card_name": card.name,
+                                "profile": profile,
+                                "vendor": vendor_for_profile(profile),
+                                "host_name": host_name,
+                                "wwpns": host_row.get("wwpns") or "",
+                                "source": "live",
+                                "host": str(card.host or ""),
+                            }
+                        )
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "card_id": card.card_id,
+                            "card_name": card.name,
+                            "error": str(exc),
+                        }
+                    )
+            matches.sort(
+                key=lambda m: (
+                    str(m.get("card_name") or "").lower(),
+                    str(m.get("host_name") or "").lower(),
+                )
+            )
+            return {"matches": matches, "errors": errors}
         if mode_key == "cache":
             return {
                 "matches": find_volumes_in_cards(
@@ -3556,8 +3638,8 @@ class HealthServer:
             }
         if not self.is_unlocked():
             raise RuntimeError("LaunchPad must be unlocked to search volumes live.")
-        matches: list[dict[str, Any]] = []
-        errors: list[dict[str, Any]] = []
+        matches = []
+        errors = []
         for card_dict in cards:
             card_id = card_dict.get("id")
             if card_id is None:
