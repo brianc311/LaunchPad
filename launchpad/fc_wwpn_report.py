@@ -103,19 +103,17 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     td.mono { font-family: Consolas, monospace; letter-spacing: 0.02em; }
     td.cell-clamp {
       cursor: pointer;
-      max-width: 28rem;
-      display: -webkit-box;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 1;
+      max-width: 22rem;
       overflow: hidden;
       text-overflow: ellipsis;
-      white-space: normal;
-      word-break: break-all;
+      white-space: nowrap;
+      word-break: normal;
     }
     td.cell-clamp.is-expanded {
-      display: table-cell;
-      -webkit-line-clamp: unset;
+      white-space: normal;
+      word-break: break-all;
       overflow: visible;
+      text-overflow: unset;
       max-width: none;
     }
     .empty {
@@ -157,9 +155,10 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       body.printing-modal-mappings #modal-print { display: block !important; }
       body.printing-modal-mappings #modal-print h4 { margin: 16px 0 8px; color: #c2410c; }
       td.cell-clamp, td.cell-clamp.is-expanded {
-        display: table-cell;
-        -webkit-line-clamp: unset;
+        white-space: normal;
+        word-break: break-all;
         overflow: visible;
+        text-overflow: unset;
         max-width: none;
       }
     }
@@ -270,7 +269,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       const text = (td.textContent || "").trim();
       if (!text) return false;
       if (text.includes("\\n") || text.includes(";")) return true;
-      return td.scrollHeight > td.clientHeight + 1;
+      return td.scrollWidth > td.clientWidth + 1 || td.scrollHeight > td.clientHeight + 1;
     }
 
     function collapseAllClampedCells(root) {
