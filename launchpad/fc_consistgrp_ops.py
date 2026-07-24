@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from launchpad.contingency_snap_create import SnapStep, cli_token
-from launchpad.flashsystem_fc import _get, _table_records
+from launchpad.flashsystem_fc import _get, _table_records, parse_lsvdisk_volumes
+from launchpad.flashsystem_parse import _format_bytes, _parse_size_bytes
 
 ACTIONS = frozenset(
     {"create_group", "assign_maps", "remove_maps", "start_group", "delete_group"}
@@ -133,6 +134,58 @@ def enrich_group_map_counts(groups: list[dict], maps: list[dict]) -> list[dict]:
     return enriched
 
 
+def volume_capacity_index(lsvdisk_output: str) -> dict[str, dict]:
+    """Build a volume-name index of capacity labels and byte sizes from lsvdisk output."""
+    index: dict[str, dict] = {}
+    for volume in parse_lsvdisk_volumes(lsvdisk_output):
+        name = str(volume.get("name") or "")
+        if not name:
+            continue
+        capacity = str(volume.get("capacity") or "")
+        parsed = _parse_size_bytes(capacity)
+        index[name] = {
+            "capacity": capacity,
+            "bytes": int(parsed) if parsed is not None else None,
+        }
+    return index
+
+
+def enrich_maps_with_source_size(
+    maps: list[dict], index: dict[str, dict]
+) -> list[dict]:
+    """Copy maps and attach source volume size fields from a capacity index."""
+    enriched: list[dict] = []
+    for mapping in maps:
+        updated = dict(mapping)
+        source = str(updated.get("source") or "")
+        entry = index.get(source)
+        if entry:
+            updated["source_size"] = entry.get("capacity") or ""
+            updated["source_size_bytes"] = entry.get("bytes")
+        else:
+            updated["source_size"] = ""
+        enriched.append(updated)
+    return enriched
+
+
+def sum_source_size_bytes(maps: list[dict]) -> int:
+    """Sum source_size_bytes across maps, skipping unknown sizes."""
+    total = 0
+    for mapping in maps:
+        bytes_val = mapping.get("source_size_bytes")
+        if bytes_val is not None:
+            total += int(bytes_val)
+    return total
+
+
+def format_cg_total_size(maps: list[dict]) -> str:
+    """Format combined source size for a consistency group, or empty when unknown."""
+    total = sum_source_size_bytes(maps)
+    if total > 0:
+        return _format_bytes(total)
+    return ""
+
+
 def collect_fc_consistgrp_inventory(
     run_cmd: Callable[[str], str],
 ) -> tuple[list[dict], list[dict]]:
@@ -147,6 +200,16 @@ def collect_fc_consistgrp_inventory(
     groups = parse_lsfcconsistgrp(groups_output)
     maps = parse_lsfcmap_rows(maps_output)
     groups = enrich_group_map_counts(groups, maps)
+
+    index: dict = {}
+    try:
+        vols_output = run_cmd("svcinfo lsvdisk -delim :")
+        if not str(vols_output or "").strip():
+            vols_output = run_cmd("svcinfo lsvdisk")
+        index = volume_capacity_index(vols_output)
+    except Exception:
+        index = {}
+    maps = enrich_maps_with_source_size(maps, index)
     return groups, maps
 
 

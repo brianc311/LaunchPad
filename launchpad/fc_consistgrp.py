@@ -94,7 +94,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         <button type="button" class="danger" id="remove-maps-btn">Remove from CG</button>
       </div>
       <p class="hint" id="member-maps-hint">Select a consistency group above to view its member maps.</p>
-      <div class="table-wrap"><table><thead><tr><th></th><th>Map</th><th>Source</th><th>Target</th><th>Status</th><th>Progress</th></tr></thead><tbody id="member-maps-body"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th></th><th>Map</th><th>Source</th><th>Target</th><th>Size</th><th>Status</th><th>Progress</th></tr></thead><tbody id="member-maps-body"></tbody></table></div>
     </section>
 
     <section class="section">
@@ -103,7 +103,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         <button type="button" id="assign-maps-btn">Assign to selected CG</button>
       </div>
       <p class="hint">FlashCopy maps not currently in a consistency group. Select one or more, then assign to the CG selected above.</p>
-      <div class="table-wrap"><table><thead><tr><th></th><th>Map</th><th>Source</th><th>Target</th><th>Status</th></tr></thead><tbody id="standalone-maps-body"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th></th><th>Map</th><th>Source</th><th>Target</th><th>Size</th><th>Status</th></tr></thead><tbody id="standalone-maps-body"></tbody></table></div>
     </section>
 
     <p class="footer">LaunchPad FlashCopy Consistency Groups v{{APP_VERSION}} &middot; mutations run only after Preview &rarr; Run confirmation.</p>
@@ -144,6 +144,29 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
       return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
     }
     function escapeAttr(value) { return escapeHtml(value); }
+
+    /** Mirror launchpad.flashsystem_parse._format_bytes (GB → TB → PB, 1 decimal). */
+    function formatBytes(n) {
+      if (n <= 0) return "0 GB";
+      let value = n / (1024 ** 3);
+      let unit = "GB";
+      if (value >= 1024) { value /= 1024; unit = "TB"; }
+      if (value >= 1024) { value /= 1024; unit = "PB"; }
+      return value.toFixed(1) + " " + unit;
+    }
+    function memberMapsTotalLabel(maps) {
+      let sum = 0;
+      let any = false;
+      for (const m of maps) {
+        const b = Number(m.source_size_bytes);
+        if (Number.isFinite(b) && b > 0) { sum += b; any = true; }
+      }
+      return any ? (" · Total size " + formatBytes(sum)) : "";
+    }
+    function mapSizeCell(mapping) {
+      const size = String(mapping.source_size || "").trim();
+      return escapeHtml(size || "—");
+    }
 
     function currentCardId() {
       const value = cardSelect.value;
@@ -261,7 +284,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         ? (inventory.maps || []).filter((mapping) => String(mapping.consistgrp || "").trim() === selectedGroupName)
         : [];
       memberMapsHint.textContent = selectedGroupName
-        ? `${maps.length} map(s) in ${selectedGroupName}.`
+        ? `${maps.length} map(s) in ${selectedGroupName}${memberMapsTotalLabel(maps)}.`
         : "Select a consistency group above to view its member maps.";
       memberMapsBody.innerHTML = maps.length
         ? maps.map((mapping) => {
@@ -272,11 +295,12 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
               <td>${escapeHtml(name)}</td>
               <td>${escapeHtml(mapping.source || "")}</td>
               <td>${escapeHtml(mapping.target || "")}</td>
+              <td>${mapSizeCell(mapping)}</td>
               <td>${escapeHtml(mapping.status || "")}</td>
               <td>${escapeHtml(String(mapping.progress ?? ""))}</td>
             </tr>`;
           }).join("")
-        : `<tr><td colspan="6" class="empty">${selectedGroupName ? "No member maps in this group." : "Select a consistency group to view member maps."}</td></tr>`;
+        : `<tr><td colspan="7" class="empty">${selectedGroupName ? "No member maps in this group." : "Select a consistency group to view member maps."}</td></tr>`;
     }
 
     function renderStandAlone() {
@@ -290,10 +314,11 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
               <td>${escapeHtml(name)}</td>
               <td>${escapeHtml(mapping.source || "")}</td>
               <td>${escapeHtml(mapping.target || "")}</td>
+              <td>${mapSizeCell(mapping)}</td>
               <td>${escapeHtml(mapping.status || "")}</td>
             </tr>`;
           }).join("")
-        : '<tr><td colspan="5" class="empty">No stand-alone FlashCopy maps found.</td></tr>';
+        : '<tr><td colspan="6" class="empty">No stand-alone FlashCopy maps found.</td></tr>';
     }
 
     function updateActionState() {
