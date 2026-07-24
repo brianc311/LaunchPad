@@ -15,6 +15,11 @@ from launchpad.health_format import card_stats_columns, command_results_columns
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.health_server import get_health_server
 from launchpad.launchers import launch_card
+from launchpad.mouse_jiggler import (
+    SETTING_MOUSE_JIGGLER,
+    MouseJiggler,
+    setting_to_enabled,
+)
 from launchpad.monitor import (
     HealthDashboardEntry,
     ensure_health_dashboard_registered,
@@ -62,6 +67,12 @@ class DashboardView(ctk.CTkFrame):
         self._monitor_states: dict[int, bool] = {}
         self._cards_compact = self.db.get_setting("cards_compact", "true") == "true"
         self._expanded_card_ids = self._load_expanded_card_ids()
+        self._mouse_jiggler_enabled = setting_to_enabled(
+            self.db.get_setting(SETTING_MOUSE_JIGGLER, "")
+        )
+        self._mouse_jiggler = MouseJiggler()
+        if self._mouse_jiggler_enabled:
+            self._mouse_jiggler.set_enabled(True)
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -299,7 +310,7 @@ class DashboardView(ctk.CTkFrame):
 
         bulk = ctk.CTkFrame(bar, fg_color="transparent")
         bulk.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        bulk.grid_columnconfigure(9, weight=1)
+        bulk.grid_columnconfigure(10, weight=1)
 
         self.compact_switch = ctk.CTkSwitch(
             bulk,
@@ -317,6 +328,15 @@ class DashboardView(ctk.CTkFrame):
         )
         self.monitor_all_switch.grid(row=0, column=1, padx=(0, 12))
 
+        self.mouse_jiggler_switch = ctk.CTkSwitch(
+            bulk,
+            text="Mouse jiggler",
+            command=self._toggle_mouse_jiggler,
+        )
+        if self._mouse_jiggler_enabled:
+            self.mouse_jiggler_switch.select()
+        self.mouse_jiggler_switch.grid(row=0, column=2, padx=(0, 12))
+
         ctk.CTkButton(
             bulk,
             text="Select All",
@@ -324,7 +344,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._select_all_cards,
-        ).grid(row=0, column=2, padx=4)
+        ).grid(row=0, column=3, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -333,7 +353,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._clear_card_selection,
-        ).grid(row=0, column=3, padx=4)
+        ).grid(row=0, column=4, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -342,7 +362,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["accent"],
             hover_color=self.theme["accent_soft"],
             command=lambda: self._set_checked_monitoring(True),
-        ).grid(row=0, column=4, padx=4)
+        ).grid(row=0, column=5, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -351,7 +371,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=lambda: self._set_checked_monitoring(False),
-        ).grid(row=0, column=5, padx=4)
+        ).grid(row=0, column=6, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -360,7 +380,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_checked_cards,
-        ).grid(row=0, column=6, padx=4)
+        ).grid(row=0, column=7, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -369,7 +389,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_all_visible_cards,
-        ).grid(row=0, column=7, padx=4)
+        ).grid(row=0, column=8, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -378,7 +398,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._expand_checked_cards,
-        ).grid(row=0, column=8, padx=4)
+        ).grid(row=0, column=9, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -387,7 +407,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=lambda: self._set_all_cards_collapsed(False),
-        ).grid(row=0, column=9, padx=4)
+        ).grid(row=0, column=10, padx=4)
 
         ctk.CTkButton(
             bulk,
@@ -396,7 +416,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=lambda: self._set_all_cards_collapsed(True),
-        ).grid(row=0, column=10, padx=4, sticky="w")
+        ).grid(row=0, column=11, padx=4, sticky="w")
 
         self.selection_label = ctk.CTkLabel(
             bulk,
@@ -404,7 +424,7 @@ class DashboardView(ctk.CTkFrame):
             text_color=self.theme["muted"],
             font=ctk.CTkFont(size=12),
         )
-        self.selection_label.grid(row=0, column=11, padx=(12, 0), sticky="e")
+        self.selection_label.grid(row=0, column=12, padx=(12, 0), sticky="e")
 
     def _toggle_theme(self) -> None:
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
@@ -955,6 +975,17 @@ class DashboardView(ctk.CTkFrame):
         else:
             self._expanded_card_ids.add(card_id)
         self._save_expanded_card_ids()
+
+    def destroy(self) -> None:
+        if hasattr(self, "_mouse_jiggler"):
+            self._mouse_jiggler.stop()
+        super().destroy()
+
+    def _toggle_mouse_jiggler(self) -> None:
+        enabled = bool(self.mouse_jiggler_switch.get())
+        self._mouse_jiggler_enabled = enabled
+        self.db.set_setting(SETTING_MOUSE_JIGGLER, "true" if enabled else "false")
+        self._mouse_jiggler.set_enabled(enabled)
 
     def _toggle_compact_cards(self) -> None:
         self._cards_compact = bool(self.compact_switch.get())

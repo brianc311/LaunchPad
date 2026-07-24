@@ -1,3 +1,4 @@
+from launchpad.database import Database
 from launchpad.mouse_jiggler import (
     SETTING_MOUSE_JIGGLER,
     MouseJiggler,
@@ -21,3 +22,16 @@ def test_jiggler_set_enabled_calls_nudge_on_timer(monkeypatch):
     time.sleep(0.2)
     j.set_enabled(False)
     assert len(calls) >= 1
+
+
+def test_jiggler_setting_persists(tmp_path):
+    db = Database(tmp_path / "t.db")
+    assert setting_to_enabled(db.get_setting(SETTING_MOUSE_JIGGLER, "")) is False
+
+    db.set_setting(SETTING_MOUSE_JIGGLER, "true")
+    assert db.get_setting(SETTING_MOUSE_JIGGLER) == "true"
+    assert setting_to_enabled(db.get_setting(SETTING_MOUSE_JIGGLER)) is True
+
+    db.set_setting(SETTING_MOUSE_JIGGLER, "false")
+    assert db.get_setting(SETTING_MOUSE_JIGGLER) == "false"
+    assert setting_to_enabled(db.get_setting(SETTING_MOUSE_JIGGLER)) is False

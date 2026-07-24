@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import sys
 import threading
 from typing import Callable
@@ -18,7 +19,6 @@ def setting_to_enabled(value: str) -> bool:
 def _default_nudge() -> None:
     if sys.platform != "win32":
         return
-    import ctypes
 
     user32 = ctypes.windll.user32
     point = ctypes.wintypes.POINT()
