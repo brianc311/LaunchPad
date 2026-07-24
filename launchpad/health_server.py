@@ -68,6 +68,7 @@ from launchpad.lun_builder_data import (
     validate_build_for_preview,
 )
 from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
+from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.lun_builder_export import (
     export_lun_build_csv_zip,
     export_lun_build_xlsx,
@@ -729,6 +730,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           Show alerts
         </label>
         <span id="refresh-status" class="refresh-status"></span>
+        <span id="jiggler-status" class="refresh-status">Mouse jiggler: Off</span>
       </div>
       <div class="filter-bar no-print">
         <input type="search" id="health-search" placeholder="Find sites for PDF (all sites stay visible)" aria-label="Search servers">
@@ -761,6 +763,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const serversEl = document.getElementById("servers");
     const summaryEl = document.getElementById("summary");
     const refreshStatusEl = document.getElementById("refresh-status");
+    const jigglerStatusEl = document.getElementById("jiggler-status");
     const refreshAllBtn = document.getElementById("refresh-all-btn");
     const issuesListEl = document.getElementById("issues-list");
     const modalEl = document.getElementById("detail-modal");
@@ -1676,6 +1679,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
+    async function loadJigglerStatus() {
+      if (!jigglerStatusEl) return;
+      try {
+        const res = await fetch("/api/mouse-jiggler");
+        if (!res.ok) return;
+        const data = await res.json();
+        jigglerStatusEl.textContent = data.enabled ? "Mouse jiggler: On" : "Mouse jiggler: Off";
+      } catch (_err) {
+        /* ignore network errors */
+      }
+    }
+
     async function loadCards() {
       try {
         if (refreshStatusEl && !refreshAllRunning) {
@@ -1689,6 +1704,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         } catch (_syncErr) {
           // Sync is best-effort; /api/cards also syncs when LaunchPad is unlocked.
         }
+        await loadJigglerStatus();
         await loadMonitorState();
         const res = await fetch("/api/cards");
         if (!res.ok) {
@@ -1744,8 +1760,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     loadShowAlertsPref();
 
+    loadJigglerStatus();
     loadCards();
     setInterval(loadCards, 15000);
+    setInterval(loadJigglerStatus, 30000);
   </script>
 </body>
 </html>"""
@@ -1846,6 +1864,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/monitor":
             self._send_json({"states": server.monitor_states(), "default": False})
+            return
+        if path == "/api/mouse-jiggler":
+            self._send_json({"enabled": server.mouse_jiggler_enabled()})
             return
         if path == "/api/snapshot-notes":
             self._send_json({"notes": server.get_snapshot_notes(), "persisted": True})
@@ -3370,6 +3391,13 @@ class HealthServer:
         result = run_snap_steps(steps, self._snap_run_command(card))
         result["warnings"] = preview["warnings"]
         return result
+
+    def mouse_jiggler_enabled(self) -> bool:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return False
+        return setting_to_enabled(getter(SETTING_MOUSE_JIGGLER, ""))
 
     def get_snapshot_notes(self) -> dict[str, str]:
         with self._lock:
