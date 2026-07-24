@@ -422,6 +422,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 1.15rem;
     }
     .issues-ok { color: #4ade80; margin: 0; }
+    .card-active-issues {
+      margin-top: 12px;
+      border: 1px solid rgba(255, 107, 0, 0.45);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: #121821;
+    }
+    .card-active-issues h3 {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 1rem;
+    }
+    .card-active-issues .issue-list { margin: 0; }
+    .card-active-issues .issues-ok { font-size: 0.9rem; }
     .issue-list { display: grid; gap: 8px; }
     .issue {
       border-radius: 10px;
@@ -1383,6 +1397,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `${user}${card.host}${port}`;
     }
 
+    function cardActiveIssuesHtml(card) {
+      if (!isMonitorOn(card.id)) return "";
+      const issues = Array.isArray(card.health_issues) ? card.health_issues.slice() : [];
+      const rank = { critical: 0, warn: 1 };
+      issues.sort(
+        (a, b) =>
+          (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9) ||
+          String(a.category || "").localeCompare(String(b.category || "")) ||
+          String(a.message || "").localeCompare(String(b.message || ""))
+      );
+      let body;
+      if (!issues.length) {
+        body = '<p class="issues-ok">No active issues.</p>';
+      } else {
+        body =
+          '<div class="issue-list">' +
+          issues
+            .map((issue) => {
+              const sev = escapeHtml(issue.severity || "warn");
+              const cat = escapeHtml(issue.category || "");
+              const msg = escapeHtml(issue.message || "");
+              return `<div class="issue ${sev}"><span>${cat ? cat + " · " : ""}${msg}</span></div>`;
+            })
+            .join("") +
+          "</div>";
+      }
+      return `<div class="card-active-issues"><h3>Active Issues</h3>${body}</div>`;
+    }
+
     function renderCard(card) {
       const updated = card.updated_at ? `Last updated: ${card.updated_at}` : "Not refreshed yet";
       const monitorOn = isMonitorOn(card.id);
@@ -1416,6 +1459,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
           ${quickCmdButtons(card.id, hasCapacity)}
           <div class="metrics">${metricsHtml(card)}</div>
+          ${cardActiveIssuesHtml(card)}
           <p class="paused-note"${monitorOn ? ' style="display:none"' : ""}>Monitoring off — showing last snapshot. Turn on Monitor to connect over SSH.</p>
           <p class="updated">${updated}</p>
         </section>`;
