@@ -2,10 +2,65 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from launchpad.flashsystem_fc import parse_lsvdisk_volumes
 from launchpad.storage_presets import HPE_SHELL_PROFILES, is_svc_fc_profile
+
+ANDERSON_TARGET_NAME = "Anderson, SC"
+ANDERSON_DEFAULT_HOST = "10.244.25.158"
+
+_WILLIAMSTON_ANDERSON_NAME = re.compile(
+    r"williamston\s*\(\s*anderson\s*\)\s*sc",
+    re.IGNORECASE,
+)
+
+
+def normalize_site_host(raw: str) -> str:
+    host = str(raw or "").strip()
+    for prefix in ("https://", "http://"):
+        if host.lower().startswith(prefix):
+            host = host[len(prefix) :]
+            break
+    return host.rstrip("/").strip()
+
+
+def site_ip_href(host: str) -> str:
+    normalized = str(host or "").strip()
+    if not normalized:
+        return ""
+    return f"https://{normalized}"
+
+
+def is_williamston_anderson_name(name: str) -> bool:
+    return bool(_WILLIAMSTON_ANDERSON_NAME.fullmatch(str(name or "").strip()))
+
+
+def anderson_rename_plan(cards: list[dict]) -> dict | None:
+    williamston_card: dict | None = None
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        card_name = str(card.get("name") or "")
+        if is_williamston_anderson_name(card_name):
+            williamston_card = card
+            break
+    if williamston_card is None:
+        return None
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        if card is williamston_card:
+            continue
+        if str(card.get("name") or "") == ANDERSON_TARGET_NAME:
+            return None
+    host = str(williamston_card.get("host") or "").strip()
+    return {
+        "card_id": williamston_card.get("id"),
+        "new_name": ANDERSON_TARGET_NAME,
+        "new_host": host or ANDERSON_DEFAULT_HOST,
+    }
 
 
 def volume_name_matches(name: str, query: str) -> bool:
