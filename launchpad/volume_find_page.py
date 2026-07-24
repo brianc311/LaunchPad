@@ -77,6 +77,17 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     }
     .errors:empty, .errors[hidden] { display: none; }
     .footer { margin-top: 18px; color: var(--muted); font-size: 0.85rem; }
+    .site-ip-cell { white-space: nowrap; }
+    .site-ip-link { color: var(--accent2); }
+    .site-ip-empty { color: var(--muted); }
+    .site-ip-input {
+      width: min(180px, 100%); background: #0f141d; color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px; height: 28px;
+      padding: 0 8px; font: inherit;
+    }
+    button.btn.site-ip-edit, button.btn.site-ip-save, button.btn.site-ip-cancel {
+      height: 28px; padding: 0 10px; font-size: 0.8rem; margin-left: 6px;
+    }
   </style>
 </head>
 <body>
@@ -105,6 +116,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
           <thead>
             <tr>
               <th>Card</th>
+              <th>Site IP</th>
               <th>Vendor</th>
               <th>Volume</th>
               <th>Pool / CPG</th>
@@ -112,7 +124,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
             </tr>
           </thead>
           <tbody id="results-body">
-            <tr><td colspan="5" class="empty">Enter a volume name fragment and click Find.</td></tr>
+            <tr><td colspan="6" class="empty">Enter a volume name fragment and click Find.</td></tr>
           </tbody>
         </table>
       </div>
@@ -128,6 +140,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     const statusEl = document.getElementById("status");
     const errorsEl = document.getElementById("errors");
     const bodyEl = document.getElementById("results-body");
+    let lastMatches = [];
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -135,6 +148,20 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function normalizeSiteHost(raw) {
+      let host = String(raw || "").trim();
+      const lower = host.toLowerCase();
+      if (lower.startsWith("https://")) host = host.slice(8);
+      else if (lower.startsWith("http://")) host = host.slice(7);
+      return host.replace(/\\/+$/, "").trim();
+    }
+
+    function siteIpHref(host) {
+      const normalized = String(host || "").trim();
+      if (!normalized) return "";
+      return "https://" + normalized;
     }
 
     function setBusy(busy) {
@@ -155,14 +182,96 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       }).join("\\n");
     }
 
-    function renderMatches(matches) {
-      if (!matches || !matches.length) {
-        bodyEl.innerHTML = '<tr><td colspan="5" class="empty">No matches.</td></tr>';
+    function renderSiteIpCell(cardId, host) {
+      const href = siteIpHref(host);
+      const display = href
+        ? ('<a class="site-ip-link" href="' + escapeHtml(href)
+          + '" target="_blank" rel="noopener">' + escapeHtml(href) + "</a>")
+        : '<span class="site-ip-empty">—</span>';
+      return (
+        '<td class="site-ip-cell" data-card-id="' + escapeHtml(cardId)
+        + '" data-host="' + escapeHtml(host || "") + '">'
+        + '<span class="site-ip-view">'
+        + display
+        + ' <button type="button" class="btn secondary site-ip-edit">Edit</button>'
+        + "</span></td>"
+      );
+    }
+
+    function enterSiteIpEdit(cell) {
+      const cardId = cell.getAttribute("data-card-id") || "";
+      const host = cell.getAttribute("data-host") || "";
+      cell.innerHTML = (
+        '<span class="site-ip-edit-form">'
+        + '<input type="text" class="site-ip-input" value="' + escapeHtml(host)
+        + '" aria-label="Site IP host">'
+        + ' <button type="button" class="btn site-ip-save">Save</button>'
+        + ' <button type="button" class="btn secondary site-ip-cancel">Cancel</button>'
+        + "</span>"
+      );
+      const input = cell.querySelector(".site-ip-input");
+      if (input) {
+        input.focus();
+        input.select();
+      }
+      cell.dataset.cardId = cardId;
+    }
+
+    function cancelSiteIpEdit(cell) {
+      const cardId = cell.getAttribute("data-card-id") || "";
+      const host = cell.getAttribute("data-host") || "";
+      cell.outerHTML = renderSiteIpCell(cardId, host);
+    }
+
+    function applyHostToMatches(cardId, host) {
+      lastMatches.forEach((m) => {
+        if (String(m.card_id) === String(cardId)) m.host = host;
+      });
+      renderMatches(lastMatches);
+    }
+
+    async function saveSiteIp(cell) {
+      const cardId = cell.getAttribute("data-card-id");
+      const input = cell.querySelector(".site-ip-input");
+      const host = normalizeSiteHost(input ? input.value : "");
+      if (!host) {
+        statusEl.textContent = "Host cannot be empty.";
         return;
       }
-      bodyEl.innerHTML = matches.map((m) => (
+      statusEl.textContent = "Saving Site IP…";
+      try {
+        const res = await fetch("/api/volume-find/card-host", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ card_id: Number(cardId), host: host }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 403) {
+          statusEl.textContent = data.error || "Unlock LaunchPad to save Site IP.";
+          return;
+        }
+        if (!res.ok) {
+          statusEl.textContent = data.error || ("Save failed (" + res.status + ")");
+          return;
+        }
+        const saved = data.host || host;
+        applyHostToMatches(cardId, saved);
+        statusEl.textContent = "Site IP saved.";
+      } catch (err) {
+        statusEl.textContent = String(err && err.message ? err.message : err);
+      }
+    }
+
+    function renderMatches(matches) {
+      lastMatches = matches || [];
+      if (!lastMatches.length) {
+        bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
+        return;
+      }
+      bodyEl.innerHTML = lastMatches.map((m) => (
         "<tr>"
         + "<td>" + escapeHtml(m.card_name || m.card_id || "") + "</td>"
+        + renderSiteIpCell(m.card_id, m.host || "")
         + "<td>" + escapeHtml(m.vendor || "") + "</td>"
         + "<td>" + escapeHtml(m.volume || "") + "</td>"
         + "<td>" + escapeHtml(m.pool_or_cpg || "") + "</td>"
@@ -176,7 +285,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       if (!q) {
         statusEl.textContent = "Enter a search term.";
         renderErrors([]);
-        bodyEl.innerHTML = '<tr><td colspan="5" class="empty">Enter a volume name fragment and click Find.</td></tr>';
+        bodyEl.innerHTML = '<tr><td colspan="6" class="empty">Enter a volume name fragment and click Find.</td></tr>';
         return;
       }
       setBusy(true);
@@ -191,7 +300,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
           const msg = data.error || ("Request failed (" + res.status + ")");
           statusEl.textContent = msg;
           renderErrors([{ card_name: "API", error: msg }]);
-          bodyEl.innerHTML = '<tr><td colspan="5" class="empty">No matches.</td></tr>';
+          bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
           return;
         }
         const matches = data.matches || [];
@@ -213,11 +322,25 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       } catch (err) {
         statusEl.textContent = String(err && err.message ? err.message : err);
         renderErrors([{ card_name: "Network", error: String(err) }]);
-        bodyEl.innerHTML = '<tr><td colspan="5" class="empty">No matches.</td></tr>';
+        bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
       } finally {
         setBusy(false);
       }
     }
+
+    bodyEl.addEventListener("click", (ev) => {
+      const target = ev.target;
+      if (!(target instanceof Element)) return;
+      const cell = target.closest(".site-ip-cell");
+      if (!cell) return;
+      if (target.classList.contains("site-ip-edit")) {
+        enterSiteIpEdit(cell);
+      } else if (target.classList.contains("site-ip-save")) {
+        saveSiteIp(cell);
+      } else if (target.classList.contains("site-ip-cancel")) {
+        cancelSiteIpEdit(cell);
+      }
+    });
 
     findBtn.addEventListener("click", () => runVolumeFind("cache"));
     liveBtn.addEventListener("click", () => runVolumeFind("live"));

@@ -20,3 +20,18 @@ def test_volume_find_path_and_controls():
 
 def test_fc_wwpn_links_to_volume_find():
     assert 'href="/volume-find">Volume Find</a>' in FC_WWPN_REPORT_HTML
+
+
+def test_volume_find_site_ip_ui():
+    html = VOLUME_FIND_HTML
+    for text in (
+        "Site IP",
+        "/api/volume-find/card-host",
+        "https://",
+        'colspan="6"',
+        "data-card-id",
+        "site-ip-edit",
+        "site-ip-save",
+        "site-ip-cancel",
+    ):
+        assert text in html
