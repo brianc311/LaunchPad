@@ -15,11 +15,7 @@ from launchpad.health_format import card_stats_columns, command_results_columns
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.health_server import get_health_server
 from launchpad.launchers import launch_card
-from launchpad.mouse_jiggler import (
-    SETTING_MOUSE_JIGGLER,
-    MouseJiggler,
-    setting_to_enabled,
-)
+from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.monitor import (
     HealthDashboardEntry,
     ensure_health_dashboard_registered,
@@ -70,9 +66,6 @@ class DashboardView(ctk.CTkFrame):
         self._mouse_jiggler_enabled = setting_to_enabled(
             self.db.get_setting(SETTING_MOUSE_JIGGLER, "")
         )
-        self._mouse_jiggler = MouseJiggler()
-        if self._mouse_jiggler_enabled:
-            self._mouse_jiggler.set_enabled(True)
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -976,16 +969,12 @@ class DashboardView(ctk.CTkFrame):
             self._expanded_card_ids.add(card_id)
         self._save_expanded_card_ids()
 
-    def destroy(self) -> None:
-        if hasattr(self, "_mouse_jiggler"):
-            self._mouse_jiggler.stop()
-        super().destroy()
-
     def _toggle_mouse_jiggler(self) -> None:
         enabled = bool(self.mouse_jiggler_switch.get())
         self._mouse_jiggler_enabled = enabled
         self.db.set_setting(SETTING_MOUSE_JIGGLER, "true" if enabled else "false")
-        self._mouse_jiggler.set_enabled(enabled)
+        if hasattr(self.master, "set_mouse_jiggler_enabled"):
+            self.master.set_mouse_jiggler_enabled(enabled)
 
     def _toggle_compact_cards(self) -> None:
         self._cards_compact = bool(self.compact_switch.get())

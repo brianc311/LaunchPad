@@ -2,6 +2,11 @@ import customtkinter as ctk
 
 from launchpad.branding import window_title
 from launchpad.database import Database
+from launchpad.mouse_jiggler import (
+    SETTING_MOUSE_JIGGLER,
+    MouseJiggler,
+    setting_to_enabled,
+)
 from launchpad.ui.admin_view import AdminView
 from launchpad.ui.dashboard_view import DashboardView
 from launchpad.ui.login_view import LoginView
@@ -14,14 +19,31 @@ class LaunchPadApp(ctk.CTk):
         self.db = Database()
         self.crypto_key: bytes | None = None
         self.current_view = None
+        self._mouse_jiggler = MouseJiggler()
 
         self.title(window_title(self.db))
         self.geometry("1200x780")
         self.minsize(960, 640)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         theme_name = self.db.get_setting("theme", "dark")
         self.apply_theme(theme_name)
+        self._sync_mouse_jiggler_from_db()
         self._show_login()
+
+    def _sync_mouse_jiggler_from_db(self) -> None:
+        enabled = setting_to_enabled(self.db.get_setting(SETTING_MOUSE_JIGGLER, ""))
+        self._mouse_jiggler.set_enabled(enabled)
+
+    def set_mouse_jiggler_enabled(self, enabled: bool) -> None:
+        self._mouse_jiggler.set_enabled(enabled)
+
+    def _on_close(self) -> None:
+        self.destroy()
+
+    def destroy(self) -> None:
+        self._mouse_jiggler.stop()
+        super().destroy()
 
     def apply_theme(self, theme_name: str) -> None:
         theme = get_theme(theme_name)
@@ -110,6 +132,7 @@ class LaunchPadApp(ctk.CTk):
 
     def _show_dashboard(self) -> None:
         self._clear_view()
+        self._sync_mouse_jiggler_from_db()
         self.title(window_title(self.db))
         try:
             self.current_view = DashboardView(
