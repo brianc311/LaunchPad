@@ -62,6 +62,7 @@ class LaunchPadApp(ctk.CTk):
         if not self.crypto_key:
             get_health_server().set_sync_provider(None)
             get_health_server().set_settings_backend(None, None)
+            get_health_server().set_card_patcher(None)
             get_health_server().clear_cards()
             return
 
@@ -71,8 +72,41 @@ class LaunchPadApp(ctk.CTk):
         def provider() -> int:
             return ensure_health_dashboard_registered(db, crypto_key)
 
+        def patch_card(
+            card_id: int, *, host: str | None = None, name: str | None = None
+        ) -> dict:
+            card = db.get_card(card_id)
+            if card is None:
+                raise ValueError(f"Unknown card id {card_id}")
+            data = {
+                "name": name if name is not None else card.name,
+                "card_type": card.card_type,
+                "host": host if host is not None else card.host,
+                "port": card.port,
+                "serial_number": card.serial_number,
+                "username": card.username,
+                "encrypted_password": card.encrypted_password,
+                "encrypted_key_passphrase": card.encrypted_key_passphrase,
+                "encrypted_key": card.encrypted_key,
+                "url": card.url,
+                "icon": card.icon,
+                "category": card.category,
+                "sort_order": card.sort_order,
+                "glow_color": card.glow_color,
+                "key_file_path": card.key_file_path,
+                "device_profile": card.device_profile,
+                "custom_commands": card.custom_commands,
+            }
+            db.update_card(card_id, data)
+            return {
+                "card_id": card_id,
+                "host": data["host"],
+                "name": data["name"],
+            }
+
         get_health_server().set_sync_provider(provider)
         get_health_server().set_settings_backend(db.get_setting, db.set_setting)
+        get_health_server().set_card_patcher(patch_card)
 
     def _show_dashboard(self) -> None:
         self._clear_view()
