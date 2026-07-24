@@ -739,6 +739,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <button type="button" id="clear-selection-btn" class="secondary">Clear selection</button>
         <span id="selection-count" class="selection-count"></span>
         <button type="button" id="print-btn">Print / Save PDF</button>
+        <button type="button" id="health-excel-btn" class="secondary">Export Excel</button>
       </div>
       <p id="print-meta" class="print-meta"></p>
       <p id="search-hint" class="search-hint no-print"></p>
@@ -779,6 +780,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const clearSelectionBtn = document.getElementById("clear-selection-btn");
     const selectionCountEl = document.getElementById("selection-count");
     const printBtn = document.getElementById("print-btn");
+    const healthExcelBtn = document.getElementById("health-excel-btn");
     const printMetaEl = document.getElementById("print-meta");
     const searchHintEl = document.getElementById("search-hint");
     const SHOW_ALERTS_PREF_KEY = "launchpad.healthDashboard.showAlerts";
@@ -1086,6 +1088,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       wirePrintCheckboxes();
       syncPrintSelectionClasses();
       updateSelectionCount();
+    }
+
+    async function downloadHealthExcel() {
+      if (!healthExcelBtn) return;
+      healthExcelBtn.disabled = true;
+      if (refreshStatusEl) refreshStatusEl.textContent = "Building Health Summary Excel…";
+      try {
+        const siteId = selectedSiteId();
+        const cardParam = siteId != null ? `card_id=${siteId}&` : "";
+        const res = await fetch(`/api/health-export?${cardParam}open=1`);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err && err.error) detail = err.error;
+          } catch (_err) {
+            /* ignore */
+          }
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, "");
+        a.href = url;
+        a.download = `Health_Summary_${stamp}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = "Health Summary Excel downloaded and opened in Excel.";
+        }
+      } catch (err) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `Health Excel export failed: ${err.message || err}`;
+        }
+      } finally {
+        healthExcelBtn.disabled = false;
+      }
     }
 
     function printSelectedHealth() {
@@ -1818,6 +1858,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (printBtn) {
       printBtn.addEventListener("click", printSelectedHealth);
     }
+    if (healthExcelBtn) {
+      healthExcelBtn.addEventListener("click", downloadHealthExcel);
+    }
     loadShowAlertsPref();
 
     loadJigglerStatus();
@@ -2266,6 +2309,48 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=500)
                 return
             self._send_bytes(body, content_type=content_type, filename=filename)
+            return
+        if path == "/api/health-export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "Invalid card_id"}, status=400)
+                    return
+            open_after = (query.get("open") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                server.sync_from_app()
+                body, filename = server.export_health_excel_bytes(card_id=card_id)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Health Summary Excel opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Health Summary Excel saved for download but could not open: "
+                        f"{open_exc}"
+                    )
+            self._send_bytes(
+                body,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
             return
         if path == "/api/capacity-export":
             from launchpad.capacity_export import open_exported_workbook
@@ -4010,6 +4095,28 @@ class HealthServer:
                     }
                 )
         return results
+
+    def export_health_excel_bytes(
+        self,
+        *,
+        card_id: int | None = None,
+    ) -> tuple[bytes, str]:
+        from launchpad.health_excel_export import (
+            build_health_summary_workbook,
+            filter_health_summary_cards,
+        )
+
+        cards = self.list_cards(allow_sync=False)
+        cards = filter_health_summary_cards(cards, card_id=card_id)
+        monitor_enabled = {
+            int(card["id"]): self.is_monitor_enabled(int(card["id"]))
+            for card in cards
+            if card.get("id") is not None
+        }
+        body = build_health_summary_workbook(cards, monitor_enabled=monitor_enabled)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        filename = f"Health_Summary_{stamp}.xlsx"
+        return body, filename
 
     def export_capacity_excel_bytes(
         self, *, include_monitor_off: bool = False
