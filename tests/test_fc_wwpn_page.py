@@ -37,6 +37,16 @@ def test_fc_wwpn_exposes_cell_clamp_controls():
     assert "line-clamp: none" in print_block or "-webkit-line-clamp: unset" in print_block or "overflow: visible" in print_block
 
 
+def test_fc_wwpn_js_newline_escape_is_valid():
+    # Python """ must use \\n so the browser receives a JS \n escape, not a real newline
+    # (which breaks the whole page script with SyntaxError).
+    assert 'text.includes("\\n")' in FC_WWPN_REPORT_HTML
+    assert not any(
+        line.lstrip().startswith('") || text.includes')
+        for line in FC_WWPN_REPORT_HTML.splitlines()
+    )
+
+
 def test_fc_wwpn_find_expands_and_clears_clamped_cells():
     for text in (
         "function expandClampedCellsMatching(",

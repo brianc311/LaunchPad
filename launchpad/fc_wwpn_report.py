@@ -269,7 +269,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
     function cellNeedsClamp(td) {
       const text = (td.textContent || "").trim();
       if (!text) return false;
-      if (text.includes("\n") || text.includes(";")) return true;
+      if (text.includes("\\n") || text.includes(";")) return true;
       return td.scrollHeight > td.clientHeight + 1;
     }
 
