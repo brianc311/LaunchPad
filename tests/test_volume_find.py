@@ -1,12 +1,63 @@
 from launchpad.storage_presets import HP_3PAR_COMMANDS, HPE_PRIMERA_COMMANDS, preset_commands_for_profile
 from launchpad.volume_find import (
+    ANDERSON_DEFAULT_HOST,
+    ANDERSON_TARGET_NAME,
+    anderson_rename_plan,
     find_volumes_in_cards,
     is_volume_find_eligible,
+    is_williamston_anderson_name,
+    normalize_site_host,
     parse_showvv_volumes,
+    site_ip_href,
     vendor_for_profile,
     volume_name_matches,
     volumes_from_command_results,
 )
+
+
+def test_normalize_site_host():
+    assert normalize_site_host("  https://10.244.25.158/  ") == "10.244.25.158"
+    assert normalize_site_host("http://host.example") == "host.example"
+    assert normalize_site_host("10.1.2.3") == "10.1.2.3"
+    assert normalize_site_host("   ") == ""
+
+
+def test_site_ip_href():
+    assert site_ip_href("10.244.25.158") == "https://10.244.25.158"
+    assert site_ip_href("") == ""
+
+
+def test_williamston_anderson_name_match():
+    assert is_williamston_anderson_name("WILLIAMSTON (ANDERSON) SC") is True
+    assert is_williamston_anderson_name("WILLIAMSTON  (ANDERSON)  SC") is True
+    assert is_williamston_anderson_name("Anderson, SC") is False
+
+
+def test_anderson_rename_plan_sets_default_host_when_empty():
+    plan = anderson_rename_plan(
+        [{"id": 11, "name": "WILLIAMSTON (ANDERSON) SC", "host": ""}]
+    )
+    assert plan == {
+        "card_id": 11,
+        "new_name": ANDERSON_TARGET_NAME,
+        "new_host": ANDERSON_DEFAULT_HOST,
+    }
+
+
+def test_anderson_rename_plan_keeps_host_and_skips_conflict():
+    assert anderson_rename_plan(
+        [{"id": 11, "name": "WILLIAMSTON (ANDERSON) SC", "host": "10.9.9.9"}]
+    )["new_host"] == "10.9.9.9"
+    assert (
+        anderson_rename_plan(
+            [
+                {"id": 1, "name": "Anderson, SC", "host": "1.1.1.1"},
+                {"id": 11, "name": "WILLIAMSTON (ANDERSON) SC", "host": ""},
+            ]
+        )
+        is None
+    )
+    assert anderson_rename_plan([{"id": 11, "name": "Anderson, SC", "host": "x"}]) is None
 
 
 def test_volume_name_matches_substring_case_insensitive():
@@ -83,6 +134,7 @@ def test_find_volumes_in_cards_sorted():
         {
             "id": 2,
             "name": "Zebra",
+            "host": "10.0.0.2",
             "card_type": "ssh",
             "device_profile": "flashsystem_7200",
             "command_results": [
@@ -95,6 +147,7 @@ def test_find_volumes_in_cards_sorted():
         {
             "id": 1,
             "name": "Alpha",
+            "host": "10.0.0.1",
             "card_type": "ssh",
             "device_profile": "flashsystem_7200",
             "command_results": [
@@ -112,3 +165,5 @@ def test_find_volumes_in_cards_sorted():
         ("Zebra", "vol_a"),
         ("Zebra", "vol_b"),
     ]
+    assert all(m["host"] == "10.0.0.1" for m in found if m["card_name"] == "Alpha")
+    assert all(m["host"] == "10.0.0.2" for m in found if m["card_name"] == "Zebra")

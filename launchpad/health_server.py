@@ -92,8 +92,10 @@ from launchpad.storage_presets import (
     SVC_PROFILES,
 )
 from launchpad.volume_find import (
+    anderson_rename_plan,
     find_volumes_in_cards,
     is_volume_find_eligible,
+    normalize_site_host,
     parse_showvv_volumes,
     vendor_for_profile,
     volume_name_matches,
@@ -2495,6 +2497,39 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 )
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path == "/api/volume-find/card-host":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            if "host" not in payload:
+                self._send_json({"error": "host required"}, status=400)
+                return
+            try:
+                try:
+                    server.ensure_anderson_card_rename()
+                except Exception:
+                    pass
+                result = server.update_volume_find_card_host(card_id, str(payload.get("host")))
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            self._send_json({"ok": True, **result})
+            return
         if not path.startswith("/api/refresh/"):
             self.send_error(404)
             return
@@ -2546,6 +2581,7 @@ class HealthServer:
         self._sync_provider: Callable[[], int] | None = None
         self._get_setting: Callable[[str, str], str] | None = None
         self._set_setting: Callable[[str, str], None] | None = None
+        self._card_patcher: Callable[..., dict] | None = None
         self._monitor_enabled: dict[int, bool] = {}
         self._lun_preview_session: dict[str, Any] | None = None
 
@@ -2561,6 +2597,10 @@ class HealthServer:
         with self._lock:
             self._get_setting = get_setting
             self._set_setting = set_setting
+
+    def set_card_patcher(self, patcher: Callable[..., dict] | None) -> None:
+        with self._lock:
+            self._card_patcher = patcher
 
     def is_unlocked(self) -> bool:
         with self._lock:
@@ -3397,6 +3437,53 @@ class HealthServer:
         with self._lock:
             return self._monitor_enabled.get(card_id, False)
 
+    def update_volume_find_card_host(self, card_id: int, host: str) -> dict:
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to update card host.")
+        normalized = normalize_site_host(host)
+        if not normalized:
+            raise ValueError("host is required after normalize")
+        with self._lock:
+            patcher = self._card_patcher
+        if patcher is None:
+            raise RuntimeError("LaunchPad must be unlocked to update card host.")
+        cid = int(card_id)
+        result = patcher(cid, host=normalized)
+        with self._lock:
+            card = self._cards.get(cid)
+            if card is not None:
+                card.host = normalized
+                name = card.name
+            else:
+                name = str(result.get("name") or "")
+        return {
+            "card_id": cid,
+            "host": normalized,
+            "name": name or str(result.get("name") or ""),
+        }
+
+    def ensure_anderson_card_rename(self) -> dict | None:
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to rename Anderson card.")
+        with self._lock:
+            patcher = self._card_patcher
+        if patcher is None:
+            return None
+        cards = self.list_cards(allow_sync=False)
+        plan = anderson_rename_plan(cards)
+        if plan is None:
+            return None
+        cid = int(plan["card_id"])
+        new_name = str(plan["new_name"])
+        new_host = str(plan["new_host"])
+        patcher(cid, host=new_host, name=new_name)
+        with self._lock:
+            card = self._cards.get(cid)
+            if card is not None:
+                card.name = new_name
+                card.host = new_host
+        return plan
+
     def find_volumes(self, query: str, *, mode: str = "cache") -> dict[str, Any]:
         q = str(query or "").strip()
         if not q:
@@ -3405,6 +3492,11 @@ class HealthServer:
         if mode_key not in {"cache", "live"}:
             raise ValueError("mode must be cache or live")
         self.sync_from_app()
+        if self.is_unlocked():
+            try:
+                self.ensure_anderson_card_rename()
+            except Exception:
+                pass
         cards = self.list_cards(allow_sync=False)
         monitor = {
             c["id"]: self.is_monitor_enabled(int(c["id"]))
@@ -3469,6 +3561,7 @@ class HealthServer:
                                 "volume": vol["name"],
                                 "pool_or_cpg": vol.get("pool_or_cpg") or "",
                                 "source": "live",
+                                "host": str(card.host or ""),
                             }
                         )
             except Exception as exc:

@@ -29,6 +29,7 @@ def test_find_volumes_cache_uses_command_results(monkeypatch):
     assert result["matches"]
     assert result["matches"][0]["volume"] == "pconsps_archvg_1"
     assert result["matches"][0]["source"] == "cache"
+    assert result["matches"][0]["host"] == "10.0.0.1"
 
 
 def test_find_volumes_live_requires_unlock(monkeypatch):
@@ -72,6 +73,7 @@ def test_find_volumes_live_ibm_happy_path(monkeypatch):
     assert match["volume"] == "pconsps_archvg_1"
     assert match["source"] == "live"
     assert match["vendor"] == "ibm"
+    assert match["host"] == "10.0.0.1"
 
 
 def test_find_volumes_live_hpe_happy_path(monkeypatch):
@@ -167,3 +169,101 @@ def test_api_volume_find_route_declared():
 
     src = inspect.getsource(_HealthHandler.do_GET)
     assert "/api/volume-find" in src
+
+
+def test_update_card_host_requires_unlock(monkeypatch):
+    server = HealthServer()
+    monkeypatch.setattr(server, "is_unlocked", lambda: False)
+    try:
+        server.update_volume_find_card_host(1, "10.1.1.1")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "unlock" in str(exc).lower()
+
+
+def test_update_card_host_normalizes_and_patches():
+    server = HealthServer()
+    _unlock(server)
+    applied = {}
+
+    def patcher(card_id, *, host=None, name=None):
+        applied["card_id"] = card_id
+        applied["host"] = host
+        applied["name"] = name
+        return {"card_id": card_id, "host": host or "", "name": name or "Site"}
+
+    server.set_card_patcher(patcher)
+    server._cards[1] = HealthCard(
+        card_id=1,
+        name="Site",
+        host="10.0.0.1",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    result = server.update_volume_find_card_host(1, "https://10.244.25.158/")
+    assert result["host"] == "10.244.25.158"
+    assert applied["host"] == "10.244.25.158"
+    assert applied["card_id"] == 1
+    assert server._cards[1].host == "10.244.25.158"
+
+
+def test_update_card_host_rejects_empty():
+    server = HealthServer()
+    _unlock(server)
+    server.set_card_patcher(
+        lambda card_id, *, host=None, name=None: {
+            "card_id": card_id,
+            "host": host or "",
+            "name": name or "",
+        }
+    )
+    try:
+        server.update_volume_find_card_host(1, "https:///")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "host" in str(exc).lower()
+
+
+def test_ensure_anderson_rename_idempotent():
+    server = HealthServer()
+    _unlock(server)
+    applied = []
+
+    def patcher(card_id, *, host=None, name=None):
+        applied.append({"card_id": card_id, "host": host, "name": name})
+        card = server._cards[card_id]
+        if host is not None:
+            card.host = host
+        if name is not None:
+            card.name = name
+        return {"card_id": card_id, "host": card.host, "name": card.name}
+
+    server.set_card_patcher(patcher)
+    server._cards[11] = HealthCard(
+        card_id=11,
+        name="WILLIAMSTON (ANDERSON) SC",
+        host="",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    plan = server.ensure_anderson_card_rename()
+    assert plan is not None
+    assert plan["new_name"] == "Anderson, SC"
+    assert plan["new_host"] == "10.244.25.158"
+    assert server._cards[11].name == "Anderson, SC"
+    assert server._cards[11].host == "10.244.25.158"
+    assert len(applied) == 1
+    assert server.ensure_anderson_card_rename() is None
+    assert len(applied) == 1
+
+
+def test_api_volume_find_card_host_route_declared():
+    import inspect
+    from launchpad.health_server import _HealthHandler
+
+    src = inspect.getsource(_HealthHandler.do_POST)
+    assert "/api/volume-find/card-host" in src
