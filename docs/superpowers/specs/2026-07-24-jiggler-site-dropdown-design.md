@@ -1,7 +1,7 @@
 # Mouse Jiggler + Health/Capacity Site Dropdown + Health Excel
 
 **Date:** 2026-07-24  
-**Status:** Approved for implementation (pending user review of this spec)  
+**Status:** Approved for implementation  
 **App version target:** 1.6.65  
 **Depends on:** Health Dashboard HTML/JS, Capacity Report page/export, desktop `dashboard_view` settings persistence, FlashCopy CGs Array `<select>` pattern  
 **Approach:** Shared Site dropdown (None = all) on Health + Capacity; Health Export Excel (summary sheet); desktop mouse jiggler default Off + Health indicator (Approach 1)  
