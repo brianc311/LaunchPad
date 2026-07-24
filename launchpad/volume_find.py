@@ -27,7 +27,7 @@ def normalize_site_host(raw: str) -> str:
 
 
 def site_ip_href(host: str) -> str:
-    normalized = str(host or "").strip()
+    normalized = normalize_site_host(host)
     if not normalized:
         return ""
     return f"https://{normalized}"

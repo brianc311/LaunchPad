@@ -159,7 +159,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     }
 
     function siteIpHref(host) {
-      const normalized = String(host || "").trim();
+      const normalized = normalizeSiteHost(host);
       if (!normalized) return "";
       return "https://" + normalized;
     }
