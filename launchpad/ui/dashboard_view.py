@@ -175,8 +175,11 @@ class DashboardView(ctk.CTkFrame):
         actions = ctk.CTkFrame(header, fg_color="transparent")
         actions.grid(row=0, column=2, rowspan=2, sticky="e")
 
+        tools = ctk.CTkFrame(actions, fg_color="transparent")
+        tools.grid(row=0, column=0, sticky="e")
+
         ctk.CTkButton(
-            actions,
+            tools,
             text="Health Dashboard",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -184,7 +187,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=0, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="Capacity Report",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -192,7 +195,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=1, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="FC WWPN",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -200,7 +203,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=2, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="Consistency Groups",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -208,7 +211,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=3, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="FlashCopy CGs",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -216,7 +219,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=4, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="LUN Builder",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -224,7 +227,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=5, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="Volume Find",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -232,7 +235,7 @@ class DashboardView(ctk.CTkFrame):
         ).grid(row=0, column=6, padx=6)
 
         self.export_excel_btn = ctk.CTkButton(
-            actions,
+            tools,
             text="Export Excel ▾",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
@@ -242,35 +245,38 @@ class DashboardView(ctk.CTkFrame):
         self.export_excel_btn.grid(row=0, column=7, padx=6)
 
         ctk.CTkButton(
-            actions,
+            tools,
             text="Refresh Stats",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._fetch_all_ssh_stats,
         ).grid(row=0, column=8, padx=6)
 
+        controls = ctk.CTkFrame(actions, fg_color="transparent")
+        controls.grid(row=1, column=0, sticky="e", pady=(8, 0))
+
         self.theme_switch = ctk.CTkSwitch(
-            actions,
+            controls,
             text="Light mode" if self.theme_name == "dark" else "Dark mode",
             command=self._toggle_theme,
         )
-        self.theme_switch.grid(row=0, column=9, padx=6)
+        self.theme_switch.grid(row=0, column=0, padx=6)
 
         ctk.CTkButton(
-            actions,
+            controls,
             text="Admin",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self.on_admin,
-        ).grid(row=0, column=10, padx=6)
+        ).grid(row=0, column=1, padx=6)
 
         ctk.CTkButton(
-            actions,
+            controls,
             text="Lock",
             fg_color=self.theme["danger"],
             hover_color="#B91C1C",
             command=self.on_lock,
-        ).grid(row=0, column=11, padx=6)
+        ).grid(row=0, column=2, padx=6)
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
