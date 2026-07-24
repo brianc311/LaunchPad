@@ -123,6 +123,17 @@ def card_ids_included_for_export(
     )
 
 
+def filter_capacity_entries_by_card_id(
+    included_card_ids: AbstractSet[int],
+    *,
+    card_id: int | None = None,
+) -> frozenset[int]:
+    if card_id is None:
+        return frozenset(included_card_ids)
+    selected = int(card_id)
+    return frozenset({selected}) if selected in included_card_ids else frozenset()
+
+
 def keep_inventory_row(
     *,
     matched_card_id: int | None,
@@ -456,6 +467,7 @@ def export_storage_capacity_excel(
     progress: ProgressCallback | None = None,
     include_monitor_off: bool = True,
     monitor_enabled: Mapping[int, bool] | None = None,
+    card_id: int | None = None,
 ) -> ExportResult:
     entries = build_health_dashboard_entries(db, crypto_key)
     monitor_map = monitor_enabled or {}
@@ -464,6 +476,7 @@ def export_storage_capacity_excel(
         include_monitor_off=include_monitor_off,
         monitor_enabled=monitor_map,
     )
+    included = filter_capacity_entries_by_card_id(included, card_id=card_id)
     entries = [e for e in entries if e.card_id in included]
     cards_by_id = {card.id: card for card in db.list_cards() if card.card_type == "ssh"}
     by_ip, by_serial, by_name = _build_card_lookups(cards_by_id)
@@ -577,12 +590,14 @@ def export_storage_capacity_excel_from_sites(
     *,
     include_monitor_off: bool,
     monitor_enabled: Mapping[int, bool],
+    card_id: int | None = None,
 ) -> ExportResult:
     included = card_ids_included_for_export(
         [site.card_id for site in sites],
         include_monitor_off=include_monitor_off,
         monitor_enabled=monitor_enabled,
     )
+    included = filter_capacity_entries_by_card_id(included, card_id=card_id)
     sites_by_id = {site.card_id: site for site in sites if site.card_id in included}
     by_ip, by_serial, by_name = _build_site_lookups(sites_by_id)
 

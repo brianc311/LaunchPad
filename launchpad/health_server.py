@@ -68,6 +68,7 @@ from launchpad.lun_builder_data import (
     validate_build_for_preview,
 )
 from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
+from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.lun_builder_export import (
     export_lun_build_csv_zip,
     export_lun_build_xlsx,
@@ -729,13 +730,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           Show alerts
         </label>
         <span id="refresh-status" class="refresh-status"></span>
+        <span id="jiggler-status" class="refresh-status">Mouse jiggler: Off</span>
       </div>
       <div class="filter-bar no-print">
+        <label>Site <select id="health-site-select"><option value="">None</option></select></label>
         <input type="search" id="health-search" placeholder="Find sites for PDF (all sites stay visible)" aria-label="Search servers">
         <button type="button" id="select-visible-btn" class="secondary">Select matches</button>
         <button type="button" id="clear-selection-btn" class="secondary">Clear selection</button>
         <span id="selection-count" class="selection-count"></span>
         <button type="button" id="print-btn">Print / Save PDF</button>
+        <button type="button" id="health-excel-btn" class="secondary">Export Excel</button>
       </div>
       <p id="print-meta" class="print-meta"></p>
       <p id="search-hint" class="search-hint no-print"></p>
@@ -761,6 +765,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const serversEl = document.getElementById("servers");
     const summaryEl = document.getElementById("summary");
     const refreshStatusEl = document.getElementById("refresh-status");
+    const jigglerStatusEl = document.getElementById("jiggler-status");
     const refreshAllBtn = document.getElementById("refresh-all-btn");
     const issuesListEl = document.getElementById("issues-list");
     const modalEl = document.getElementById("detail-modal");
@@ -769,11 +774,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalCloseEl = document.getElementById("modal-close");
     const showAlertsToggle = document.getElementById("show-alerts-toggle");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
+    const healthSiteSelectEl = document.getElementById("health-site-select");
     const healthSearchEl = document.getElementById("health-search");
     const selectVisibleBtn = document.getElementById("select-visible-btn");
     const clearSelectionBtn = document.getElementById("clear-selection-btn");
     const selectionCountEl = document.getElementById("selection-count");
     const printBtn = document.getElementById("print-btn");
+    const healthExcelBtn = document.getElementById("health-excel-btn");
     const printMetaEl = document.getElementById("print-meta");
     const searchHintEl = document.getElementById("search-hint");
     const SHOW_ALERTS_PREF_KEY = "launchpad.healthDashboard.showAlerts";
@@ -958,6 +965,48 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `${card.name} ${card.host}${port} ${card.username || ""}`.toLowerCase();
     }
 
+    function siteOptionLabel(card) {
+      return `${card.name} (${card.host || ""})`;
+    }
+
+    function selectedSiteId() {
+      if (!healthSiteSelectEl) return null;
+      const raw = healthSiteSelectEl.value;
+      if (!raw) return null;
+      const id = parseInt(raw, 10);
+      return Number.isFinite(id) ? id : null;
+    }
+
+    function populateHealthSiteSelect(cards) {
+      if (!healthSiteSelectEl) return;
+      const previous = healthSiteSelectEl.value;
+      const sorted = [...cards].sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
+      );
+      healthSiteSelectEl.innerHTML =
+        '<option value="">None</option>' +
+        sorted
+          .map(
+            (card) =>
+              `<option value="${card.id}">${escapeHtml(siteOptionLabel(card))}</option>`
+          )
+          .join("");
+      if (previous && sorted.some((card) => String(card.id) === previous)) {
+        healthSiteSelectEl.value = previous;
+      } else {
+        healthSiteSelectEl.value = "";
+      }
+    }
+
+    function applySiteFilter() {
+      const siteId = selectedSiteId();
+      document.querySelectorAll(".server").forEach((section) => {
+        const id = parseInt(section.dataset.id, 10);
+        const visible = siteId == null || id === siteId;
+        section.style.display = visible ? "" : "none";
+      });
+    }
+
     function healthSearchQuery() {
       return (healthSearchEl?.value || "").toLowerCase().trim();
     }
@@ -1041,16 +1090,64 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       updateSelectionCount();
     }
 
+    async function downloadHealthExcel() {
+      if (!healthExcelBtn) return;
+      healthExcelBtn.disabled = true;
+      if (refreshStatusEl) refreshStatusEl.textContent = "Building Health Summary Excel…";
+      try {
+        const siteId = selectedSiteId();
+        const cardParam = siteId != null ? `card_id=${siteId}&` : "";
+        const res = await fetch(`/api/health-export?${cardParam}open=1`);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err && err.error) detail = err.error;
+          } catch (_err) {
+            /* ignore */
+          }
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, "");
+        a.href = url;
+        a.download = `Health_Summary_${stamp}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = "Health Summary Excel downloaded and opened in Excel.";
+        }
+      } catch (err) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `Health Excel export failed: ${err.message || err}`;
+        }
+      } finally {
+        healthExcelBtn.disabled = false;
+      }
+    }
+
     function printSelectedHealth() {
-      if (!printSelectedIds.size) {
-        window.alert(
-          "Select at least one server to print.\\n\\nCheck PDF on each card, or search for sites and click Select matches."
-        );
+      const siteId = selectedSiteId();
+      let idsToPrint;
+      if (siteId != null) {
+        idsToPrint = new Set([siteId]);
+      } else if (printSelectedIds.size) {
+        idsToPrint = new Set(printSelectedIds);
+      } else {
+        idsToPrint = new Set(cardsCache.map((card) => card.id));
+      }
+      if (!idsToPrint.size) {
+        window.alert("No servers to print.");
         return;
       }
-      syncPrintSelectionClasses();
+      document.querySelectorAll(".server").forEach((section) => {
+        const id = parseInt(section.dataset.id, 10);
+        section.classList.toggle("print-selected", idsToPrint.has(id));
+      });
       if (printMetaEl) {
-        const names = [...printSelectedIds]
+        const names = [...idsToPrint]
           .map((id) => cardsCache.find((entry) => entry.id === id)?.name)
           .filter(Boolean);
         printMetaEl.textContent = `LaunchPad Health · ${names.join(" · ")} · ${new Date().toLocaleString()}`;
@@ -1058,6 +1155,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.body.classList.add("print-export");
       const afterPrint = () => {
         document.body.classList.remove("print-export");
+        syncPrintSelectionClasses();
         window.removeEventListener("afterprint", afterPrint);
       };
       window.addEventListener("afterprint", afterPrint);
@@ -1647,6 +1745,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       renderIssues(sorted);
       wireInteractiveButtons();
       wirePrintCheckboxes();
+      populateHealthSiteSelect(sorted);
+      applySiteFilter();
       applyHealthSearch();
       syncPrintSelectionClasses();
       updateSelectionCount();
@@ -1676,6 +1776,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
+    async function loadJigglerStatus() {
+      if (!jigglerStatusEl) return;
+      try {
+        const res = await fetch("/api/mouse-jiggler");
+        if (!res.ok) return;
+        const data = await res.json();
+        jigglerStatusEl.textContent = data.enabled ? "Mouse jiggler: On" : "Mouse jiggler: Off";
+      } catch (_err) {
+        /* ignore network errors */
+      }
+    }
+
     async function loadCards() {
       try {
         if (refreshStatusEl && !refreshAllRunning) {
@@ -1689,6 +1801,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         } catch (_syncErr) {
           // Sync is best-effort; /api/cards also syncs when LaunchPad is unlocked.
         }
+        await loadJigglerStatus();
         await loadMonitorState();
         const res = await fetch("/api/cards");
         if (!res.ok) {
@@ -1730,6 +1843,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         setAllMonitoring(monitorAllToggle.checked);
       });
     }
+    if (healthSiteSelectEl) {
+      healthSiteSelectEl.addEventListener("change", applySiteFilter);
+    }
     if (healthSearchEl) {
       healthSearchEl.addEventListener("input", applyHealthSearch);
     }
@@ -1742,10 +1858,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (printBtn) {
       printBtn.addEventListener("click", printSelectedHealth);
     }
+    if (healthExcelBtn) {
+      healthExcelBtn.addEventListener("click", downloadHealthExcel);
+    }
     loadShowAlertsPref();
 
+    loadJigglerStatus();
     loadCards();
     setInterval(loadCards, 15000);
+    setInterval(loadJigglerStatus, 30000);
   </script>
 </body>
 </html>"""
@@ -1846,6 +1967,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/monitor":
             self._send_json({"states": server.monitor_states(), "default": False})
+            return
+        if path == "/api/mouse-jiggler":
+            self._send_json({"enabled": server.mouse_jiggler_enabled()})
             return
         if path == "/api/snapshot-notes":
             self._send_json({"notes": server.get_snapshot_notes(), "persisted": True})
@@ -2186,6 +2310,48 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_bytes(body, content_type=content_type, filename=filename)
             return
+        if path == "/api/health-export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "Invalid card_id"}, status=400)
+                    return
+            open_after = (query.get("open") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                server.sync_from_app()
+                body, filename = server.export_health_excel_bytes(card_id=card_id)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Health Summary Excel opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Health Summary Excel saved for download but could not open: "
+                        f"{open_exc}"
+                    )
+            self._send_bytes(
+                body,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
+            return
         if path == "/api/capacity-export":
             from launchpad.capacity_export import open_exported_workbook
             from launchpad.config import TEMP_DIR
@@ -2196,6 +2362,14 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "true",
                 "yes",
             }
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "Invalid card_id"}, status=400)
+                    return
             open_after = (query.get("open") or ["0"])[0].strip().lower() in {
                 "1",
                 "true",
@@ -2204,7 +2378,8 @@ class _HealthHandler(BaseHTTPRequestHandler):
             try:
                 server.sync_from_app()
                 body, filename = server.export_capacity_excel_bytes(
-                    include_monitor_off=include_off
+                    include_monitor_off=include_off,
+                    card_id=card_id,
                 )
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
@@ -3371,6 +3546,13 @@ class HealthServer:
         result["warnings"] = preview["warnings"]
         return result
 
+    def mouse_jiggler_enabled(self) -> bool:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return False
+        return setting_to_enabled(getter(SETTING_MOUSE_JIGGLER, ""))
+
     def get_snapshot_notes(self) -> dict[str, str]:
         with self._lock:
             getter = self._get_setting
@@ -3923,8 +4105,30 @@ class HealthServer:
                 )
         return results
 
+    def export_health_excel_bytes(
+        self,
+        *,
+        card_id: int | None = None,
+    ) -> tuple[bytes, str]:
+        from launchpad.health_excel_export import (
+            build_health_summary_workbook,
+            filter_health_summary_cards,
+        )
+
+        cards = self.list_cards(allow_sync=False)
+        cards = filter_health_summary_cards(cards, card_id=card_id)
+        monitor_enabled = {
+            int(card["id"]): self.is_monitor_enabled(int(card["id"]))
+            for card in cards
+            if card.get("id") is not None
+        }
+        body = build_health_summary_workbook(cards, monitor_enabled=monitor_enabled)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        filename = f"Health_Summary_{stamp}.xlsx"
+        return body, filename
+
     def export_capacity_excel_bytes(
-        self, *, include_monitor_off: bool = False
+        self, *, include_monitor_off: bool = False, card_id: int | None = None
     ) -> tuple[bytes, str]:
         """Build the browser-facing Storage Capacity workbook from registered cards.
 
@@ -3936,28 +4140,32 @@ class HealthServer:
         # at top level.
         from launchpad.capacity_export import (
             ExportSite,
+            card_ids_included_for_export,
             export_storage_capacity_excel_from_sites,
+            filter_capacity_entries_by_card_id,
         )
 
         with self._lock:
             card_ids = sorted(self._cards.keys())
         monitor_enabled = {
-            card_id: self.is_monitor_enabled(card_id) for card_id in card_ids
+            cid: self.is_monitor_enabled(cid) for cid in card_ids
         }
-        included_ids = [
-            card_id
-            for card_id in card_ids
-            if include_monitor_off or monitor_enabled.get(card_id, False)
-        ]
+        included = card_ids_included_for_export(
+            card_ids,
+            include_monitor_off=include_monitor_off,
+            monitor_enabled=monitor_enabled,
+        )
+        included = filter_capacity_entries_by_card_id(included, card_id=card_id)
+        included_ids = sorted(included)
 
         sites: list[ExportSite] = []
-        for card_id in included_ids:
+        for site_id in included_ids:
             with self._lock:
-                card = self._cards.get(card_id)
+                card = self._cards.get(site_id)
             if card is None:
                 continue
             try:
-                card = self.refresh_card(card_id)
+                card = self.refresh_card(site_id)
                 error = card.error
             except Exception as exc:
                 error = str(exc)
@@ -3965,7 +4173,7 @@ class HealthServer:
             pools = pool_capacity_from_commands(card.command_results)
             sites.append(
                 ExportSite(
-                    card_id=card_id,
+                    card_id=site_id,
                     name=card.name,
                     host=card.host,
                     serial_number=card.serial_number,
