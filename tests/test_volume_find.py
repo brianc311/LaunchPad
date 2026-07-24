@@ -134,6 +134,7 @@ def test_find_volumes_in_cards_sorted():
         {
             "id": 2,
             "name": "Zebra",
+            "host": "10.0.0.2",
             "card_type": "ssh",
             "device_profile": "flashsystem_7200",
             "command_results": [
@@ -146,6 +147,7 @@ def test_find_volumes_in_cards_sorted():
         {
             "id": 1,
             "name": "Alpha",
+            "host": "10.0.0.1",
             "card_type": "ssh",
             "device_profile": "flashsystem_7200",
             "command_results": [
@@ -163,3 +165,5 @@ def test_find_volumes_in_cards_sorted():
         ("Zebra", "vol_a"),
         ("Zebra", "vol_b"),
     ]
+    assert all(m["host"] == "10.0.0.1" for m in found if m["card_name"] == "Alpha")
+    assert all(m["host"] == "10.0.0.2" for m in found if m["card_name"] == "Zebra")

@@ -3469,6 +3469,7 @@ class HealthServer:
                                 "volume": vol["name"],
                                 "pool_or_cpg": vol.get("pool_or_cpg") or "",
                                 "source": "live",
+                                "host": str(card.host or ""),
                             }
                         )
             except Exception as exc:

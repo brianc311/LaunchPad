@@ -204,6 +204,7 @@ def find_volumes_in_cards(
                     "volume": vol["name"],
                     "pool_or_cpg": vol.get("pool_or_cpg") or "",
                     "source": source,
+                    "host": str(card.get("host") or ""),
                 }
             )
     return sorted(

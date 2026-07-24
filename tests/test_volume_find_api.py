@@ -29,6 +29,7 @@ def test_find_volumes_cache_uses_command_results(monkeypatch):
     assert result["matches"]
     assert result["matches"][0]["volume"] == "pconsps_archvg_1"
     assert result["matches"][0]["source"] == "cache"
+    assert result["matches"][0]["host"] == "10.0.0.1"
 
 
 def test_find_volumes_live_requires_unlock(monkeypatch):
@@ -72,6 +73,7 @@ def test_find_volumes_live_ibm_happy_path(monkeypatch):
     assert match["volume"] == "pconsps_archvg_1"
     assert match["source"] == "live"
     assert match["vendor"] == "ibm"
+    assert match["host"] == "10.0.0.1"
 
 
 def test_find_volumes_live_hpe_happy_path(monkeypatch):
