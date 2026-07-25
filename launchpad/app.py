@@ -1,12 +1,17 @@
 import customtkinter as ctk
+import webbrowser
 
 from launchpad.branding import window_title
+from launchpad.crypto import decrypt_text
 from launchpad.database import Database
+from launchpad.host_volume_health import normalize_gui_url
+from launchpad.launchers import launch_card
 from launchpad.mouse_jiggler import (
     SETTING_MOUSE_JIGGLER,
     MouseJiggler,
     setting_to_enabled,
 )
+from launchpad.ssh_utils import resolve_ssh_key
 from launchpad.ui.admin_view import AdminView
 from launchpad.ui.dashboard_view import DashboardView
 from launchpad.ui.login_view import LoginView
@@ -85,6 +90,7 @@ class LaunchPadApp(ctk.CTk):
             get_health_server().set_sync_provider(None)
             get_health_server().set_settings_backend(None, None)
             get_health_server().set_card_patcher(None)
+            get_health_server().set_card_launch_backend(None, None)
             get_health_server().clear_cards()
             return
 
@@ -93,6 +99,49 @@ class LaunchPadApp(ctk.CTk):
 
         def provider() -> int:
             return ensure_health_dashboard_registered(db, crypto_key)
+
+        def connect_card(card_id: int) -> str:
+            card = db.get_card(card_id)
+            if card is None:
+                raise ValueError(f"Unknown card id {card_id}")
+            try:
+                password = decrypt_text(crypto_key, card.encrypted_password)
+                decrypt_text(crypto_key, card.encrypted_key)
+            except ValueError as exc:
+                raise ValueError(f"Connect failed: {exc}") from exc
+            try:
+                key_path = resolve_ssh_key(card, crypto_key) if card.card_type == "ssh" else ""
+            except OSError as exc:
+                raise ValueError(f"Connect failed: {exc}") from exc
+            key_passphrase = ""
+            if card.card_type == "ssh":
+                try:
+                    key_passphrase = decrypt_text(crypto_key, card.encrypted_key_passphrase)
+                except ValueError:
+                    key_passphrase = ""
+            if card.card_type == "ssh" and not key_path and not password:
+                raise ValueError("Connect failed: set SSH Password or a key in Admin.")
+            return launch_card(
+                card.card_type,
+                card.host,
+                card.port,
+                card.username,
+                password,
+                key_path if not password else "",
+                card.url,
+                card.name,
+                key_passphrase,
+            )
+
+        def open_card_gui(card_id: int) -> str:
+            card = db.get_card(card_id)
+            if card is None:
+                raise ValueError(f"Unknown card id {card_id}")
+            url = normalize_gui_url(card.url)
+            if not url:
+                raise ValueError("No GUI URL on this card — set URL in Admin.")
+            webbrowser.open(url)
+            return "Opened GUI"
 
         def patch_card(
             card_id: int, *, host: str | None = None, name: str | None = None
@@ -129,6 +178,7 @@ class LaunchPadApp(ctk.CTk):
         get_health_server().set_sync_provider(provider)
         get_health_server().set_settings_backend(db.get_setting, db.set_setting)
         get_health_server().set_card_patcher(patch_card)
+        get_health_server().set_card_launch_backend(connect_card, open_card_gui)
 
     def _show_dashboard(self) -> None:
         self._clear_view()

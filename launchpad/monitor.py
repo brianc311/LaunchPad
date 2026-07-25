@@ -17,6 +17,7 @@ class HealthDashboardEntry:
     custom_commands: str = ""
     serial_number: str = ""
     category: str = ""
+    url: str = ""
 
 
 def _register_entry(server, entry: HealthDashboardEntry) -> None:
@@ -33,6 +34,7 @@ def _register_entry(server, entry: HealthDashboardEntry) -> None:
         entry.custom_commands,
         entry.serial_number,
         entry.category,
+        entry.url,
     )
 
 
@@ -58,6 +60,7 @@ def build_health_dashboard_entries(db, crypto_key: bytes) -> list[HealthDashboar
                 custom_commands=card.custom_commands,
                 serial_number=getattr(card, "serial_number", "") or "",
                 category=card.category or "",
+                url=card.url or "",
             )
         )
     return entries

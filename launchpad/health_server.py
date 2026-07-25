@@ -45,6 +45,15 @@ from launchpad.fc_consistgrp_ops import (
     preview_ok as fc_consistgrp_preview_ok,
 )
 from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
+from launchpad.host_volume_health import (
+    filter_problem_hosts,
+    filter_problem_volumes,
+    is_volume_find_eligible,
+)
+from launchpad.host_volume_health_page import (
+    HOST_VOLUME_HEALTH_HTML,
+    HOST_VOLUME_HEALTH_PATH,
+)
 from launchpad.flashsystem_fc import (
     analyze_fc_inventory,
     parse_fabric_logins,
@@ -123,6 +132,7 @@ class HealthCard:
     custom_commands: str = ""
     serial_number: str = ""
     category: str = ""
+    url: str = ""
     metrics: dict[str, Any] | None = None
     command_results: list[dict[str, Any]] | None = None
     error: str | None = None
@@ -721,6 +731,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/snapshot-schedule" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Snapshot Schedule</a>
         <a class="btn secondary" href="/lun-builder" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">LUN Builder</a>
         <a class="btn secondary" href="/fc-consistgrp" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">FlashCopy CGs</a>
+        <a class="btn secondary" href="/host-volume-health" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Hosts & Volumes</a>
         <label class="toggle-row" for="monitor-all-toggle" title="Connect and monitor every site. Leave off to keep SSH sessions closed.">
           <input type="checkbox" id="monitor-all-toggle">
           All monitoring on
@@ -1940,6 +1951,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == FC_CONSISTGRP_PATH:
             self._send_html(FC_CONSISTGRP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == HOST_VOLUME_HEALTH_PATH:
+            self._send_html(HOST_VOLUME_HEALTH_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
@@ -2148,6 +2162,76 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=403)
                 return
             self._send_json(payload)
+            return
+        if path == "/api/host-volume-health/live":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            try:
+                payload = server.scan_host_volume_health_live(card_id=card_id)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
+        if path == "/api/host-volume-health/export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            export_format = (query.get("format") or [""])[0].strip().lower()
+            if export_format not in {"xlsx", "csv"}:
+                self._send_json(
+                    {"error": "Export format must be xlsx or csv."},
+                    status=400,
+                )
+                return
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            open_after = (query.get("open") or ["1"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                body, filename, content_type = server.export_host_volume_health_bytes(
+                    export_format=export_format,
+                    card_id=card_id,
+                )
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Hosts & Volumes Health export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Hosts & Volumes Health export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
             return
         if path == "/api/fc-wwpn-find":
             from launchpad.fc_wwpn_search import find_cards_matching_fc_query
@@ -2692,6 +2776,35 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path in {"/api/fc-consistgrp/connect", "/api/fc-consistgrp/open-gui"}:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"ok": False, "error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"ok": False, "error": "card_id is required"}, status=400)
+                return
+            try:
+                if path == "/api/fc-consistgrp/connect":
+                    message = server.connect_card_by_id(card_id)
+                else:
+                    message = server.open_card_gui(card_id)
+            except RuntimeError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=403)
+                return
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._send_json({"ok": True, "message": message})
+            return
         if path in {"/api/fc-consistgrp/preview", "/api/fc-consistgrp/run"}:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -2805,8 +2918,11 @@ class HealthServer:
         self._get_setting: Callable[[str, str], str] | None = None
         self._set_setting: Callable[[str, str], None] | None = None
         self._card_patcher: Callable[..., dict] | None = None
+        self._connect_card_fn: Callable[[int], str] | None = None
+        self._open_gui_fn: Callable[[int], str] | None = None
         self._monitor_enabled: dict[int, bool] = {}
         self._lun_preview_session: dict[str, Any] | None = None
+        self._host_volume_health_cache: dict[str, Any] | None = None
 
     def set_sync_provider(self, provider: Callable[[], int] | None) -> None:
         with self._lock:
@@ -2824,6 +2940,33 @@ class HealthServer:
     def set_card_patcher(self, patcher: Callable[..., dict] | None) -> None:
         with self._lock:
             self._card_patcher = patcher
+
+    def set_card_launch_backend(
+        self,
+        connect_fn: Callable[[int], str] | None,
+        open_gui_fn: Callable[[int], str] | None,
+    ) -> None:
+        with self._lock:
+            self._connect_card_fn = connect_fn
+            self._open_gui_fn = open_gui_fn
+
+    def connect_card_by_id(self, card_id: int) -> str:
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to connect.")
+        with self._lock:
+            connect_fn = self._connect_card_fn
+        if connect_fn is None:
+            raise RuntimeError("LaunchPad must be unlocked to connect.")
+        return connect_fn(card_id)
+
+    def open_card_gui(self, card_id: int) -> str:
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to open GUI.")
+        with self._lock:
+            open_gui_fn = self._open_gui_fn
+        if open_gui_fn is None:
+            raise RuntimeError("LaunchPad must be unlocked to open GUI.")
+        return open_gui_fn(card_id)
 
     def is_unlocked(self) -> bool:
         with self._lock:
@@ -3454,9 +3597,17 @@ class HealthServer:
             return self._cards.get(card_id)
 
     def fc_consistgrp_cards(self) -> list[dict[str, Any]]:
+        self.sync_from_app()
+        with self._lock:
+            stored = list(sorted(self._cards.values(), key=lambda card: card.card_id))
         return [
-            {"id": card["id"], "name": card["name"], "host": card["host"]}
-            for card in self.list_cards()
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+                "url": card.url or "",
+            }
+            for card in stored
         ]
 
     def fc_consistgrp_inventory(self, card_id: int) -> dict[str, Any]:
@@ -3714,6 +3865,159 @@ class HealthServer:
                 card.host = new_host
         return plan
 
+    def scan_host_volume_health_live(
+        self, *, card_id: int | None = None
+    ) -> dict[str, Any]:
+        if not self.is_unlocked():
+            raise RuntimeError(
+                "LaunchPad must be unlocked to refresh Hosts & Volumes Health live."
+            )
+        self.sync_from_app()
+        if self.is_unlocked():
+            try:
+                self.ensure_anderson_card_rename()
+            except Exception:
+                pass
+        cards = self.list_cards(allow_sync=False)
+        monitor = {
+            c["id"]: self.is_monitor_enabled(int(c["id"]))
+            for c in cards
+            if c.get("id") is not None
+        }
+        hosts: list[dict[str, Any]] = []
+        volumes: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = bool(
+                monitor.get(current_id, monitor.get(str(current_id), False))
+            )
+            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            card = self._cards.get(int(current_id))
+            if card is None:
+                continue
+            profile = str(card.device_profile or "")
+            vendor = vendor_for_profile(profile)
+            card_host = str(card.host or "")
+            try:
+                if vendor == "hpe":
+                    host_output, vv_output = run_ssh_auth_hpe_commands(
+                        card.host,
+                        card.port,
+                        card.username,
+                        ["showhost", "showvv"],
+                        password=card.password,
+                        key_path=card.key_path,
+                        key_passphrase=card.key_passphrase,
+                    )
+                    host_rows = parse_showhost_hosts(host_output or "")
+                    vol_rows = parse_showvv_volumes(vv_output or "")
+                else:
+                    run = self._lun_run_command(card)
+                    host_rows = parse_fc_hosts(run("svcinfo lshost -delim :"))
+                    vol_rows = parse_lsvdisk_volumes(run("svcinfo lsvdisk -delim :"))
+                hosts.extend(
+                    filter_problem_hosts(
+                        host_rows,
+                        card_name=card.name,
+                        host=card_host,
+                        vendor=vendor,
+                        card_id=card.card_id,
+                    )
+                )
+                volumes.extend(
+                    filter_problem_volumes(
+                        vol_rows,
+                        card_name=card.name,
+                        host=card_host,
+                        vendor=vendor,
+                        card_id=card.card_id,
+                    )
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": str(exc),
+                    }
+                )
+        hosts.sort(
+            key=lambda row: (
+                str(row.get("card_name") or "").lower(),
+                str(row.get("host_name") or "").lower(),
+            )
+        )
+        volumes.sort(
+            key=lambda row: (
+                str(row.get("card_name") or "").lower(),
+                str(row.get("volume_name") or "").lower(),
+            )
+        )
+        payload = {"hosts": hosts, "volumes": volumes, "errors": errors}
+        with self._lock:
+            self._host_volume_health_cache = payload
+        return payload
+
+    def get_host_volume_health_cache(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._host_volume_health_cache is None:
+                return None
+            return {
+                "hosts": list(self._host_volume_health_cache.get("hosts") or []),
+                "volumes": list(self._host_volume_health_cache.get("volumes") or []),
+                "errors": list(self._host_volume_health_cache.get("errors") or []),
+            }
+
+    def set_host_volume_health_cache(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._host_volume_health_cache = {
+                "hosts": list(payload.get("hosts") or []),
+                "volumes": list(payload.get("volumes") or []),
+                "errors": list(payload.get("errors") or []),
+            }
+
+    def export_host_volume_health_bytes(
+        self,
+        *,
+        export_format: str,
+        card_id: int | None = None,
+    ) -> tuple[bytes, str, str]:
+        from launchpad.host_volume_health_export import (
+            export_host_volume_health_csv_zip,
+            export_host_volume_health_xlsx,
+            filter_payload_by_card_id,
+        )
+
+        cached = self.get_host_volume_health_cache()
+        if cached is None:
+            raise LookupError("Refresh live before exporting.")
+        card_name: str | None = None
+        if card_id is not None:
+            with self._lock:
+                card = self._cards.get(int(card_id))
+            if card is None:
+                raise ValueError(f"Unknown card_id: {card_id}")
+            card_name = card.name
+        scoped = filter_payload_by_card_id(
+            cached, card_id=card_id, card_name=card_name
+        )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        if export_format == "xlsx":
+            body = export_host_volume_health_xlsx(scoped)
+            return (
+                body,
+                f"Host_Volume_Health_{stamp}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        body = export_host_volume_health_csv_zip(scoped)
+        return body, f"Host_Volume_Health_{stamp}.zip", "application/zip"
+
     def find_volumes(
         self, query: str, *, mode: str = "cache", find_type: str = "volume"
     ) -> dict[str, Any]:
@@ -3930,6 +4234,10 @@ class HealthServer:
     def fc_consistgrp_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{FC_CONSISTGRP_PATH}"
 
+    @property
+    def host_volume_health_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{HOST_VOLUME_HEALTH_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -3955,6 +4263,7 @@ class HealthServer:
         custom_commands: str = "",
         serial_number: str = "",
         category: str = "",
+        url: str = "",
     ) -> None:
         with self._lock:
             existing = self._cards.get(card_id)
@@ -3971,6 +4280,7 @@ class HealthServer:
                 custom_commands=custom_commands,
                 serial_number=serial_number,
                 category=category,
+                url=url,
                 metrics=existing.metrics if existing else None,
                 command_results=existing.command_results if existing else None,
                 error=existing.error if existing else None,
@@ -4261,6 +4571,13 @@ class HealthServer:
         webbrowser.open(url)
         _log(f"Opened FlashCopy consistency groups in browser: {url}")
         return url
+
+    def open_host_volume_health(self) -> str:
+        """Open the Hosts & Volumes Health page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.host_volume_health_url)
+        _log(f"Opened Hosts & Volumes Health in browser: {self.host_volume_health_url}")
+        return self.host_volume_health_url
 
 
 _instance: HealthServer | None = None
