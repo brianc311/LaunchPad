@@ -1,9 +1,10 @@
+import inspect
 import json
 
 import pytest
 
 from launchpad.contingency_groups_data import CONTINGENCY_GROUPS_SETTING, seed_contingency_groups
-from launchpad.health_server import HealthServer
+from launchpad.health_server import HealthServer, _HealthHandler
 
 
 def _settings_backend(initial: dict[str, str] | None = None):
@@ -170,3 +171,171 @@ def test_create_contingency_snaps_blocks_on_blocking_warnings(monkeypatch):
         for warning in result["warnings"]
     )
     assert run_calls == []
+
+
+def _group_ready_for_snap_create(**overrides) -> dict:
+    group = {
+        "id": "lab-1",
+        "name": "Lab",
+        "storage_hint": "array1",
+        "hosts": [],
+        "volumes": [
+            {"name": "V1", "role": "source", "pool": "P0", "capacity": "4.00 TiB"},
+            {
+                "name": "V1_snap",
+                "role": "snap",
+                "source_volume": "V1",
+                "pool": "P0",
+                "capacity": "4.00 TiB",
+            },
+        ],
+        "maps": [],
+        "snap_assign_cg_enabled": False,
+        "snap_assign_cg_name": "",
+    }
+    group.update(overrides)
+    return group
+
+
+def _patch_snap_inventories(monkeypatch, *, fc_groups=None, fc_maps=None):
+    inventory = {"vdisks": {"V1"}, "fcmaps": set(), "hostmaps": set()}
+    monkeypatch.setattr(
+        "launchpad.health_server.collect_inventory",
+        lambda run_cmd: inventory,
+    )
+    monkeypatch.setattr(
+        "launchpad.health_server.collect_fc_consistgrp_inventory",
+        lambda run_cmd: (list(fc_groups or []), list(fc_maps or [])),
+    )
+
+
+def test_preview_assign_enabled_adds_mkfcconsistgrp(monkeypatch):
+    group = _group_ready_for_snap_create(
+        snap_assign_cg_enabled=True,
+        snap_assign_cg_name="WIN_ESX_snap",
+    )
+    server = _server_with_group_and_card(group)
+    _patch_snap_inventories(monkeypatch)
+
+    result = server.preview_contingency_snaps("lab-1")
+
+    kinds = [step["kind"] for step in result["steps"]]
+    assert "mkfcconsistgrp" in kinds
+    assert "chfcmap" in kinds
+    assert result["ok"] is True
+
+
+def test_preview_assign_advisory_does_not_block(monkeypatch):
+    group = _group_ready_for_snap_create(
+        snap_assign_cg_enabled=True,
+        snap_assign_cg_name="WIN_ESX_snap",
+    )
+    server = _server_with_group_and_card(group)
+    _patch_snap_inventories(
+        monkeypatch,
+        fc_groups=[{"name": "WIN_ESX_snap"}],
+        fc_maps=[],
+    )
+
+    result = server.preview_contingency_snaps("lab-1")
+
+    assert any("already exists" in w.lower() for w in result["warnings"])
+    assert not any(w.startswith("ERROR:") for w in result["warnings"])
+    assert result["ok"] is True
+    cg_steps = [s for s in result["steps"] if s["kind"] == "mkfcconsistgrp"]
+    assert len(cg_steps) == 1 and cg_steps[0]["skip"] is True
+
+
+def test_preview_assign_error_blocks_ok(monkeypatch):
+    group = _group_ready_for_snap_create(
+        snap_assign_cg_enabled=True,
+        snap_assign_cg_name="",
+    )
+    server = _server_with_group_and_card(group)
+    _patch_snap_inventories(monkeypatch)
+
+    result = server.preview_contingency_snaps("lab-1")
+
+    assert result["ok"] is False
+    assert any(w.startswith("ERROR:") for w in result["warnings"])
+
+
+def test_preview_assign_request_override(monkeypatch):
+    group = _group_ready_for_snap_create(
+        snap_assign_cg_enabled=False,
+        snap_assign_cg_name="",
+    )
+    server = _server_with_group_and_card(group)
+    _patch_snap_inventories(monkeypatch)
+
+    result = server.preview_contingency_snaps(
+        "lab-1",
+        assign_cg_enabled=True,
+        assign_cg_name="WIN_ESX_snap",
+    )
+
+    kinds = [step["kind"] for step in result["steps"]]
+    assert "mkfcconsistgrp" in kinds
+    assert result["ok"] is True
+
+
+def test_preview_assign_off_skips_cg_steps(monkeypatch):
+    group = _group_ready_for_snap_create(
+        snap_assign_cg_enabled=False,
+        snap_assign_cg_name="WIN_ESX_snap",
+    )
+    server = _server_with_group_and_card(group)
+    _patch_snap_inventories(monkeypatch)
+    collected = {"called": False}
+
+    def tracking_collect(run_cmd):
+        collected["called"] = True
+        return [], []
+
+    monkeypatch.setattr(
+        "launchpad.health_server.collect_fc_consistgrp_inventory",
+        tracking_collect,
+    )
+
+    result = server.preview_contingency_snaps("lab-1")
+
+    kinds = [step["kind"] for step in result["steps"]]
+    assert "mkfcconsistgrp" not in kinds
+    assert "chfcmap" not in kinds
+    assert collected["called"] is False
+    assert result["ok"] is True
+
+
+def test_create_passes_assign_overrides(monkeypatch):
+    group = _group_ready_for_snap_create(
+        snap_assign_cg_enabled=False,
+        snap_assign_cg_name="",
+    )
+    server = _server_with_group_and_card(group)
+    _patch_snap_inventories(monkeypatch)
+    run_kinds: list[str] = []
+
+    def fake_run_snap_steps(steps, run_cmd):
+        run_kinds.extend(step.kind for step in steps)
+        return {"ok": True, "log": ["ran"]}
+
+    monkeypatch.setattr("launchpad.health_server.run_snap_steps", fake_run_snap_steps)
+
+    result = server.create_contingency_snaps(
+        "lab-1",
+        confirm=True,
+        assign_cg_enabled=True,
+        assign_cg_name="WIN_ESX_snap",
+    )
+
+    assert result["ok"] is True
+    assert "mkfcconsistgrp" in run_kinds
+    assert "chfcmap" in run_kinds
+
+
+def test_snap_post_handler_passes_assign_fields():
+    source = inspect.getsource(_HealthHandler.do_POST)
+    assert "snap_assign_cg_enabled" in source
+    assert "snap_assign_cg_name" in source
+    assert "assign_cg_enabled" in source
+    assert "assign_cg_name" in source
