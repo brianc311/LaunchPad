@@ -123,6 +123,7 @@ class HealthCard:
     custom_commands: str = ""
     serial_number: str = ""
     category: str = ""
+    url: str = ""
     metrics: dict[str, Any] | None = None
     command_results: list[dict[str, Any]] | None = None
     error: str | None = None
@@ -2692,6 +2693,35 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path in {"/api/fc-consistgrp/connect", "/api/fc-consistgrp/open-gui"}:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"ok": False, "error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"ok": False, "error": "card_id is required"}, status=400)
+                return
+            try:
+                if path == "/api/fc-consistgrp/connect":
+                    message = server.connect_card_by_id(card_id)
+                else:
+                    message = server.open_card_gui(card_id)
+            except RuntimeError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=403)
+                return
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+                return
+            self._send_json({"ok": True, "message": message})
+            return
         if path in {"/api/fc-consistgrp/preview", "/api/fc-consistgrp/run"}:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -2805,6 +2835,8 @@ class HealthServer:
         self._get_setting: Callable[[str, str], str] | None = None
         self._set_setting: Callable[[str, str], None] | None = None
         self._card_patcher: Callable[..., dict] | None = None
+        self._connect_card_fn: Callable[[int], str] | None = None
+        self._open_gui_fn: Callable[[int], str] | None = None
         self._monitor_enabled: dict[int, bool] = {}
         self._lun_preview_session: dict[str, Any] | None = None
 
@@ -2824,6 +2856,33 @@ class HealthServer:
     def set_card_patcher(self, patcher: Callable[..., dict] | None) -> None:
         with self._lock:
             self._card_patcher = patcher
+
+    def set_card_launch_backend(
+        self,
+        connect_fn: Callable[[int], str] | None,
+        open_gui_fn: Callable[[int], str] | None,
+    ) -> None:
+        with self._lock:
+            self._connect_card_fn = connect_fn
+            self._open_gui_fn = open_gui_fn
+
+    def connect_card_by_id(self, card_id: int) -> str:
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to connect.")
+        with self._lock:
+            connect_fn = self._connect_card_fn
+        if connect_fn is None:
+            raise RuntimeError("LaunchPad must be unlocked to connect.")
+        return connect_fn(card_id)
+
+    def open_card_gui(self, card_id: int) -> str:
+        if not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to open GUI.")
+        with self._lock:
+            open_gui_fn = self._open_gui_fn
+        if open_gui_fn is None:
+            raise RuntimeError("LaunchPad must be unlocked to open GUI.")
+        return open_gui_fn(card_id)
 
     def is_unlocked(self) -> bool:
         with self._lock:
@@ -3454,9 +3513,17 @@ class HealthServer:
             return self._cards.get(card_id)
 
     def fc_consistgrp_cards(self) -> list[dict[str, Any]]:
+        self.sync_from_app()
+        with self._lock:
+            stored = list(sorted(self._cards.values(), key=lambda card: card.card_id))
         return [
-            {"id": card["id"], "name": card["name"], "host": card["host"]}
-            for card in self.list_cards()
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+                "url": card.url or "",
+            }
+            for card in stored
         ]
 
     def fc_consistgrp_inventory(self, card_id: int) -> dict[str, Any]:
@@ -3955,6 +4022,7 @@ class HealthServer:
         custom_commands: str = "",
         serial_number: str = "",
         category: str = "",
+        url: str = "",
     ) -> None:
         with self._lock:
             existing = self._cards.get(card_id)
@@ -3971,6 +4039,7 @@ class HealthServer:
                 custom_commands=custom_commands,
                 serial_number=serial_number,
                 category=category,
+                url=url,
                 metrics=existing.metrics if existing else None,
                 command_results=existing.command_results if existing else None,
                 error=existing.error if existing else None,

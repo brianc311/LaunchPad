@@ -41,7 +41,7 @@ def test_fc_consistgrp_cards_lists_registered_cards():
 
     cards = server.fc_consistgrp_cards()
 
-    assert cards == [{"id": 1, "name": "array1", "host": "fake.example"}]
+    assert cards == [{"id": 1, "name": "array1", "host": "fake.example", "url": ""}]
 
 
 def test_fc_consistgrp_inventory_unknown_card():

@@ -62,6 +62,8 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
           <select id="card-select" aria-label="Array"><option value="">Loading arrays&hellip;</option></select>
         </label>
         <button type="button" class="secondary" id="refresh-btn">Refresh</button>
+        <button type="button" class="secondary" id="connect-btn" disabled>Connect</button>
+        <button type="button" class="secondary" id="open-gui-btn" disabled title="No GUI URL on this card — set URL in Admin.">Open GUI</button>
         <span class="status" id="status" aria-live="polite"></span>
       </div>
       <div class="actions">
@@ -117,6 +119,8 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
   <script>
     const cardSelect = document.getElementById("card-select");
     const refreshBtn = document.getElementById("refresh-btn");
+    const connectBtn = document.getElementById("connect-btn");
+    const openGuiBtn = document.getElementById("open-gui-btn");
     const statusEl = document.getElementById("status");
     const groupsBody = document.getElementById("groups-body");
     const selectedGroupHint = document.getElementById("selected-group-hint");
@@ -135,6 +139,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     const modalCloseBtn = document.getElementById("cg-modal-close");
 
     let inventory = { groups: [], maps: [], stand_alone: [], card: null };
+    let cardCatalog = [];
     let selectedGroupName = null;
     const selectedMemberMaps = new Set();
     const selectedStandAloneMaps = new Set();
@@ -321,13 +326,26 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         : '<tr><td colspan="6" class="empty">No stand-alone FlashCopy maps found.</td></tr>';
     }
 
+    function selectedCard() {
+      const cardId = currentCardId();
+      if (cardId === null) return null;
+      return cardCatalog.find((card) => Number(card.id) === cardId) || null;
+    }
+
     function updateActionState() {
       const hasCard = currentCardId() !== null;
+      const card = selectedCard();
+      const hasUrl = Boolean(card && String(card.url || "").trim());
       createGroupBtn.disabled = !hasCard;
       assignMapsBtn.disabled = !hasCard || !selectedGroupName || selectedStandAloneMaps.size === 0;
       removeMapsBtn.disabled = !hasCard || selectedMemberMaps.size === 0;
       startGroupBtn.disabled = !hasCard || !selectedGroupName;
       deleteGroupBtn.disabled = !hasCard || !selectedGroupName;
+      connectBtn.disabled = !hasCard;
+      openGuiBtn.disabled = !hasCard || !hasUrl;
+      openGuiBtn.title = hasUrl
+        ? "Open array GUI in your default browser"
+        : "No GUI URL on this card — set URL in Admin.";
     }
 
     function render() {
@@ -373,6 +391,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/fc-consistgrp/cards");
         const data = await res.json();
         const cards = data.cards || [];
+        cardCatalog = cards;
         const preselect = new URLSearchParams(window.location.search).get("card");
         cardSelect.innerHTML = "";
         if (!cards.length) {
@@ -405,6 +424,33 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
       loadInventory();
     });
     refreshBtn.addEventListener("click", loadInventory);
+
+    async function connectSelectedCard() {
+      const cardId = currentCardId();
+      if (cardId === null) { statusEl.textContent = "Select an array first."; return; }
+      statusEl.textContent = "Starting SSH session\u2026";
+      try {
+        const data = await postJson("/api/fc-consistgrp/connect", { card_id: cardId });
+        statusEl.textContent = data.ok ? (data.message || "SSH session started.") : (data.error || "Connect failed.");
+      } catch (err) {
+        statusEl.textContent = `Unable to connect: ${err}`;
+      }
+    }
+
+    async function openSelectedGui() {
+      const cardId = currentCardId();
+      if (cardId === null) { statusEl.textContent = "Select an array first."; return; }
+      statusEl.textContent = "Opening GUI\u2026";
+      try {
+        const data = await postJson("/api/fc-consistgrp/open-gui", { card_id: cardId });
+        statusEl.textContent = data.ok ? (data.message || "Opened GUI.") : (data.error || "Open GUI failed.");
+      } catch (err) {
+        statusEl.textContent = `Unable to open GUI: ${err}`;
+      }
+    }
+
+    connectBtn.addEventListener("click", connectSelectedCard);
+    openGuiBtn.addEventListener("click", openSelectedGui);
 
     groupsBody.addEventListener("change", (event) => {
       const input = event.target.closest("input[name='selected-group']");
