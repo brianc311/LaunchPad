@@ -109,8 +109,12 @@ def _inventory_sets(inventory: dict[str, Any] | None) -> tuple[set[str], set[str
     return vdisks, fcmaps, hostmaps
 
 
+# Keep in sync with launchpad.fc_consistgrp_ops (cannot import: circular).
+_STANDALONE_CONSISTGRP = frozenset({"", "0", "no", "none"})
+
+
 def _is_standalone_consistgrp(consistgrp: str) -> bool:
-    return (consistgrp or "").strip().casefold() in {"", "many", "none"}
+    return (consistgrp or "").strip().lower() in _STANDALONE_CONSISTGRP
 
 
 def _fcmap_name_from_cmd(cmd: str) -> str:

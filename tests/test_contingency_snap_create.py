@@ -257,3 +257,31 @@ def test_append_cg_assign_skips_map_in_other_cg():
     )
     assert not any(s.kind == "chfcmap" and not s.skip for s in out)
     assert any("OTHER_CG" in w for w in warnings)
+
+
+def test_append_cg_assign_standalone_sentinels_0_and_no_proceed():
+    """consistgrp '0'/'no' match fc_consistgrp_ops standalone; OTHER_CG still skips."""
+    base = [
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source A -target B -name fc_A_to_B"),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_A_to_B"),
+    ]
+    for sentinel in ("0", "no"):
+        out, warnings = append_snap_cg_assign_steps(
+            base,
+            cg_name="WIN_ESX_snap",
+            enabled=True,
+            fc_groups=[{"name": "WIN_ESX_snap"}],
+            fc_maps=[{"name": "fc_A_to_B", "consistgrp": sentinel}],
+        )
+        assert any(s.kind == "chfcmap" and not s.skip for s in out), sentinel
+        assert not any("OTHER_CG" in w for w in warnings)
+
+    out_other, warnings_other = append_snap_cg_assign_steps(
+        base,
+        cg_name="WIN_ESX_snap",
+        enabled=True,
+        fc_groups=[{"name": "WIN_ESX_snap"}],
+        fc_maps=[{"name": "fc_A_to_B", "consistgrp": "OTHER_CG"}],
+    )
+    assert not any(s.kind == "chfcmap" and not s.skip for s in out_other)
+    assert any("OTHER_CG" in w for w in warnings_other)
