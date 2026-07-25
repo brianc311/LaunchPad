@@ -427,6 +427,23 @@ def test_ensure_groups_for_cards_adds_stubs_without_duping():
     assert moreno["hosts"] == [] and moreno["volumes"] == []
 
 
+def test_normalize_group_defaults_snap_assign_fields():
+    group = normalize_group({"id": "windsor", "name": "Windsor"})
+    assert group["snap_assign_cg_name"] == ""
+    assert group["snap_assign_cg_enabled"] is False
+
+
+def test_normalize_group_keeps_snap_assign_fields():
+    group = normalize_group({
+        "id": "windsor",
+        "name": "Windsor",
+        "snap_assign_cg_name": "WIN_ESX_snap",
+        "snap_assign_cg_enabled": True,
+    })
+    assert group["snap_assign_cg_name"] == "WIN_ESX_snap"
+    assert group["snap_assign_cg_enabled"] is True
+
+
 def test_filter_fc_card_keeps_mapping_when_host_matches_by_wwpn_only():
     group = {
         "id": "g1",
