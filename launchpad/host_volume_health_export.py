@@ -49,26 +49,29 @@ _VOLUME_FIELDS = (
 def filter_payload_by_card_id(
     payload: dict[str, Any],
     *,
+    card_id: int | None = None,
     card_name: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return hosts/volumes filtered to one card name (None = all)."""
-    if not card_name:
+    """Return hosts/volumes filtered to one card (None = all). Prefer card_id."""
+    if card_id is None and not card_name:
         return {
             "hosts": list(payload.get("hosts") or []),
             "volumes": list(payload.get("volumes") or []),
         }
-    name = str(card_name).strip()
+
+    def _matches(row: dict[str, Any]) -> bool:
+        if card_id is not None and row.get("card_id") is not None:
+            try:
+                return int(row.get("card_id")) == int(card_id)
+            except (TypeError, ValueError):
+                return False
+        if card_name:
+            return str(row.get("card_name") or "").strip() == str(card_name).strip()
+        return False
+
     return {
-        "hosts": [
-            row
-            for row in payload.get("hosts") or []
-            if str(row.get("card_name") or "").strip() == name
-        ],
-        "volumes": [
-            row
-            for row in payload.get("volumes") or []
-            if str(row.get("card_name") or "").strip() == name
-        ],
+        "hosts": [row for row in payload.get("hosts") or [] if _matches(row)],
+        "volumes": [row for row in payload.get("volumes") or [] if _matches(row)],
     }
 
 

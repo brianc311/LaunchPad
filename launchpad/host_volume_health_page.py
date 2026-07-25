@@ -279,6 +279,14 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
     refreshBtn.addEventListener("click", refreshLive);
     exportXlsxBtn.addEventListener("click", () => exportReport("xlsx"));
     exportCsvBtn.addEventListener("click", () => exportReport("csv"));
+    siteSelectEl.addEventListener("change", () => {
+      renderHosts([]);
+      renderVolumes([]);
+      errorsEl.textContent = "";
+      exportXlsxBtn.disabled = true;
+      exportCsvBtn.disabled = true;
+      statusEl.textContent = "Site changed — click Refresh to scan again.";
+    });
     loadSiteOptions();
   </script>
 </body>

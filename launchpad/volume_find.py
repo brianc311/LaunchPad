@@ -155,8 +155,25 @@ def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
     return hosts
 
 
+def _showvv_column_index(cols: list[str], names: set[str]) -> int | None:
+    return next((i for i, c in enumerate(cols) if c.lower() in names), None)
+
+
+def _showvv_pick_status(parts: list[str], cols: list[str]) -> str:
+    """Prefer State / Detailed_State over ownership columns like Mstr."""
+    by_name = {c.lower(): i for i, c in enumerate(cols)}
+    for key in ("detailed_state", "state", "status"):
+        index = by_name.get(key)
+        if index is None or len(parts) <= index:
+            continue
+        value = parts[index].strip()
+        if value and value not in {"-", "--"}:
+            return value
+    return ""
+
+
 def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
-    """Parse HPE showvv CSV/delimited or whitespace table for Name + CPG."""
+    """Parse HPE showvv CSV/delimited or whitespace table for Name + CPG + health."""
     text = str(output or "").strip()
     if not text:
         return []
@@ -168,12 +185,11 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
     volumes: list[dict[str, str]] = []
     if delim:
         cols = [c.strip() for c in header.split(delim)]
-        name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "vvname", "vv_name"}), None)
-        cpg_i = next(
-            (i for i, c in enumerate(cols) if c.lower() in {"usrcpg", "cpg", "snpcpg", "usr_cpg"}),
-            None,
+        name_i = _showvv_column_index(cols, {"name", "vvname", "vv_name"})
+        cpg_i = _showvv_column_index(
+            cols, {"usrcpg", "cpg", "snpcpg", "usr_cpg"}
         )
-        mstr_i = next((i for i, c in enumerate(cols) if c.lower() == "mstr"), None)
+        mstr_i = _showvv_column_index(cols, {"mstr"})
         if name_i is None:
             return []
         for line in lines[1:]:
@@ -186,18 +202,25 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
             pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
             if pool in {"-", "--"}:
                 pool = ""
-            status = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
-            volumes.append({"name": name, "pool_or_cpg": pool, "status": status, "mstr": status})
+            status = _showvv_pick_status(parts, cols)
+            mstr = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
+            if mstr in {"-", "--"}:
+                mstr = ""
+            volumes.append(
+                {
+                    "name": name,
+                    "pool_or_cpg": pool,
+                    "status": status,
+                    "mstr": mstr,
+                }
+            )
         return volumes
 
     # Whitespace table fallback (no comma/colon delimiters in header).
     cols = header.split()
-    name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "vvname", "vv_name"}), None)
-    cpg_i = next(
-        (i for i, c in enumerate(cols) if c.lower() in {"usrcpg", "cpg", "snpcpg", "usr_cpg"}),
-        None,
-    )
-    mstr_i = next((i for i, c in enumerate(cols) if c.lower() == "mstr"), None)
+    name_i = _showvv_column_index(cols, {"name", "vvname", "vv_name"})
+    cpg_i = _showvv_column_index(cols, {"usrcpg", "cpg", "snpcpg", "usr_cpg"})
+    mstr_i = _showvv_column_index(cols, {"mstr"})
     if name_i is None:
         return []
     for line in lines[1:]:
@@ -210,10 +233,19 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
         pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
         if pool in {"-", "--"}:
             pool = ""
-        status = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
-        volumes.append({"name": name, "pool_or_cpg": pool, "status": status, "mstr": status})
+        status = _showvv_pick_status(parts, cols)
+        mstr = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
+        if mstr in {"-", "--"}:
+            mstr = ""
+        volumes.append(
+            {
+                "name": name,
+                "pool_or_cpg": pool,
+                "status": status,
+                "mstr": mstr,
+            }
+        )
     return volumes
-
 
 def volumes_from_command_results(
     command_results: list[dict[str, Any]] | None,

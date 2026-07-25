@@ -70,19 +70,27 @@ def test_csv_zip_contains_hosts_and_volumes():
 def test_filter_payload_by_card_id():
     payload = {
         "hosts": [
-            {"card_name": "SiteA", "host_name": "h1"},
-            {"card_name": "SiteB", "host_name": "h2"},
+            {"card_name": "SiteA", "card_id": 1, "host_name": "h1"},
+            {"card_name": "SiteB", "card_id": 2, "host_name": "h2"},
         ],
         "volumes": [
-            {"card_name": "SiteA", "volume_name": "v1"},
-            {"card_name": "SiteB", "volume_name": "v2"},
+            {"card_name": "SiteA", "card_id": 1, "volume_name": "v1"},
+            {"card_name": "SiteB", "card_id": 2, "volume_name": "v2"},
         ],
     }
-    filtered = filter_payload_by_card_id(payload, card_name="SiteB")
+    filtered = filter_payload_by_card_id(payload, card_id=2, card_name="SiteB")
     assert len(filtered["hosts"]) == 1
     assert filtered["hosts"][0]["host_name"] == "h2"
     assert len(filtered["volumes"]) == 1
     assert filtered["volumes"][0]["volume_name"] == "v2"
+
+
+def test_export_unknown_card_id_returns_400(monkeypatch):
+    server = HealthServer()
+    server.set_host_volume_health_cache(_sample_payload())
+    sent = _call_hv_export_api(monkeypatch, server, "?format=xlsx&open=0&card_id=999")
+    assert sent["status"] == 400
+    assert "unknown card_id" in sent["json"]["error"].lower()
 
 
 def _call_hv_export_api(monkeypatch, server: HealthServer, query: str = ""):

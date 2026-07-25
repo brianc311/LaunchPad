@@ -18,5 +18,6 @@ def test_host_volume_health_path_and_controls():
         'id="hv-volumes-body"',
         'id="hv-status"',
         'id="hv-errors"',
+        "Site changed — click Refresh to scan again.",
     ):
         assert text in HOST_VOLUME_HEALTH_HTML

@@ -55,6 +55,22 @@ def test_live_scan_ibm_happy_path(monkeypatch):
     assert result["volumes"][0]["pool_or_cpg"] == "Pool0"
 
 
+def test_parse_showvv_volumes_uses_state_not_mstr():
+    from launchpad.volume_find import parse_showvv_volumes
+
+    output = (
+        "Id,Name,Rd,Mstr,State,UsrCPG\n"
+        "0,vv_bad,rw,---,degraded,SSD_r5\n"
+        "1,vv_ok,rw,3/1/0,normal,SSD_r5\n"
+    )
+    vols = parse_showvv_volumes(output)
+    by_name = {v["name"]: v for v in vols}
+    assert by_name["vv_bad"]["status"] == "degraded"
+    assert by_name["vv_bad"]["mstr"] == "---"
+    assert by_name["vv_ok"]["status"] == "normal"
+    assert by_name["vv_ok"]["mstr"] == "3/1/0"
+
+
 def test_live_scan_hpe_happy_path(monkeypatch):
     server = HealthServer()
     _unlock(server)
@@ -79,9 +95,10 @@ def test_live_scan_hpe_happy_path(monkeypatch):
                 outputs.append("Id,Name,State\n0,bad_host,offline\n1,good_host,online\n")
             elif command == "showvv":
                 outputs.append(
-                    "Id,Name,Rd,Mstr,HostDisp,VV_WWN,Prov,Type,CopyOf,BsId,UsrCPG,SnpCPG\n"
-                    "0,vv_bad,----,degraded,0,5000ABCD,full,base,--,0,SSD_r5,-\n"
-                    "1,vv_ok,----,normal,0,5000ABCE,full,base,--,0,SSD_r5,-\n"
+                    "Id,Name,Prov,Type,CopyOf,BsId,Rd,State,UsrCPG,SnpCPG\n"
+                    "0,vv_bad,full,base,--,0,rw,degraded,SSD_r5,-\n"
+                    "1,vv_ok,full,base,--,0,rw,normal,SSD_r5,-\n"
+                    "2,vv_mstr_only,full,base,--,0,rw,normal,SSD_r5,-\n"
                 )
             else:
                 outputs.append("")

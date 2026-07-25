@@ -65,11 +65,19 @@ def test_filter_problem_volumes_offline_degraded_only():
     assert result[1]["volume_name"] == "vol_c"
 
 
-def test_filter_problem_volumes_uses_mstr_for_hpe():
-    rows = [{"name": "vv_bad", "mstr": "degraded", "pool_or_cpg": "SSD_r5"}]
+def test_filter_problem_volumes_uses_state_for_hpe():
+    rows = [{"name": "vv_bad", "state": "degraded", "pool_or_cpg": "SSD_r5"}]
     result = filter_problem_volumes(
         rows, card_name="Primera", host="10.0.0.2", vendor="hpe"
     )
     assert len(result) == 1
     assert result[0]["volume_name"] == "vv_bad"
     assert result[0]["status"] == "degraded"
+
+
+def test_filter_problem_volumes_ignores_mstr_ownership():
+    rows = [{"name": "vv_ok", "mstr": "degraded", "pool_or_cpg": "SSD_r5"}]
+    result = filter_problem_volumes(
+        rows, card_name="Primera", host="10.0.0.2", vendor="hpe"
+    )
+    assert result == []

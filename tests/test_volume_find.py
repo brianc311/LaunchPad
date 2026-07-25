@@ -97,6 +97,21 @@ def test_parse_showvv_volumes_basic():
     assert "vv_data_1" in names
     assert "vv_data_2" in names
     assert any(v.get("pool_or_cpg") == "SSD_r5" for v in vols if v["name"] == "vv_data_1")
+    # Ownership-only tables have no State; status stays empty (Volume Find still works).
+    assert all(not (v.get("status") or "") for v in vols)
+
+
+def test_parse_showvv_volumes_prefers_state_over_mstr():
+    output = (
+        "Id,Name,Rd,Mstr,State,UsrCPG\n"
+        "0,vv_bad,rw,---,degraded,SSD_r5\n"
+        "1,vv_ok,rw,3/1/0,normal,FC_r1\n"
+    )
+    vols = parse_showvv_volumes(output)
+    by_name = {v["name"]: v for v in vols}
+    assert by_name["vv_bad"]["status"] == "degraded"
+    assert by_name["vv_bad"]["mstr"] == "---"
+    assert by_name["vv_ok"]["status"] == "normal"
 
 
 def test_parse_showvv_volumes_whitespace_table():

@@ -2213,6 +2213,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             except LookupError as exc:
                 self._send_json({"error": str(exc)}, status=404)
                 return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
                 return
@@ -3924,6 +3927,7 @@ class HealthServer:
                         card_name=card.name,
                         host=card_host,
                         vendor=vendor,
+                        card_id=card.card_id,
                     )
                 )
                 volumes.extend(
@@ -3932,6 +3936,7 @@ class HealthServer:
                         card_name=card.name,
                         host=card_host,
                         vendor=vendor,
+                        card_id=card.card_id,
                     )
                 )
             except Exception as exc:
@@ -3996,9 +4001,12 @@ class HealthServer:
         if card_id is not None:
             with self._lock:
                 card = self._cards.get(int(card_id))
-            if card is not None:
-                card_name = card.name
-        scoped = filter_payload_by_card_id(cached, card_name=card_name)
+            if card is None:
+                raise ValueError(f"Unknown card_id: {card_id}")
+            card_name = card.name
+        scoped = filter_payload_by_card_id(
+            cached, card_id=card_id, card_name=card_name
+        )
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         if export_format == "xlsx":
             body = export_host_volume_health_xlsx(scoped)
