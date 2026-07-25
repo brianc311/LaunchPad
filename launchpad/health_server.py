@@ -32,6 +32,7 @@ from launchpad.contingency_groups_data import (
 from launchpad.contingency_groups import CONTINGENCY_GROUPS_HTML, CONTINGENCY_GROUPS_PATH
 from launchpad.contingency_snap_create import (
     SnapStep,
+    append_snap_cg_assign_steps,
     build_snap_steps,
     collect_inventory,
     resolve_card_by_storage_hint,
@@ -2758,15 +2759,31 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 )
                 return
             group_id = str(payload["group_id"])
+            assign_cg_enabled = (
+                bool(payload.get("snap_assign_cg_enabled"))
+                if "snap_assign_cg_enabled" in payload
+                else None
+            )
+            assign_cg_name = (
+                str(payload.get("snap_assign_cg_name") or "")
+                if "snap_assign_cg_name" in payload
+                else None
+            )
             try:
                 if path == "/api/contingency-groups/generate-snaps":
                     result = server.generate_contingency_snaps(group_id)
                 elif path == "/api/contingency-groups/snap-preview":
-                    result = server.preview_contingency_snaps(group_id)
+                    result = server.preview_contingency_snaps(
+                        group_id,
+                        assign_cg_enabled=assign_cg_enabled,
+                        assign_cg_name=assign_cg_name,
+                    )
                 else:
                     result = server.create_contingency_snaps(
                         group_id,
                         confirm=payload.get("confirm") is True,
+                        assign_cg_enabled=assign_cg_enabled,
+                        assign_cg_name=assign_cg_name,
                     )
             except RuntimeError as exc:
                 self._send_json(
@@ -3511,7 +3528,13 @@ class HealthServer:
         self.set_contingency_groups(groups)
         return {"ok": True, "group": generated, "warnings": [], "log": []}
 
-    def preview_contingency_snaps(self, group_id: str) -> dict[str, Any]:
+    def preview_contingency_snaps(
+        self,
+        group_id: str,
+        *,
+        assign_cg_enabled: bool | None = None,
+        assign_cg_name: str | None = None,
+    ) -> dict[str, Any]:
         group = self._contingency_group_by_id(group_id)
         if group is None:
             return {
@@ -3538,9 +3561,51 @@ class HealthServer:
                 "log": [],
                 "steps": [],
             }
-        steps, warnings = build_snap_steps(group, inventory=inventory)
+        snap_steps, snap_warnings = build_snap_steps(group, inventory=inventory)
+        enabled = (
+            assign_cg_enabled
+            if assign_cg_enabled is not None
+            else bool(group.get("snap_assign_cg_enabled"))
+        )
+        cg_name = (
+            assign_cg_name
+            if assign_cg_name is not None
+            else str(group.get("snap_assign_cg_name") or "")
+        )
+        fc_groups: list[dict] = []
+        fc_maps: list[dict] = []
+        if enabled:
+            try:
+                fc_groups, fc_maps = collect_fc_consistgrp_inventory(
+                    self._snap_run_command(card)
+                )
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "warnings": [
+                        f"ERROR: Unable to collect FlashCopy CG inventory: {exc}"
+                    ],
+                    "log": [],
+                    "steps": [],
+                    "card": {
+                        "id": card.card_id,
+                        "name": card.name,
+                        "host": card.host,
+                    },
+                }
+        steps, assign_warnings = append_snap_cg_assign_steps(
+            snap_steps,
+            cg_name=cg_name,
+            enabled=enabled,
+            fc_groups=fc_groups,
+            fc_maps=fc_maps,
+        )
+        warnings = snap_warnings + assign_warnings
+        ok = (not snap_warnings) and (
+            not any(w.startswith("ERROR:") for w in assign_warnings)
+        )
         return {
-            "ok": not warnings,
+            "ok": ok,
             "warnings": warnings,
             "log": [],
             "steps": self._snap_steps_payload(steps),
@@ -3556,6 +3621,8 @@ class HealthServer:
         group_id: str,
         *,
         confirm: bool,
+        assign_cg_enabled: bool | None = None,
+        assign_cg_name: str | None = None,
     ) -> dict[str, Any]:
         if confirm is not True:
             return {
@@ -3563,7 +3630,11 @@ class HealthServer:
                 "warnings": ["confirm must be true before creating snap volumes"],
                 "log": [],
             }
-        preview = self.preview_contingency_snaps(group_id)
+        preview = self.preview_contingency_snaps(
+            group_id,
+            assign_cg_enabled=assign_cg_enabled,
+            assign_cg_name=assign_cg_name,
+        )
         if not preview["ok"]:
             return {
                 "ok": False,

@@ -243,3 +243,65 @@ def test_consistency_groups_exposes_find_search():
     assert run_cg_search.index('cgSearchQuery = ""') < run_cg_search.index(
         "No matching groups, hosts, or volumes"
     )
+
+
+def test_contingency_groups_exposes_snap_assign_cg_ui():
+    step_three = CONTINGENCY_GROUPS_HTML.split('id="wizard-step-3"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    for text in (
+        'id="snap-assign-cg-enabled"',
+        'id="snap-assign-cg-name"',
+        'href="/fc-consistgrp"',
+        "FlashCopy CGs",
+        "Assign new FlashCopy maps to CG",
+    ):
+        assert text in step_three
+    assert step_three.index("snap-assign-cg-enabled") < step_three.index(
+        "snap-preview-btn"
+    )
+
+
+def test_contingency_groups_snap_preview_blocking_uses_ok_only():
+    assert "const blocking = !data.ok;" in CONTINGENCY_GROUPS_HTML
+    assert "const blocking = !data.ok || warnings.length > 0;" not in CONTINGENCY_GROUPS_HTML
+
+
+def test_contingency_groups_empty_group_includes_snap_assign_fields():
+    empty = CONTINGENCY_GROUPS_HTML.split("function emptyGroup() {", 1)[1].split(
+        "\n    function ", 1
+    )[0]
+    assert 'snap_assign_cg_name: ""' in empty
+    assert "snap_assign_cg_enabled: false" in empty
+
+
+def test_contingency_groups_snap_ops_post_assign_overrides():
+    for text in (
+        "snap_assign_cg_enabled: document.getElementById(\"snap-assign-cg-enabled\").checked",
+        "snap_assign_cg_name: document.getElementById(\"snap-assign-cg-name\").value.trim()",
+    ):
+        assert text in CONTINGENCY_GROUPS_HTML
+    preview = CONTINGENCY_GROUPS_HTML.split("async function previewSnaps() {", 1)[1].split(
+        "async function runSnapCreate()", 1
+    )[0]
+    create = CONTINGENCY_GROUPS_HTML.split("async function runSnapCreate() {", 1)[1].split(
+        "async function syncFromArray()", 1
+    )[0]
+    assert "snap_assign_cg_enabled" in preview
+    assert "snap_assign_cg_name" in preview
+    assert "snap_assign_cg_enabled" in create
+    assert "snap_assign_cg_name" in create
+    assert "confirm: true" in create
+
+
+def test_contingency_groups_reads_and_writes_snap_assign_fields():
+    render = CONTINGENCY_GROUPS_HTML.split("function render() {", 1)[1].split(
+        "\n    function ", 1
+    )[0]
+    read_summary = CONTINGENCY_GROUPS_HTML.split("function readSummary(group) {", 1)[
+        1
+    ].split("\n    function ", 1)[0]
+    assert 'getElementById("snap-assign-cg-enabled")' in render
+    assert 'getElementById("snap-assign-cg-name")' in render
+    assert "snap_assign_cg_enabled" in read_summary
+    assert "snap_assign_cg_name" in read_summary

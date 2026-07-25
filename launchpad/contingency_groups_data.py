@@ -531,6 +531,8 @@ def normalize_group(raw: Any) -> dict | None:
         "storage_hint": str(raw.get("storage_hint") or "").strip(),
         "notes": str(raw.get("notes") or "").strip(),
         "updated_at": str(raw.get("updated_at") or "").strip(),
+        "snap_assign_cg_name": str(raw.get("snap_assign_cg_name") or "").strip(),
+        "snap_assign_cg_enabled": bool(raw.get("snap_assign_cg_enabled")),
         "hosts": hosts,
         "volumes": volumes,
         "maps": maps,

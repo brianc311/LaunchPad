@@ -142,6 +142,12 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         <p class="hint">Preview will mark each operation as create or skip if it already exists.</p>
         <p class="warning" id="wizard-storage-warning" hidden>Storage hint is required before Preview or Run Create.</p>
         <div class="table-wrap"><table><thead><tr><th>Source</th><th>Target</th><th>Hosts / SCSI</th><th>Action</th></tr></thead><tbody id="wizard-create-pairs-body"></tbody></table></div>
+        <label class="hint">
+          <input type="checkbox" id="snap-assign-cg-enabled">
+          Assign new FlashCopy maps to CG
+        </label>
+        <label>CG name <input id="snap-assign-cg-name" type="text" placeholder="e.g. WIN_ESX_snap" disabled></label>
+        <p class="hint">Optional. Creates the CG if missing, or assigns into it if it already exists. Fine-grained add/remove remains on <a href="/fc-consistgrp">FlashCopy CGs</a>.</p>
         <div class="actions">
           <button type="button" id="snap-preview-btn" class="secondary">Preview / Dry-run</button>
           <button type="button" id="snap-create-btn" class="danger">Run Create</button>
@@ -229,7 +235,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       } catch (_err) { return []; }
     }
     function emptyGroup() {
-      return { id: "", name: "", location: "", storage_hint: "", notes: "", hosts: [], volumes: [], maps: [] };
+      return { id: "", name: "", location: "", storage_hint: "", notes: "", hosts: [], volumes: [], maps: [], snap_assign_cg_name: "", snap_assign_cg_enabled: false };
     }
     function activeGroup() {
       return groups.find((group) => String(group.id) === currentId) || emptyGroup();
@@ -508,6 +514,12 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       document.getElementById("group-location").value = group.location || "";
       document.getElementById("group-storage-hint").value = group.storage_hint || "";
       document.getElementById("group-notes").value = group.notes || "";
+      const assignEnabled = Boolean(group.snap_assign_cg_enabled);
+      const assignEnabledEl = document.getElementById("snap-assign-cg-enabled");
+      const assignNameEl = document.getElementById("snap-assign-cg-name");
+      assignEnabledEl.checked = assignEnabled;
+      assignNameEl.value = group.snap_assign_cg_name || "";
+      assignNameEl.disabled = !assignEnabled;
       updatePicker();
       renderRowInputs(group.hosts || [], [
         { key: "name" }, { key: "status" }, { key: "host_type" }, { key: "port_count", type: "number" }, { key: "protocol" }, { key: "wwpns", multiline: true, placeholder: "One per line, comma, or semicolon separated" },
@@ -542,6 +554,8 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       group.location = document.getElementById("group-location").value.trim();
       group.storage_hint = document.getElementById("group-storage-hint").value.trim();
       group.notes = document.getElementById("group-notes").value.trim();
+      group.snap_assign_cg_enabled = document.getElementById("snap-assign-cg-enabled").checked;
+      group.snap_assign_cg_name = document.getElementById("snap-assign-cg-name").value.trim();
     }
     function createId() { return `group-${Date.now()}`; }
     function addRow(kind) {
@@ -712,9 +726,13 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       if (!(await persistCurrentGroupBeforeSnapOps())) return;
       statusEl.textContent = "Preparing _snap preview…";
       try {
-        const data = await postSnap("/api/contingency-groups/snap-preview", { group_id: currentId });
+        const data = await postSnap("/api/contingency-groups/snap-preview", {
+          group_id: currentId,
+          snap_assign_cg_enabled: document.getElementById("snap-assign-cg-enabled").checked,
+          snap_assign_cg_name: document.getElementById("snap-assign-cg-name").value.trim(),
+        });
         const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-        const blocking = !data.ok || warnings.length > 0;
+        const blocking = !data.ok;
         window.__lastSnapPreviewOk = !blocking;
         const group = activeGroup();
         const steps = Array.isArray(data.steps) ? data.steps : [];
@@ -751,7 +769,12 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       if (!window.confirm(`This will create volumes and start FlashCopy on ${card}. Continue?`)) return;
       statusEl.textContent = "Running _snap create…";
       try {
-        const data = await postSnap("/api/contingency-groups/snap-create", { group_id: currentId, confirm: true });
+        const data = await postSnap("/api/contingency-groups/snap-create", {
+          group_id: currentId,
+          snap_assign_cg_enabled: document.getElementById("snap-assign-cg-enabled").checked,
+          snap_assign_cg_name: document.getElementById("snap-assign-cg-name").value.trim(),
+          confirm: true,
+        });
         const log = Array.isArray(data.log) ? data.log : [];
         const logHtml = log.length
           ? `<ol class="step-list">${log.map((entry) => `<li><strong>${escapeHtml(entry.step || entry.kind || "Step")}</strong> — ${entry.ok ? "ok" : "failed"}<pre>${escapeHtml(entry.cmd || "")}${entry.output ? `\n${escapeHtml(entry.output)}` : ""}</pre></li>`).join("")}</ol>`
@@ -869,6 +892,15 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     document.getElementById("generate-snaps-btn").addEventListener("click", generateSnapRows);
     document.getElementById("snap-preview-btn").addEventListener("click", previewSnaps);
     document.getElementById("snap-create-btn").addEventListener("click", runSnapCreate);
+    document.getElementById("snap-assign-cg-enabled").addEventListener("change", (event) => {
+      document.getElementById("snap-assign-cg-name").disabled = !event.target.checked;
+      const group = activeGroup();
+      group.snap_assign_cg_enabled = event.target.checked;
+      group.snap_assign_cg_name = document.getElementById("snap-assign-cg-name").value.trim();
+    });
+    document.getElementById("snap-assign-cg-name").addEventListener("input", (event) => {
+      activeGroup().snap_assign_cg_name = event.target.value.trim();
+    });
     document.getElementById("snap-modal-close").addEventListener("click", closeSnapModal);
     snapModalBackdrop.addEventListener("click", (event) => { if (event.target === snapModalBackdrop) closeSnapModal(); });
     wizardBackBtn.addEventListener("click", () => {

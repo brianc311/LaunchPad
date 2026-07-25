@@ -109,6 +109,115 @@ def _inventory_sets(inventory: dict[str, Any] | None) -> tuple[set[str], set[str
     return vdisks, fcmaps, hostmaps
 
 
+# Keep in sync with launchpad.fc_consistgrp_ops (cannot import: circular).
+_STANDALONE_CONSISTGRP = frozenset({"", "0", "no", "none"})
+
+
+def _is_standalone_consistgrp(consistgrp: str) -> bool:
+    return (consistgrp or "").strip().lower() in _STANDALONE_CONSISTGRP
+
+
+def _fcmap_name_from_cmd(cmd: str) -> str:
+    tokens = str(cmd or "").split()
+    if not tokens:
+        return ""
+    if "mkfcmap" in tokens:
+        try:
+            idx = tokens.index("-name")
+        except ValueError:
+            return ""
+        if idx + 1 < len(tokens):
+            return tokens[idx + 1]
+        return ""
+    if "startfcmap" in tokens:
+        return tokens[-1]
+    return ""
+
+
+def maps_touched_this_run(steps: list[SnapStep]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for step in steps:
+        if step.skip or step.kind not in {"mkfcmap", "startfcmap"}:
+            continue
+        name = _fcmap_name_from_cmd(step.cmd)
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def append_snap_cg_assign_steps(
+    steps: list[SnapStep],
+    *,
+    cg_name: str,
+    enabled: bool,
+    fc_groups: list[dict],
+    fc_maps: list[dict],
+) -> tuple[list[SnapStep], list[str]]:
+    if not enabled:
+        return list(steps), []
+    warnings: list[str] = []
+    out = list(steps)
+    try:
+        name = cli_token(cg_name)
+    except ValueError:
+        warnings.append("ERROR: Assign to CG requires a valid CG name")
+        return out, warnings
+    group_names = {str(g.get("name") or "") for g in fc_groups}
+    maps_by_name = {str(m.get("name") or ""): m for m in fc_maps}
+    if name in group_names:
+        warnings.append(f'CG "{name}" already exists — will assign maps into it.')
+        out.append(
+            SnapStep(
+                "mkfcconsistgrp",
+                "create consistency group",
+                f"svctask mkfcconsistgrp -name {name}",
+                skip=True,
+                reason="consistency group already exists",
+            )
+        )
+    else:
+        out.append(
+            SnapStep(
+                "mkfcconsistgrp",
+                "create consistency group",
+                f"svctask mkfcconsistgrp -name {name}",
+            )
+        )
+    touched = maps_touched_this_run(steps)
+    if not touched:
+        warnings.append("No FlashCopy maps created or started this run to assign.")
+        return out, warnings
+    for map_name in touched:
+        mapping = maps_by_name.get(map_name)
+        current = str((mapping or {}).get("consistgrp") or "").strip()
+        if current == name:
+            out.append(
+                SnapStep(
+                    "chfcmap",
+                    f"assign map {map_name} …",
+                    f"svctask chfcmap -consistgrp {name} {map_name}",
+                    skip=True,
+                    reason=f"map already in {name}",
+                )
+            )
+            continue
+        if current and not _is_standalone_consistgrp(current):
+            warnings.append(
+                f"Skipping map {map_name}: already in consistency group {current}"
+            )
+            continue
+        out.append(
+            SnapStep(
+                "chfcmap",
+                f"assign map {map_name} to consistency group",
+                f"svctask chfcmap -consistgrp {name} {map_name}",
+            )
+        )
+    return out, warnings
+
+
 def build_snap_steps(
     group: dict,
     *,

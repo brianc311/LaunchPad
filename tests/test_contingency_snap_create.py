@@ -1,7 +1,9 @@
 from launchpad.contingency_snap_create import (
     SnapStep,
+    append_snap_cg_assign_steps,
     build_snap_steps,
     collect_inventory,
+    maps_touched_this_run,
     parse_capacity_to_gb,
     run_snap_steps,
     safe_fcmap_name,
@@ -184,3 +186,102 @@ def test_collect_inventory_parses_delimited_tables():
     assert ("h1", "0", "V1_snap") in inventory["hostmaps"]
     assert all(cmd.endswith("-delim :") for cmd in calls)
     assert "svcinfo lsvdisk" in calls[0]
+
+
+def test_maps_touched_this_run_only_nonskipped():
+    steps = [
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source A -target B -name fc_A_to_B", skip=False),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_A_to_B", skip=False),
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source C -target D -name fc_C_to_D", skip=True),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_C_to_D", skip=True),
+    ]
+    assert maps_touched_this_run(steps) == ["fc_A_to_B"]
+
+
+def test_append_cg_assign_off_is_noop():
+    base = [SnapStep("mkvdisk", "create", "svctask mkvdisk -name X -mdiskgrp P -size 1 -unit gb")]
+    out, warnings = append_snap_cg_assign_steps(
+        base, cg_name="WIN_ESX_snap", enabled=False, fc_groups=[], fc_maps=[]
+    )
+    assert out == base
+    assert warnings == []
+
+
+def test_append_cg_assign_creates_group_and_assigns():
+    base = [
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source A -target B -name fc_A_to_B"),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_A_to_B"),
+    ]
+    out, warnings = append_snap_cg_assign_steps(
+        base,
+        cg_name="WIN_ESX_snap",
+        enabled=True,
+        fc_groups=[],
+        fc_maps=[{"name": "fc_A_to_B", "consistgrp": ""}],
+    )
+    kinds = [s.kind for s in out]
+    assert "mkfcconsistgrp" in kinds
+    assert kinds.count("chfcmap") == 1
+    assert not any(w.startswith("ERROR:") for w in warnings)
+
+
+def test_append_cg_assign_existing_group_advisory():
+    base = [
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source A -target B -name fc_A_to_B"),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_A_to_B"),
+    ]
+    out, warnings = append_snap_cg_assign_steps(
+        base,
+        cg_name="WIN_ESX_snap",
+        enabled=True,
+        fc_groups=[{"name": "WIN_ESX_snap"}],
+        fc_maps=[{"name": "fc_A_to_B", "consistgrp": ""}],
+    )
+    cg_steps = [s for s in out if s.kind == "mkfcconsistgrp"]
+    assert len(cg_steps) == 1 and cg_steps[0].skip is True
+    assert any("already exists" in w.lower() for w in warnings)
+    assert not any(w.startswith("ERROR:") for w in warnings)
+
+
+def test_append_cg_assign_skips_map_in_other_cg():
+    base = [
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source A -target B -name fc_A_to_B"),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_A_to_B"),
+    ]
+    out, warnings = append_snap_cg_assign_steps(
+        base,
+        cg_name="WIN_ESX_snap",
+        enabled=True,
+        fc_groups=[{"name": "WIN_ESX_snap"}],
+        fc_maps=[{"name": "fc_A_to_B", "consistgrp": "OTHER_CG"}],
+    )
+    assert not any(s.kind == "chfcmap" and not s.skip for s in out)
+    assert any("OTHER_CG" in w for w in warnings)
+
+
+def test_append_cg_assign_standalone_sentinels_0_and_no_proceed():
+    """consistgrp '0'/'no' match fc_consistgrp_ops standalone; OTHER_CG still skips."""
+    base = [
+        SnapStep("mkfcmap", "create", "svctask mkfcmap -source A -target B -name fc_A_to_B"),
+        SnapStep("startfcmap", "start", "svctask startfcmap fc_A_to_B"),
+    ]
+    for sentinel in ("0", "no"):
+        out, warnings = append_snap_cg_assign_steps(
+            base,
+            cg_name="WIN_ESX_snap",
+            enabled=True,
+            fc_groups=[{"name": "WIN_ESX_snap"}],
+            fc_maps=[{"name": "fc_A_to_B", "consistgrp": sentinel}],
+        )
+        assert any(s.kind == "chfcmap" and not s.skip for s in out), sentinel
+        assert not any("OTHER_CG" in w for w in warnings)
+
+    out_other, warnings_other = append_snap_cg_assign_steps(
+        base,
+        cg_name="WIN_ESX_snap",
+        enabled=True,
+        fc_groups=[{"name": "WIN_ESX_snap"}],
+        fc_maps=[{"name": "fc_A_to_B", "consistgrp": "OTHER_CG"}],
+    )
+    assert not any(s.kind == "chfcmap" and not s.skip for s in out_other)
+    assert any("OTHER_CG" in w for w in warnings_other)
