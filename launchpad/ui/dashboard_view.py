@@ -311,10 +311,15 @@ class DashboardView(ctk.CTkFrame):
 
         bulk = ctk.CTkFrame(bar, fg_color="transparent")
         bulk.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        bulk.grid_columnconfigure(10, weight=1)
+        bulk.grid_columnconfigure(0, weight=1)
+
+        # Row 0: toggles + selection count (keeps the button row from overflowing).
+        toggles = ctk.CTkFrame(bulk, fg_color="transparent")
+        toggles.grid(row=0, column=0, sticky="ew")
+        toggles.grid_columnconfigure(3, weight=1)
 
         self.compact_switch = ctk.CTkSwitch(
-            bulk,
+            toggles,
             text="Compact cards",
             command=self._toggle_compact_cards,
         )
@@ -323,14 +328,14 @@ class DashboardView(ctk.CTkFrame):
         self.compact_switch.grid(row=0, column=0, padx=(0, 12))
 
         self.monitor_all_switch = ctk.CTkSwitch(
-            bulk,
+            toggles,
             text="All monitoring on",
             command=self._toggle_all_monitoring,
         )
         self.monitor_all_switch.grid(row=0, column=1, padx=(0, 12))
 
         self.mouse_jiggler_switch = ctk.CTkSwitch(
-            bulk,
+            toggles,
             text="Mouse jiggler",
             command=self._toggle_mouse_jiggler,
         )
@@ -338,94 +343,98 @@ class DashboardView(ctk.CTkFrame):
             self.mouse_jiggler_switch.select()
         self.mouse_jiggler_switch.grid(row=0, column=2, padx=(0, 12))
 
+        self.selection_label = ctk.CTkLabel(
+            toggles,
+            text="0 selected",
+            text_color=self.theme["muted"],
+            font=ctk.CTkFont(size=12),
+        )
+        self.selection_label.grid(row=0, column=3, padx=(12, 0), sticky="e")
+
+        # Row 1: bulk action buttons (own line so Expand/Collapse stay on-screen).
+        actions = ctk.CTkFrame(bulk, fg_color="transparent")
+        actions.grid(row=1, column=0, sticky="w", pady=(8, 0))
+
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Select All",
             width=90,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._select_all_cards,
-        ).grid(row=0, column=3, padx=4)
+        ).grid(row=0, column=0, padx=(0, 4))
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Clear",
             width=70,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._clear_card_selection,
-        ).grid(row=0, column=4, padx=4)
+        ).grid(row=0, column=1, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Monitor Checked",
             width=125,
             fg_color=self.theme["accent"],
             hover_color=self.theme["accent_soft"],
             command=lambda: self._set_checked_monitoring(True),
-        ).grid(row=0, column=5, padx=4)
+        ).grid(row=0, column=2, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Unmonitor Checked",
             width=135,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=lambda: self._set_checked_monitoring(False),
-        ).grid(row=0, column=6, padx=4)
+        ).grid(row=0, column=3, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Open Checked",
             width=110,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_checked_cards,
-        ).grid(row=0, column=7, padx=4)
+        ).grid(row=0, column=4, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Open All",
             width=90,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._open_all_visible_cards,
-        ).grid(row=0, column=8, padx=4)
+        ).grid(row=0, column=5, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Expand Checked",
             width=115,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self._expand_checked_cards,
-        ).grid(row=0, column=9, padx=4)
+        ).grid(row=0, column=6, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Expand All",
             width=90,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=lambda: self._set_all_cards_collapsed(False),
-        ).grid(row=0, column=10, padx=4)
+        ).grid(row=0, column=7, padx=4)
 
         ctk.CTkButton(
-            bulk,
+            actions,
             text="Collapse All",
             width=100,
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=lambda: self._set_all_cards_collapsed(True),
-        ).grid(row=0, column=11, padx=4, sticky="w")
-
-        self.selection_label = ctk.CTkLabel(
-            bulk,
-            text="0 selected",
-            text_color=self.theme["muted"],
-            font=ctk.CTkFont(size=12),
-        )
-        self.selection_label.grid(row=0, column=12, padx=(12, 0), sticky="e")
+        ).grid(row=0, column=8, padx=4)
 
     def _toggle_theme(self) -> None:
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
