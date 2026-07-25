@@ -385,6 +385,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <label>Site <select id="capacity-site-select"><option value="">None</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
+        <a class="btn secondary" href="/host-volume-health">Hosts & Volumes</a>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>

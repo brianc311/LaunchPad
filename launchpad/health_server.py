@@ -731,6 +731,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/snapshot-schedule" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Snapshot Schedule</a>
         <a class="btn secondary" href="/lun-builder" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">LUN Builder</a>
         <a class="btn secondary" href="/fc-consistgrp" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">FlashCopy CGs</a>
+        <a class="btn secondary" href="/host-volume-health" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Hosts & Volumes</a>
         <label class="toggle-row" for="monitor-all-toggle" title="Connect and monitor every site. Leave off to keep SSH sessions closed.">
           <input type="checkbox" id="monitor-all-toggle">
           All monitoring on
@@ -4225,6 +4226,10 @@ class HealthServer:
     def fc_consistgrp_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{FC_CONSISTGRP_PATH}"
 
+    @property
+    def host_volume_health_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{HOST_VOLUME_HEALTH_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -4558,6 +4563,13 @@ class HealthServer:
         webbrowser.open(url)
         _log(f"Opened FlashCopy consistency groups in browser: {url}")
         return url
+
+    def open_host_volume_health(self) -> str:
+        """Open the Hosts & Volumes Health page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.host_volume_health_url)
+        _log(f"Opened Hosts & Volumes Health in browser: {self.host_volume_health_url}")
+        return self.host_volume_health_url
 
 
 _instance: HealthServer | None = None
