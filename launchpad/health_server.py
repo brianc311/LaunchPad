@@ -2179,6 +2179,56 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(payload)
             return
+        if path == "/api/host-volume-health/export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            export_format = (query.get("format") or [""])[0].strip().lower()
+            if export_format not in {"xlsx", "csv"}:
+                self._send_json(
+                    {"error": "Export format must be xlsx or csv."},
+                    status=400,
+                )
+                return
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            open_after = (query.get("open") or ["1"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                body, filename, content_type = server.export_host_volume_health_bytes(
+                    export_format=export_format,
+                    card_id=card_id,
+                )
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Hosts & Volumes Health export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Hosts & Volumes Health export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
         if path == "/api/fc-wwpn-find":
             from launchpad.fc_wwpn_search import find_cards_matching_fc_query
             from launchpad.storage_presets import is_svc_fc_profile
@@ -2868,6 +2918,7 @@ class HealthServer:
         self._open_gui_fn: Callable[[int], str] | None = None
         self._monitor_enabled: dict[int, bool] = {}
         self._lun_preview_session: dict[str, Any] | None = None
+        self._host_volume_health_cache: dict[str, Any] | None = None
 
     def set_sync_provider(self, provider: Callable[[], int] | None) -> None:
         with self._lock:
@@ -3902,7 +3953,61 @@ class HealthServer:
                 str(row.get("volume_name") or "").lower(),
             )
         )
-        return {"hosts": hosts, "volumes": volumes, "errors": errors}
+        payload = {"hosts": hosts, "volumes": volumes, "errors": errors}
+        with self._lock:
+            self._host_volume_health_cache = payload
+        return payload
+
+    def get_host_volume_health_cache(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._host_volume_health_cache is None:
+                return None
+            return {
+                "hosts": list(self._host_volume_health_cache.get("hosts") or []),
+                "volumes": list(self._host_volume_health_cache.get("volumes") or []),
+                "errors": list(self._host_volume_health_cache.get("errors") or []),
+            }
+
+    def set_host_volume_health_cache(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._host_volume_health_cache = {
+                "hosts": list(payload.get("hosts") or []),
+                "volumes": list(payload.get("volumes") or []),
+                "errors": list(payload.get("errors") or []),
+            }
+
+    def export_host_volume_health_bytes(
+        self,
+        *,
+        export_format: str,
+        card_id: int | None = None,
+    ) -> tuple[bytes, str, str]:
+        from launchpad.host_volume_health_export import (
+            export_host_volume_health_csv_zip,
+            export_host_volume_health_xlsx,
+            filter_payload_by_card_id,
+        )
+
+        cached = self.get_host_volume_health_cache()
+        if cached is None:
+            raise LookupError("Refresh live before exporting.")
+        card_name: str | None = None
+        if card_id is not None:
+            with self._lock:
+                card = self._cards.get(int(card_id))
+            if card is not None:
+                card_name = card.name
+        scoped = filter_payload_by_card_id(cached, card_name=card_name)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        if export_format == "xlsx":
+            body = export_host_volume_health_xlsx(scoped)
+            return (
+                body,
+                f"Host_Volume_Health_{stamp}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        body = export_host_volume_health_csv_zip(scoped)
+        return body, f"Host_Volume_Health_{stamp}.zip", "application/zip"
 
     def find_volumes(
         self, query: str, *, mode: str = "cache", find_type: str = "volume"

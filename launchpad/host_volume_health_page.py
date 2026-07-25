@@ -234,7 +234,51 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
       }
     }
 
+    function exportUrl(format) {
+      const cardId = siteSelectEl.value || "";
+      let url = "/api/host-volume-health/export?format=" + encodeURIComponent(format) + "&open=1";
+      if (cardId) {
+        url += "&card_id=" + encodeURIComponent(cardId);
+      }
+      return url;
+    }
+
+    async function exportReport(format) {
+      const btn = format === "xlsx" ? exportXlsxBtn : exportCsvBtn;
+      btn.disabled = true;
+      statusEl.textContent = format === "xlsx" ? "Exporting Excel…" : "Exporting CSV…";
+      try {
+        const res = await fetch(exportUrl(format));
+        if (res.status === 404) {
+          const data = await res.json().catch(() => ({}));
+          statusEl.textContent = data.error || "Refresh live before exporting.";
+          return;
+        }
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          statusEl.textContent = data.error || ("Export failed (" + res.status + ")");
+          return;
+        }
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        const filename = match ? match[1] : ("Host_Volume_Health." + (format === "xlsx" ? "xlsx" : "zip"));
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        statusEl.textContent = "Export saved.";
+      } catch (err) {
+        statusEl.textContent = String(err && err.message ? err.message : err);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     refreshBtn.addEventListener("click", refreshLive);
+    exportXlsxBtn.addEventListener("click", () => exportReport("xlsx"));
+    exportCsvBtn.addEventListener("click", () => exportReport("csv"));
     loadSiteOptions();
   </script>
 </body>
