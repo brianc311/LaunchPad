@@ -1,7 +1,7 @@
 # FlashCopy CGs Connect + Offline/Degraded Hosts & Volumes Report
 
 **Date:** 2026-07-25  
-**Status:** Approved for implementation (pending user review of this spec)  
+**Status:** Approved for implementation  
 **App version target:** 1.6.66  
 **Depends on:** FlashCopy CGs page, HealthServer card list, dashboard `launch_card` / SSH connect, Volume Find eligibility (IBM + HPE monitor-on), openpyxl/CSV export patterns  
 **Approach:** Two coordinated features — FC Connect/Open GUI + dedicated Hosts & Volumes Health report page (Approach 1)  
