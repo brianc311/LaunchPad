@@ -107,11 +107,13 @@ def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
     header = lines[0]
     delim = "," if "," in header else (":" if ":" in header else None)
     wwn_cols = {"port_wwn", "wwn", "wwpn", "port_wwpn", "host_wwn"}
+    status_cols = {"state", "status", "host_state"}
     hosts: list[dict[str, str]] = []
     if delim:
         cols = [c.strip() for c in header.split(delim)]
         name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "hostname", "host_name"}), None)
         wwn_indices = [i for i, c in enumerate(cols) if c.lower() in wwn_cols]
+        status_i = next((i for i, c in enumerate(cols) if c.lower() in status_cols), None)
         if name_i is None:
             return []
         for line in lines[1:]:
@@ -126,12 +128,14 @@ def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
                 for i in wwn_indices
                 if i < len(parts) and parts[i] and parts[i] not in {"-", "--"}
             ]
-            hosts.append({"host_name": name, "wwpns": " ".join(wwpns)})
+            status = parts[status_i] if status_i is not None and len(parts) > status_i else ""
+            hosts.append({"host_name": name, "wwpns": " ".join(wwpns), "status": status})
         return hosts
 
     cols = header.split()
     name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "hostname", "host_name"}), None)
     wwn_indices = [i for i, c in enumerate(cols) if c.lower() in wwn_cols]
+    status_i = next((i for i, c in enumerate(cols) if c.lower() in status_cols), None)
     if name_i is None:
         return []
     for line in lines[1:]:
@@ -146,7 +150,8 @@ def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
             for i in wwn_indices
             if i < len(parts) and parts[i] and parts[i] not in {"-", "--"}
         ]
-        hosts.append({"host_name": name, "wwpns": " ".join(wwpns)})
+        status = parts[status_i] if status_i is not None and len(parts) > status_i else ""
+        hosts.append({"host_name": name, "wwpns": " ".join(wwpns), "status": status})
     return hosts
 
 
@@ -168,6 +173,7 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
             (i for i, c in enumerate(cols) if c.lower() in {"usrcpg", "cpg", "snpcpg", "usr_cpg"}),
             None,
         )
+        mstr_i = next((i for i, c in enumerate(cols) if c.lower() == "mstr"), None)
         if name_i is None:
             return []
         for line in lines[1:]:
@@ -180,7 +186,8 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
             pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
             if pool in {"-", "--"}:
                 pool = ""
-            volumes.append({"name": name, "pool_or_cpg": pool})
+            status = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
+            volumes.append({"name": name, "pool_or_cpg": pool, "status": status, "mstr": status})
         return volumes
 
     # Whitespace table fallback (no comma/colon delimiters in header).
@@ -190,6 +197,7 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
         (i for i, c in enumerate(cols) if c.lower() in {"usrcpg", "cpg", "snpcpg", "usr_cpg"}),
         None,
     )
+    mstr_i = next((i for i, c in enumerate(cols) if c.lower() == "mstr"), None)
     if name_i is None:
         return []
     for line in lines[1:]:
@@ -202,7 +210,8 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
         pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
         if pool in {"-", "--"}:
             pool = ""
-        volumes.append({"name": name, "pool_or_cpg": pool})
+        status = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
+        volumes.append({"name": name, "pool_or_cpg": pool, "status": status, "mstr": status})
     return volumes
 
 

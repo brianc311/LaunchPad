@@ -45,6 +45,15 @@ from launchpad.fc_consistgrp_ops import (
     preview_ok as fc_consistgrp_preview_ok,
 )
 from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
+from launchpad.host_volume_health import (
+    filter_problem_hosts,
+    filter_problem_volumes,
+    is_volume_find_eligible,
+)
+from launchpad.host_volume_health_page import (
+    HOST_VOLUME_HEALTH_HTML,
+    HOST_VOLUME_HEALTH_PATH,
+)
 from launchpad.flashsystem_fc import (
     analyze_fc_inventory,
     parse_fabric_logins,
@@ -1941,6 +1950,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == FC_CONSISTGRP_PATH:
             self._send_html(FC_CONSISTGRP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == HOST_VOLUME_HEALTH_PATH:
+            self._send_html(HOST_VOLUME_HEALTH_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
@@ -2145,6 +2157,23 @@ class _HealthHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
+        if path == "/api/host-volume-health/live":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            try:
+                payload = server.scan_host_volume_health_live(card_id=card_id)
             except RuntimeError as exc:
                 self._send_json({"error": str(exc)}, status=403)
                 return
@@ -3780,6 +3809,100 @@ class HealthServer:
                 card.name = new_name
                 card.host = new_host
         return plan
+
+    def scan_host_volume_health_live(
+        self, *, card_id: int | None = None
+    ) -> dict[str, Any]:
+        if not self.is_unlocked():
+            raise RuntimeError(
+                "LaunchPad must be unlocked to refresh Hosts & Volumes Health live."
+            )
+        self.sync_from_app()
+        if self.is_unlocked():
+            try:
+                self.ensure_anderson_card_rename()
+            except Exception:
+                pass
+        cards = self.list_cards(allow_sync=False)
+        monitor = {
+            c["id"]: self.is_monitor_enabled(int(c["id"]))
+            for c in cards
+            if c.get("id") is not None
+        }
+        hosts: list[dict[str, Any]] = []
+        volumes: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = bool(
+                monitor.get(current_id, monitor.get(str(current_id), False))
+            )
+            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            card = self._cards.get(int(current_id))
+            if card is None:
+                continue
+            profile = str(card.device_profile or "")
+            vendor = vendor_for_profile(profile)
+            card_host = str(card.host or "")
+            try:
+                if vendor == "hpe":
+                    host_output, vv_output = run_ssh_auth_hpe_commands(
+                        card.host,
+                        card.port,
+                        card.username,
+                        ["showhost", "showvv"],
+                        password=card.password,
+                        key_path=card.key_path,
+                        key_passphrase=card.key_passphrase,
+                    )
+                    host_rows = parse_showhost_hosts(host_output or "")
+                    vol_rows = parse_showvv_volumes(vv_output or "")
+                else:
+                    run = self._lun_run_command(card)
+                    host_rows = parse_fc_hosts(run("svcinfo lshost -delim :"))
+                    vol_rows = parse_lsvdisk_volumes(run("svcinfo lsvdisk -delim :"))
+                hosts.extend(
+                    filter_problem_hosts(
+                        host_rows,
+                        card_name=card.name,
+                        host=card_host,
+                        vendor=vendor,
+                    )
+                )
+                volumes.extend(
+                    filter_problem_volumes(
+                        vol_rows,
+                        card_name=card.name,
+                        host=card_host,
+                        vendor=vendor,
+                    )
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": str(exc),
+                    }
+                )
+        hosts.sort(
+            key=lambda row: (
+                str(row.get("card_name") or "").lower(),
+                str(row.get("host_name") or "").lower(),
+            )
+        )
+        volumes.sort(
+            key=lambda row: (
+                str(row.get("card_name") or "").lower(),
+                str(row.get("volume_name") or "").lower(),
+            )
+        )
+        return {"hosts": hosts, "volumes": volumes, "errors": errors}
 
     def find_volumes(
         self, query: str, *, mode: str = "cache", find_type: str = "volume"

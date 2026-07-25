@@ -11,6 +11,8 @@ from launchpad.volume_find import (
 )
 
 __all__ = [
+    "filter_problem_hosts",
+    "filter_problem_volumes",
     "is_volume_find_eligible",
     "normalize_gui_url",
     "parse_fc_hosts",
@@ -34,3 +36,62 @@ def normalize_gui_url(url: str) -> str:
     if "://" not in stripped:
         return f"https://{stripped}"
     return stripped
+
+
+def _row_status(row: dict[str, str]) -> str:
+    for key in ("status", "state", "mstr", "rd"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def filter_problem_hosts(
+    rows: list[dict[str, str]],
+    *,
+    card_name: str,
+    host: str,
+    vendor: str,
+) -> list[dict[str, str]]:
+    problems: list[dict[str, str]] = []
+    for row in rows:
+        status = _row_status(row)
+        if not status_is_offline_or_degraded(status):
+            continue
+        problems.append(
+            {
+                "card_name": card_name,
+                "host": host,
+                "vendor": vendor,
+                "host_name": str(row.get("host_name") or row.get("name") or "").strip(),
+                "status": status,
+                "wwpns": str(row.get("wwpns") or "").strip(),
+            }
+        )
+    return problems
+
+
+def filter_problem_volumes(
+    rows: list[dict[str, str]],
+    *,
+    card_name: str,
+    host: str,
+    vendor: str,
+) -> list[dict[str, str]]:
+    problems: list[dict[str, str]] = []
+    for row in rows:
+        status = _row_status(row)
+        if not status_is_offline_or_degraded(status):
+            continue
+        pool = str(row.get("pool_or_cpg") or row.get("pool") or "").strip()
+        problems.append(
+            {
+                "card_name": card_name,
+                "host": host,
+                "vendor": vendor,
+                "volume_name": str(row.get("name") or row.get("volume_name") or "").strip(),
+                "pool_or_cpg": pool,
+                "status": status,
+            }
+        )
+    return problems
