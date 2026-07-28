@@ -111,6 +111,25 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
+    <section class="section" id="fc-cg-summary-section">
+      <div class="section-head">
+        <h2>Array FlashCopy CG summary</h2>
+        <button type="button" id="fc-cg-summary-refresh" class="secondary">Refresh CG summary</button>
+      </div>
+      <p class="hint">Live FlashCopy Consistency Groups on the linked array (read-only). Manage membership on <a href="/fc-consistgrp">FlashCopy CGs</a>.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Name</th><th>Status</th><th>Maps</th><th>Host maps</th><th>Size</th><th>Policy</th><th>Snaps/week</th>
+          </tr></thead>
+          <tbody id="fc-cg-summary-body">
+            <tr><td colspan="7" class="empty">Click Refresh CG summary (Unlock required).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint" id="fc-cg-summary-status"></p>
+    </section>
+
     <section class="section" id="wizard-panel">
       <div class="wizard-progress" aria-label="Wizard progress">
         <span data-wizard-progress="1">1 Source</span>
@@ -789,6 +808,54 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         statusEl.textContent = data.ok ? "Create completed; see the log for details." : "Create did not complete; see the log and warnings.";
       } catch (error) { statusEl.textContent = `Unable to run _snap create: ${error.message || error}`; }
     }
+    function renderFcCgSummaryRows(summaries) {
+      const body = document.getElementById("fc-cg-summary-body");
+      const rows = Array.isArray(summaries) ? summaries : [];
+      body.innerHTML = rows.length
+        ? rows.map((row) => {
+            const maps = row.fc_map_count ?? "";
+            const hostMaps = row.host_map_count ?? "";
+            const size = row.total_size || "—";
+            const policy = row.policy || "—";
+            const snaps = row.snaps_per_week ?? "—";
+            return `<tr>
+              <td>${escapeHtml(row.name || "")}</td>
+              <td>${escapeHtml(row.status || "")}</td>
+              <td>${escapeHtml(String(maps))}</td>
+              <td>${escapeHtml(String(hostMaps))}</td>
+              <td>${escapeHtml(String(size))}</td>
+              <td>${escapeHtml(String(policy))}</td>
+              <td>${escapeHtml(String(snaps))}</td>
+            </tr>`;
+          }).join("")
+        : '<tr><td colspan="7" class="empty">No FlashCopy CGs found on the linked array.</td></tr>';
+    }
+    async function refreshFcCgSummary() {
+      const summaryStatus = document.getElementById("fc-cg-summary-status");
+      if (!currentId) {
+        summaryStatus.textContent = "Select a group to refresh CG summary.";
+        return;
+      }
+      summaryStatus.textContent = "Loading FlashCopy CG summary…";
+      try {
+        const response = await fetch(
+          `/api/contingency-groups/fc-cg-summary?group_id=${encodeURIComponent(currentId)}`
+        );
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          const warnings = (data.warnings || []).filter(Boolean).join("; ");
+          throw new Error(warnings || data.error || `HTTP ${response.status}`);
+        }
+        renderFcCgSummaryRows(data.summaries);
+        const card = data.card || {};
+        const cardLabel = card.name || card.ip || "";
+        summaryStatus.textContent = cardLabel
+          ? `Loaded ${Array.isArray(data.summaries) ? data.summaries.length : 0} CG(s) from ${cardLabel}.`
+          : `Loaded ${Array.isArray(data.summaries) ? data.summaries.length : 0} CG(s).`;
+      } catch (error) {
+        summaryStatus.textContent = `CG summary failed: ${error.message || error}`;
+      }
+    }
     async function syncFromArray() {
       if (!currentId) { statusEl.textContent = "Select a group to sync."; return; }
       if (!persisted) { statusEl.textContent = "Unlock LaunchPad before syncing from the array."; return; }
@@ -815,6 +882,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         statusEl.textContent =
           `Synced hosts=${p.hosts||0} volumes=${p.volumes||0} maps=${p.maps||0}` +
           ` skipped_snaps=${p.skipped_snaps||0} live_snaps=${p.live_snaps||0}. CG updated.`;
+        await refreshFcCgSummary();
       } catch (error) {
         statusEl.textContent = `Sync from array failed: ${error.message || error}`;
       }
@@ -933,6 +1001,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       window.location.assign("/fc-wwpn");
     });
     document.getElementById("sync-array-btn").addEventListener("click", syncFromArray);
+    document.getElementById("fc-cg-summary-refresh").addEventListener("click", refreshFcCgSummary);
     loadGroups();
   </script>
 </body>

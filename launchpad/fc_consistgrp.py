@@ -76,7 +76,8 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     <section class="section">
       <div class="section-head"><h2>Consistency Groups</h2></div>
       <p class="hint" id="selected-group-hint">No group selected.</p>
-      <div class="table-wrap"><table><thead><tr><th></th><th>Name</th><th>Status</th><th>Maps</th></tr></thead><tbody id="groups-body"></tbody></table></div>
+      <p class="hint" id="groups-snaps-hint" hidden>Snaps/week from Snapshot Schedule</p>
+      <div class="table-wrap"><table><thead><tr><th></th><th>Name</th><th>Status</th><th>Maps</th><th>Host maps</th><th>Size</th><th>Policy</th><th>Snaps/week</th></tr></thead><tbody id="groups-body"></tbody></table></div>
       <div class="actions">
         <button type="button" id="start-group-btn">Start CG</button>
         <button type="button" class="danger" id="delete-group-btn">Delete CG</button>
@@ -125,6 +126,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     const statusEl = document.getElementById("status");
     const groupsBody = document.getElementById("groups-body");
     const selectedGroupHint = document.getElementById("selected-group-hint");
+    const groupsSnapsHint = document.getElementById("groups-snaps-hint");
     const memberMapsBody = document.getElementById("member-maps-body");
     const memberMapsHint = document.getElementById("member-maps-hint");
     const standAloneMapsBody = document.getElementById("standalone-maps-body");
@@ -269,19 +271,32 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     }
 
     function renderGroups() {
-      const groups = inventory.groups || [];
-      groupsBody.innerHTML = groups.length
-        ? groups.map((group) => {
-            const name = String(group.name || "");
+      const rows = (inventory.summaries && inventory.summaries.length)
+        ? inventory.summaries
+        : (inventory.groups || []);
+      const fromSchedule = rows.some((row) => String(row.snaps_source || "") === "schedule");
+      if (groupsSnapsHint) groupsSnapsHint.hidden = !fromSchedule;
+      groupsBody.innerHTML = rows.length
+        ? rows.map((row) => {
+            const name = String(row.name || "");
             const isSelected = name === selectedGroupName;
+            const maps = row.fc_map_count ?? row.map_count ?? "";
+            const hostMaps = row.host_map_count ?? "";
+            const size = row.total_size ?? "";
+            const policy = row.policy ?? "";
+            const snaps = row.snaps_per_week ?? "";
             return `<tr class="${isSelected ? "selected-row" : ""}">
               <td><input type="radio" name="selected-group" value="${escapeAttr(name)}" ${isSelected ? "checked" : ""} aria-label="Select ${escapeAttr(name)}"></td>
               <td>${escapeHtml(name)}</td>
-              <td>${escapeHtml(group.status || "")}</td>
-              <td>${escapeHtml(String(group.map_count ?? ""))}</td>
+              <td>${escapeHtml(row.status || "")}</td>
+              <td>${escapeHtml(String(maps))}</td>
+              <td>${escapeHtml(String(hostMaps))}</td>
+              <td>${escapeHtml(String(size))}</td>
+              <td>${escapeHtml(String(policy))}</td>
+              <td>${escapeHtml(String(snaps))}</td>
             </tr>`;
           }).join("")
-        : '<tr><td colspan="4" class="empty">No consistency groups found. Use Create CG below.</td></tr>';
+        : '<tr><td colspan="8" class="empty">No consistency groups found. Use Create CG below.</td></tr>';
       selectedGroupHint.textContent = selectedGroupName ? `Selected: ${selectedGroupName}` : "No group selected.";
     }
 

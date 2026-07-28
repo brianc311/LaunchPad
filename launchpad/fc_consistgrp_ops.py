@@ -32,6 +32,8 @@ def _is_standalone_consistgrp(consistgrp: str) -> bool:
 
 def parse_lsfcconsistgrp(output: str) -> list[dict]:
     """Parse svcinfo lsfcconsistgrp rows into consistency group records."""
+    from launchpad.fc_cg_summary import format_cg_policy
+
     groups: list[dict] = []
     for record in _table_records(output):
         name = _get(record, "name")
@@ -51,6 +53,7 @@ def parse_lsfcconsistgrp(output: str) -> list[dict]:
                         "map_count",
                     )
                 ),
+                "policy": format_cg_policy(record),
             }
         )
     return groups
