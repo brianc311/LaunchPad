@@ -305,3 +305,47 @@ def test_contingency_groups_reads_and_writes_snap_assign_fields():
     assert 'getElementById("snap-assign-cg-name")' in render
     assert "snap_assign_cg_enabled" in read_summary
     assert "snap_assign_cg_name" in read_summary
+
+
+def test_contingency_groups_exposes_fc_cg_summary_section():
+    html = CONTINGENCY_GROUPS_HTML
+    assert 'id="fc-cg-summary-section"' in html
+    assert html.index("group-notes") < html.index('id="fc-cg-summary-section"')
+    assert html.index('id="fc-cg-summary-section"') < html.index('id="wizard-panel"')
+    section = html.split('id="fc-cg-summary-section"', 1)[1].split(
+        'id="wizard-panel"', 1
+    )[0]
+    for text in (
+        "Array FlashCopy CG summary",
+        'id="fc-cg-summary-refresh"',
+        "Refresh CG summary",
+        'href="/fc-consistgrp"',
+        "FlashCopy CGs",
+        "<th>Name</th>",
+        "<th>Status</th>",
+        "<th>Maps</th>",
+        "<th>Host maps</th>",
+        "<th>Size</th>",
+        "<th>Policy</th>",
+        "<th>Snaps/week</th>",
+        'id="fc-cg-summary-body"',
+        'id="fc-cg-summary-status"',
+        "Click Refresh CG summary (Unlock required).",
+    ):
+        assert text in section
+
+
+def test_contingency_groups_fc_cg_summary_refresh_calls_api():
+    html = CONTINGENCY_GROUPS_HTML
+    assert "async function refreshFcCgSummary(" in html
+    body = html.split("async function refreshFcCgSummary(", 1)[1].split(
+        "async function syncFromArray()", 1
+    )[0]
+    assert "/api/contingency-groups/fc-cg-summary?group_id=" in body
+    assert "sourceVolumeEntries" not in body
+    assert "At least one source volume" not in body
+    assert 'getElementById("fc-cg-summary-refresh")' in html
+    sync = html.split("async function syncFromArray() {", 1)[1].split(
+        "async function loadGroups()", 1
+    )[0]
+    assert "refreshFcCgSummary" in sync
