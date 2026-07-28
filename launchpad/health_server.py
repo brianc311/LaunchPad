@@ -59,6 +59,27 @@ from launchpad.host_volume_health_page import (
     HOST_VOLUME_HEALTH_HTML,
     HOST_VOLUME_HEALTH_PATH,
 )
+from launchpad.system_connectivity import (
+    TOPICS,
+    base_row,
+    finalize_row,
+    hpe_call_home_na_row,
+    is_system_connectivity_eligible,
+    parse_ds_networkport_dns,
+    parse_ds_showsp_call_home,
+    parse_hpe_shownet_dns_ntp,
+    parse_hpe_snmpmgr,
+    parse_svc_call_home,
+    parse_svc_dns,
+    parse_svc_ntp_from_lssystem,
+    parse_svc_snmp,
+    topic_commands_for_profile,
+    vendor_for_profile as system_connectivity_vendor,
+)
+from launchpad.system_connectivity_page import (
+    SYSTEM_CONNECTIVITY_HTML,
+    SYSTEM_CONNECTIVITY_PATH,
+)
 from launchpad.flashsystem_fc import (
     analyze_fc_inventory,
     parse_fabric_logins,
@@ -1959,6 +1980,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == HOST_VOLUME_HEALTH_PATH:
             self._send_html(HOST_VOLUME_HEALTH_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == SYSTEM_CONNECTIVITY_PATH:
+            self._send_html(SYSTEM_CONNECTIVITY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
@@ -2251,6 +2275,76 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 except Exception as open_exc:
                     _log(
                         "Hosts & Volumes Health export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
+        if path == "/api/system-connectivity/live":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            try:
+                payload = server.scan_system_connectivity_live(card_id=card_id)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
+        if path == "/api/system-connectivity/export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            export_format = (query.get("format") or [""])[0].strip().lower()
+            if export_format not in {"xlsx", "csv"}:
+                self._send_json(
+                    {"error": "Export format must be xlsx or csv."},
+                    status=400,
+                )
+                return
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            open_after = (query.get("open") or ["1"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                body, filename, content_type = server.export_system_connectivity_bytes(
+                    export_format=export_format,
+                    card_id=card_id,
+                )
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"System Connectivity export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "System Connectivity export saved for download but "
                         f"could not open: {open_exc}"
                     )
             self._send_bytes(body, content_type=content_type, filename=filename)
@@ -2961,6 +3055,7 @@ class HealthServer:
         self._monitor_enabled: dict[int, bool] = {}
         self._lun_preview_session: dict[str, Any] | None = None
         self._host_volume_health_cache: dict[str, Any] | None = None
+        self._system_connectivity_cache: dict[str, Any] | None = None
 
     def set_sync_provider(self, provider: Callable[[], int] | None) -> None:
         with self._lock:
@@ -4207,6 +4302,329 @@ class HealthServer:
         body = export_host_volume_health_csv_zip(scoped)
         return body, f"Host_Volume_Health_{stamp}.zip", "application/zip"
 
+    @staticmethod
+    def _system_connectivity_svc_command(command: str) -> str:
+        cmd = str(command or "").strip()
+        if not cmd:
+            return cmd
+        if cmd.startswith("svcinfo ") or cmd.startswith("svctask "):
+            return cmd
+        return f"svcinfo {cmd}"
+
+    @staticmethod
+    def _system_connectivity_na_row(
+        identity: dict[str, Any], *, details: str
+    ) -> dict[str, Any]:
+        return finalize_row(
+            dict(identity),
+            configured="n/a",
+            status="n/a",
+            details=details,
+        )
+
+    @staticmethod
+    def _system_connectivity_unknown_row(
+        identity: dict[str, Any], *, error: str
+    ) -> dict[str, Any]:
+        return finalize_row(
+            dict(identity),
+            configured="unknown",
+            status="error",
+            error=error,
+        )
+
+    def _scan_system_connectivity_svc_card(
+        self, card: HealthCard, identity: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        run = self._lun_run_command(card)
+        commands = topic_commands_for_profile(card.device_profile or "")
+        parsers = {
+            "call_home": parse_svc_call_home,
+            "dns": parse_svc_dns,
+            "snmp": parse_svc_snmp,
+            "ntp": parse_svc_ntp_from_lssystem,
+        }
+        rows: dict[str, dict[str, Any]] = {}
+        for topic in TOPICS:
+            topic_cmds = list(commands.get(topic) or [])
+            if not topic_cmds:
+                rows[topic] = self._system_connectivity_na_row(
+                    identity,
+                    details=f"{topic} not available for this profile",
+                )
+                continue
+            try:
+                output = run(self._system_connectivity_svc_command(topic_cmds[0]))
+                configured, status, details = parsers[topic](output or "")
+                rows[topic] = finalize_row(
+                    dict(identity),
+                    configured=configured,
+                    status=status,
+                    details=details,
+                )
+            except Exception as exc:
+                rows[topic] = self._system_connectivity_unknown_row(
+                    identity, error=str(exc)
+                )
+        return rows
+
+    def _scan_system_connectivity_hpe_card(
+        self, card: HealthCard, identity: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        shownet_out, snmp_out = run_ssh_auth_hpe_commands(
+            card.host,
+            card.port,
+            card.username,
+            ["shownet", "showsnmpmgr"],
+            password=card.password,
+            key_path=card.key_path,
+            key_passphrase=card.key_passphrase,
+        )
+        ch_configured, ch_status, ch_details = hpe_call_home_na_row()
+        net = parse_hpe_shownet_dns_ntp(shownet_out or "")
+        snmp_configured, snmp_status, snmp_details = parse_hpe_snmpmgr(snmp_out or "")
+        return {
+            "call_home": finalize_row(
+                dict(identity),
+                configured=ch_configured,
+                status=ch_status,
+                details=ch_details,
+            ),
+            "dns": finalize_row(
+                dict(identity),
+                configured=net["dns"][0],
+                status=net["dns"][1],
+                details=net["dns"][2],
+            ),
+            "snmp": finalize_row(
+                dict(identity),
+                configured=snmp_configured,
+                status=snmp_status,
+                details=snmp_details,
+            ),
+            "ntp": finalize_row(
+                dict(identity),
+                configured=net["ntp"][0],
+                status=net["ntp"][1],
+                details=net["ntp"][2],
+            ),
+        }
+
+    def _scan_system_connectivity_ds_card(
+        self, card: HealthCard, identity: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        run = self._lun_run_command(card)
+        commands = topic_commands_for_profile(card.device_profile or "")
+        rows: dict[str, dict[str, Any]] = {}
+
+        def _run_first(topic: str) -> str:
+            topic_cmds = list(commands.get(topic) or [])
+            if not topic_cmds:
+                return ""
+            return run(topic_cmds[0]) or ""
+
+        try:
+            call_home_out = _run_first("call_home")
+            configured, status, details = parse_ds_showsp_call_home(call_home_out)
+            rows["call_home"] = finalize_row(
+                dict(identity),
+                configured=configured,
+                status=status,
+                details=details,
+            )
+        except Exception as exc:
+            rows["call_home"] = self._system_connectivity_unknown_row(
+                identity, error=str(exc)
+            )
+
+        try:
+            dns_out = _run_first("dns")
+            configured, status, details = parse_ds_networkport_dns(dns_out)
+            rows["dns"] = finalize_row(
+                dict(identity),
+                configured=configured,
+                status=status,
+                details=details,
+            )
+        except Exception as exc:
+            rows["dns"] = self._system_connectivity_unknown_row(
+                identity, error=str(exc)
+            )
+
+        rows["snmp"] = self._system_connectivity_na_row(
+            identity,
+            details="SNMP not available via DSCLI on this path",
+        )
+        rows["ntp"] = self._system_connectivity_na_row(
+            identity,
+            details="NTP not available via DSCLI on this path (often HMC)",
+        )
+        return rows
+
+    def scan_system_connectivity_live(
+        self, *, card_id: int | None = None
+    ) -> dict[str, Any]:
+        if not self.is_unlocked():
+            raise RuntimeError(
+                "LaunchPad must be unlocked to refresh System Connectivity live."
+            )
+        self.sync_from_app()
+        if self.is_unlocked():
+            try:
+                self.ensure_anderson_card_rename()
+            except Exception:
+                pass
+        cards = self.list_cards(allow_sync=False)
+        monitor = {
+            c["id"]: self.is_monitor_enabled(int(c["id"]))
+            for c in cards
+            if c.get("id") is not None
+        }
+        topic_rows: dict[str, list[dict[str, Any]]] = {topic: [] for topic in TOPICS}
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = bool(
+                monitor.get(current_id, monitor.get(str(current_id), False))
+            )
+            if not is_system_connectivity_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            card = self._cards.get(int(current_id))
+            if card is None:
+                continue
+            profile = str(card.device_profile or "")
+            vendor = system_connectivity_vendor(profile)
+            identity = base_row(
+                card_name=card.name,
+                host=str(card.host or ""),
+                vendor=vendor,
+                profile=profile,
+                card_id=card.card_id,
+            )
+            try:
+                if profile in HPE_SHELL_PROFILES:
+                    scanned = self._scan_system_connectivity_hpe_card(card, identity)
+                elif profile.strip().lower() == "ibm_ds8884":
+                    scanned = self._scan_system_connectivity_ds_card(card, identity)
+                else:
+                    scanned = self._scan_system_connectivity_svc_card(card, identity)
+                for topic in TOPICS:
+                    topic_rows[topic].append(scanned[topic])
+                    if scanned[topic].get("error"):
+                        errors.append(
+                            {
+                                "card_id": card.card_id,
+                                "card_name": card.name,
+                                "topic": topic,
+                                "error": scanned[topic]["error"],
+                            }
+                        )
+            except Exception as exc:
+                err = str(exc)
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": err,
+                    }
+                )
+                for topic in TOPICS:
+                    if topic == "call_home" and profile in HPE_SHELL_PROFILES:
+                        ch_configured, ch_status, ch_details = hpe_call_home_na_row()
+                        topic_rows[topic].append(
+                            finalize_row(
+                                dict(identity),
+                                configured=ch_configured,
+                                status=ch_status,
+                                details=ch_details,
+                                error=err,
+                            )
+                        )
+                    else:
+                        topic_rows[topic].append(
+                            self._system_connectivity_unknown_row(
+                                identity, error=err
+                            )
+                        )
+        for topic in TOPICS:
+            topic_rows[topic].sort(
+                key=lambda row: (str(row.get("card_name") or "").lower(),)
+            )
+        payload = {
+            "call_home": topic_rows["call_home"],
+            "dns": topic_rows["dns"],
+            "snmp": topic_rows["snmp"],
+            "ntp": topic_rows["ntp"],
+            "errors": errors,
+        }
+        with self._lock:
+            self._system_connectivity_cache = payload
+        return payload
+
+    def get_system_connectivity_cache(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._system_connectivity_cache is None:
+                return None
+            return {
+                "call_home": list(
+                    self._system_connectivity_cache.get("call_home") or []
+                ),
+                "dns": list(self._system_connectivity_cache.get("dns") or []),
+                "snmp": list(self._system_connectivity_cache.get("snmp") or []),
+                "ntp": list(self._system_connectivity_cache.get("ntp") or []),
+                "errors": list(self._system_connectivity_cache.get("errors") or []),
+            }
+
+    def set_system_connectivity_cache(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._system_connectivity_cache = {
+                "call_home": list(payload.get("call_home") or []),
+                "dns": list(payload.get("dns") or []),
+                "snmp": list(payload.get("snmp") or []),
+                "ntp": list(payload.get("ntp") or []),
+                "errors": list(payload.get("errors") or []),
+            }
+
+    def export_system_connectivity_bytes(
+        self,
+        *,
+        export_format: str,
+        card_id: int | None = None,
+    ) -> tuple[bytes, str, str]:
+        from launchpad.system_connectivity_export import (
+            export_system_connectivity_csv_zip,
+            export_system_connectivity_xlsx,
+            filter_payload_by_card_id,
+        )
+
+        cached = self.get_system_connectivity_cache()
+        if cached is None:
+            raise LookupError("Refresh live before exporting.")
+        card_name: str | None = None
+        if card_id is not None:
+            with self._lock:
+                card = self._cards.get(int(card_id))
+            if card is None:
+                raise ValueError(f"Unknown card_id: {card_id}")
+            card_name = card.name
+        scoped = filter_payload_by_card_id(
+            cached, card_id=card_id, card_name=card_name
+        )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        if export_format == "xlsx":
+            body = export_system_connectivity_xlsx(scoped)
+            return (
+                body,
+                f"System_Connectivity_{stamp}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        body = export_system_connectivity_csv_zip(scoped)
+        return body, f"System_Connectivity_{stamp}.zip", "application/zip"
+
     def find_volumes(
         self, query: str, *, mode: str = "cache", find_type: str = "volume"
     ) -> dict[str, Any]:
@@ -4426,6 +4844,10 @@ class HealthServer:
     @property
     def host_volume_health_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{HOST_VOLUME_HEALTH_PATH}"
+
+    @property
+    def system_connectivity_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{SYSTEM_CONNECTIVITY_PATH}"
 
     def ensure_running(self) -> None:
         with self._lock:
@@ -4767,6 +5189,13 @@ class HealthServer:
         webbrowser.open(self.host_volume_health_url)
         _log(f"Opened Hosts & Volumes Health in browser: {self.host_volume_health_url}")
         return self.host_volume_health_url
+
+    def open_system_connectivity(self) -> str:
+        """Open the System Connectivity page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.system_connectivity_url)
+        _log(f"Opened System Connectivity in browser: {self.system_connectivity_url}")
+        return self.system_connectivity_url
 
 
 _instance: HealthServer | None = None
