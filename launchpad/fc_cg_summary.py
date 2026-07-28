@@ -38,6 +38,43 @@ def snaps_per_week_from_days(days: int) -> float:
     return round(7 / safe_days, 2)
 
 
+def _frequency_label(days: int) -> str:
+    if days == 7:
+        return "WEEKLY"
+    if days == 14:
+        return "BIWEEKLY"
+    return f"EVERY {days} DAYS"
+
+
+def schedule_context_from_capacity(
+    *,
+    used_pct: float | None,
+    threshold: float = 80.0,
+    override: dict | None = None,
+) -> dict:
+    """Build ``{days, held, label}`` from pool used% and optional schedule override."""
+    ov = override if isinstance(override, dict) else None
+    if ov and ov.get("held"):
+        return {"days": None, "held": True, "label": "HOLD — EXPAND FIRST"}
+    if ov and str(ov.get("mode") or "").strip().lower() == "custom":
+        try:
+            days = int(ov.get("interval_days") or 7)
+        except (TypeError, ValueError):
+            days = 7
+        days = max(2, min(365, days))
+        return {"days": days, "held": False, "label": _frequency_label(days)}
+
+    if used_pct is None:
+        return {"days": None, "held": True, "label": "NO CAPACITY DATA"}
+
+    pct = float(used_pct)
+    if pct >= threshold:
+        return {"days": None, "held": True, "label": "HOLD — EXPAND FIRST"}
+
+    days = schedule_interval_days(pct, threshold)
+    return {"days": days, "held": False, "label": _frequency_label(days)}
+
+
 def count_host_maps_for_targets(
     host_maps: list[dict], target_volumes: set[str]
 ) -> int:

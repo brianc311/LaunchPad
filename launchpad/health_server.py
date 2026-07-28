@@ -38,6 +38,10 @@ from launchpad.contingency_snap_create import (
     resolve_card_by_storage_hint,
     run_snap_steps,
 )
+from launchpad.fc_cg_summary import (
+    build_cg_summaries,
+    schedule_context_from_capacity,
+)
 from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
 from launchpad.fc_consistgrp_ops import (
     build_fc_consistgrp_steps,
@@ -1972,6 +1976,23 @@ class _HealthHandler(BaseHTTPRequestHandler):
             result = server.fc_consistgrp_inventory(card_id)
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path == "/api/contingency-groups/fc-cg-summary":
+            query = parse_qs(parsed.query)
+            group_id = (query.get("group_id") or [""])[0].strip()
+            if not group_id:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "warnings": ["group_id is required"],
+                        "summaries": [],
+                        "card": None,
+                    },
+                    status=400,
+                )
+                return
+            result = server.contingency_fc_cg_summary(group_id)
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
         if path == "/api/cards":
             self._send_json(server.list_cards())
             return
@@ -3681,6 +3702,36 @@ class HealthServer:
             for card in stored
         ]
 
+    def _fc_host_lun_maps(self, card: HealthCard) -> list[dict]:
+        try:
+            run = self._snap_run_command(card)
+            host_out = run("svcinfo lshostvdiskmap -delim :")
+            if not str(host_out or "").strip():
+                host_out = run("svcinfo lshostvdiskmap")
+            return parse_host_lun_maps(host_out or "")
+        except Exception:
+            return []
+
+    def schedule_context_for_card(
+        self, card: HealthCard, *, threshold: float = 80.0
+    ) -> dict:
+        pools = pool_capacity_from_commands(card.command_results)
+        used_pct: float | None = None
+        if pools:
+            used_pct = max(float(pool.get("used_pct") or 0) for pool in pools)
+        else:
+            analysis = analyze_health(card.name, card.command_results, card.metrics)
+            capacity = analysis.get("capacity_summary") or {}
+            if capacity.get("used_pct") is not None:
+                used_pct = float(capacity.get("used_pct") or 0)
+        overrides = self.get_snapshot_overrides()
+        override = overrides.get(str(card.card_id)) or overrides.get(card.name)
+        return schedule_context_from_capacity(
+            used_pct=used_pct,
+            threshold=threshold,
+            override=override,
+        )
+
     def fc_consistgrp_inventory(self, card_id: int) -> dict[str, Any]:
         card = self._fc_consistgrp_card_by_id(card_id)
         if card is None:
@@ -3690,6 +3741,7 @@ class HealthServer:
                 "groups": [],
                 "maps": [],
                 "stand_alone": [],
+                "summaries": [],
             }
         try:
             groups, maps = collect_fc_consistgrp_inventory(self._snap_run_command(card))
@@ -3700,7 +3752,16 @@ class HealthServer:
                 "groups": [],
                 "maps": [],
                 "stand_alone": [],
+                "summaries": [],
             }
+        host_maps = self._fc_host_lun_maps(card)
+        schedule = self.schedule_context_for_card(card)
+        summaries = build_cg_summaries(
+            groups=groups,
+            maps=maps,
+            host_maps=host_maps,
+            schedule=schedule,
+        )
         _in_group, stand_alone = partition_maps(maps)
         return {
             "ok": True,
@@ -3709,6 +3770,55 @@ class HealthServer:
             "groups": groups,
             "maps": maps,
             "stand_alone": stand_alone,
+            "summaries": summaries,
+            "host_maps": host_maps,
+        }
+
+    def contingency_fc_cg_summary(self, group_id: str) -> dict[str, Any]:
+        group = self._contingency_group_by_id(group_id)
+        if group is None:
+            return {
+                "ok": False,
+                "warnings": [f"Unknown contingency group {group_id}"],
+                "summaries": [],
+                "card": None,
+            }
+        if not self.is_unlocked():
+            return {
+                "ok": False,
+                "warnings": [
+                    "LaunchPad must be unlocked to collect FlashCopy CG summary."
+                ],
+                "summaries": [],
+                "card": None,
+            }
+        hint = (
+            str(group.get("storage_hint") or "").strip()
+            or str(group.get("name") or "").strip()
+        )
+        card = self.find_card_by_hint(hint)
+        if card is None:
+            return {
+                "ok": False,
+                "warnings": [
+                    f"No Health Card matches storage hint {hint or '(empty)'}"
+                ],
+                "summaries": [],
+                "card": None,
+            }
+        inventory = self.fc_consistgrp_inventory(card.card_id)
+        if not inventory.get("ok"):
+            return {
+                "ok": False,
+                "warnings": inventory.get("warnings") or [],
+                "summaries": [],
+                "card": inventory.get("card"),
+            }
+        return {
+            "ok": True,
+            "card": inventory["card"],
+            "summaries": inventory.get("summaries") or [],
+            "warnings": inventory.get("warnings") or [],
         }
 
     def preview_fc_consistgrp(
