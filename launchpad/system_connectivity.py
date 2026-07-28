@@ -300,19 +300,17 @@ def parse_hpe_snmpmgr(output: str) -> tuple[str, str, str]:
             # Strip secret-looking trailing fields; keep IP/port-like tokens only.
             tokens = [t for t in line.split() if not any(s in t.lower() for s in secret_tokens)]
             line = " ".join(tokens)
-        ips = re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", line)
-        ports = re.findall(r"\b(\d{1,5})\b", line)
-        if not ips:
+        ip_match = re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", line)
+        if not ip_match:
             continue
-        ip = ips[0]
-        port = ""
-        for candidate in ports:
-            if candidate not in ip.split("."):
-                # Prefer common SNMP trap ports when present.
-                if candidate in {"161", "162"} or (candidate.isdigit() and int(candidate) > 0):
-                    port = candidate
-                    break
-        managers.append(f"{ip}:{port}" if port and port not in ip else ip)
+        ip = ip_match.group(0)
+        # Numbers outside the IP token only (avoids octet false-positives and
+        # row ids). Prefer SNMP ports 161/162; otherwise omit port.
+        outside = line[: ip_match.start()] + " " + line[ip_match.end() :]
+        outside_nums = re.findall(r"\b(\d{1,5})\b", outside)
+        preferred = [c for c in outside_nums if c in {"161", "162"}]
+        port = preferred[0] if preferred else ""
+        managers.append(f"{ip}:{port}" if port else ip)
     if not managers:
         # Header-only / empty manager table.
         if len(lines) <= 2 and not re.search(r"\d+\.\d+\.\d+\.\d+", text):

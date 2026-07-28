@@ -2,6 +2,7 @@ from launchpad.system_connectivity import (
     hpe_call_home_na_row,
     is_system_connectivity_eligible,
     parse_hpe_shownet_dns_ntp,
+    parse_hpe_snmpmgr,
     parse_svc_call_home,
     parse_svc_dns,
     parse_svc_ntp_from_lssystem,
@@ -73,6 +74,19 @@ DNS server    :   10.6.6.6
 
 def test_hpe_call_home_na():
     assert hpe_call_home_na_row()[0] == "n/a"
+
+
+def test_parse_hpe_snmpmgr_port_selection():
+    # Prefer 162; IP ending in .162 must still keep :162 (not substring-drop).
+    out = "Id IPAddr Port Community\n1 192.168.1.162 162 public\n"
+    configured, status, details = parse_hpe_snmpmgr(out)
+    assert configured == "yes"
+    assert status == "configured"
+    assert details == "192.168.1.162:162"
+    assert "public" not in details.lower()
+    # Row id must not be treated as a port when 161/162 absent.
+    no_port = "Id IPAddr Community\n1 10.1.1.1 public\n"
+    assert parse_hpe_snmpmgr(no_port)[2] == "10.1.1.1"
 
 
 def test_parse_ds_dns():
