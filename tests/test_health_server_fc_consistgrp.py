@@ -87,15 +87,18 @@ def _fake_run_cmd(outputs: dict[str, str]):
     return run_cmd
 
 
-def _patch_inventory(monkeypatch, server: HealthServer, *, host_maps=None):
+def _patch_inventory(
+    monkeypatch, server: HealthServer, *, host_maps=None, host_warn=None
+):
     monkeypatch.setattr(
         "launchpad.health_server.collect_fc_consistgrp_inventory",
         lambda run_cmd: (_INVENTORY_GROUPS, _INVENTORY_MAPS),
     )
     maps = host_maps if host_maps is not None else []
+    warn = host_warn
 
     def _fake_host_maps(self, _card):
-        return maps
+        return maps, warn
 
     monkeypatch.setattr(
         HealthServer,
@@ -156,7 +159,7 @@ def test_fc_consistgrp_inventory_collect_failure(monkeypatch):
     monkeypatch.setattr(
         HealthServer,
         "_fc_host_lun_maps",
-        lambda self, _card: [],
+        lambda self, _card: ([], None),
         raising=False,
     )
 
@@ -164,6 +167,79 @@ def test_fc_consistgrp_inventory_collect_failure(monkeypatch):
 
     assert result["ok"] is False
     assert any("ssh unreachable" in warning for warning in result["warnings"])
+
+
+def test_fc_consistgrp_inventory_host_map_failure_warns(monkeypatch):
+    server = _server_with_card()
+    _patch_inventory(
+        monkeypatch,
+        server,
+        host_maps=[],
+        host_warn="Unable to collect host maps: ssh timeout",
+    )
+
+    result = server.fc_consistgrp_inventory(1)
+
+    assert result["ok"] is True
+    assert any(
+        "Unable to collect host maps" in warning for warning in result["warnings"]
+    )
+    assert result["summaries"]
+    assert all(row["host_map_count"] == 0 for row in result["summaries"])
+
+
+def test_fc_consistgrp_inventory_skips_host_maps_without_summaries(monkeypatch):
+    server = _server_with_card()
+    host_calls: list[object] = []
+
+    monkeypatch.setattr(
+        "launchpad.health_server.collect_fc_consistgrp_inventory",
+        lambda run_cmd: (_INVENTORY_GROUPS, _INVENTORY_MAPS),
+    )
+
+    def _track_host_maps(self, _card):
+        host_calls.append(_card)
+        return [], None
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_fc_host_lun_maps",
+        _track_host_maps,
+        raising=False,
+    )
+
+    result = server.fc_consistgrp_inventory(1, include_summaries=False)
+
+    assert result["ok"] is True
+    assert result["summaries"] == []
+    assert result["host_maps"] == []
+    assert host_calls == []
+
+
+def test_preview_fc_consistgrp_skips_host_map_collection(monkeypatch):
+    server = _server_with_card()
+    host_calls: list[object] = []
+
+    monkeypatch.setattr(
+        "launchpad.health_server.collect_fc_consistgrp_inventory",
+        lambda run_cmd: (_INVENTORY_GROUPS, _INVENTORY_MAPS),
+    )
+
+    def _track_host_maps(self, _card):
+        host_calls.append(_card)
+        return [], None
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_fc_host_lun_maps",
+        _track_host_maps,
+        raising=False,
+    )
+
+    result = server.preview_fc_consistgrp(1, "create_group", {"name": "New_CG"})
+
+    assert result["ok"] is True
+    assert host_calls == []
 
 
 def test_contingency_fc_cg_summary_unknown_group():

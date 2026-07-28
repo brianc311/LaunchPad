@@ -3702,15 +3702,15 @@ class HealthServer:
             for card in stored
         ]
 
-    def _fc_host_lun_maps(self, card: HealthCard) -> list[dict]:
+    def _fc_host_lun_maps(self, card: HealthCard) -> tuple[list[dict], str | None]:
         try:
             run = self._snap_run_command(card)
             host_out = run("svcinfo lshostvdiskmap -delim :")
             if not str(host_out or "").strip():
                 host_out = run("svcinfo lshostvdiskmap")
-            return parse_host_lun_maps(host_out or "")
-        except Exception:
-            return []
+            return parse_host_lun_maps(host_out or ""), None
+        except Exception as exc:
+            return [], f"Unable to collect host maps: {exc}"
 
     def schedule_context_for_card(
         self, card: HealthCard, *, threshold: float = 80.0
@@ -3732,7 +3732,9 @@ class HealthServer:
             override=override,
         )
 
-    def fc_consistgrp_inventory(self, card_id: int) -> dict[str, Any]:
+    def fc_consistgrp_inventory(
+        self, card_id: int, *, include_summaries: bool = True
+    ) -> dict[str, Any]:
         card = self._fc_consistgrp_card_by_id(card_id)
         if card is None:
             return {
@@ -3754,18 +3756,24 @@ class HealthServer:
                 "stand_alone": [],
                 "summaries": [],
             }
-        host_maps = self._fc_host_lun_maps(card)
-        schedule = self.schedule_context_for_card(card)
-        summaries = build_cg_summaries(
-            groups=groups,
-            maps=maps,
-            host_maps=host_maps,
-            schedule=schedule,
-        )
+        warnings: list[str] = []
+        host_maps: list[dict] = []
+        summaries: list[dict] = []
+        if include_summaries:
+            host_maps, host_warn = self._fc_host_lun_maps(card)
+            if host_warn:
+                warnings.append(host_warn)
+            schedule = self.schedule_context_for_card(card)
+            summaries = build_cg_summaries(
+                groups=groups,
+                maps=maps,
+                host_maps=host_maps,
+                schedule=schedule,
+            )
         _in_group, stand_alone = partition_maps(maps)
         return {
             "ok": True,
-            "warnings": [],
+            "warnings": warnings,
             "card": {"id": card.card_id, "name": card.name, "host": card.host},
             "groups": groups,
             "maps": maps,
@@ -3827,7 +3835,7 @@ class HealthServer:
         action: str,
         payload: dict,
     ) -> dict[str, Any]:
-        inventory = self.fc_consistgrp_inventory(card_id)
+        inventory = self.fc_consistgrp_inventory(card_id, include_summaries=False)
         if not inventory["ok"]:
             return {"ok": False, "warnings": inventory["warnings"], "steps": []}
         steps, warnings = build_fc_consistgrp_steps(
