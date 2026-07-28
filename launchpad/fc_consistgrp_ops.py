@@ -30,27 +30,10 @@ def _is_standalone_consistgrp(consistgrp: str) -> bool:
     return (consistgrp or "").strip().lower() in _STANDALONE_CONSISTGRP
 
 
-_POLICY_FIELD_KEYS = (
-    "copy_rate",
-    "autodelete",
-    "relationship",
-    "starting_status",
-    "policy",
-)
-
-
-def _join_cg_policy_fields(record: dict) -> str:
-    """Join non-empty policy-ish columns without importing fc_cg_summary."""
-    parts: list[str] = []
-    for key in _POLICY_FIELD_KEYS:
-        value = str(record.get(key) or "").strip()
-        if value:
-            parts.append(value)
-    return " · ".join(parts)
-
-
 def parse_lsfcconsistgrp(output: str) -> list[dict]:
     """Parse svcinfo lsfcconsistgrp rows into consistency group records."""
+    from launchpad.fc_cg_summary import format_cg_policy
+
     groups: list[dict] = []
     for record in _table_records(output):
         name = _get(record, "name")
@@ -70,7 +53,7 @@ def parse_lsfcconsistgrp(output: str) -> list[dict]:
                         "map_count",
                     )
                 ),
-                "policy": _join_cg_policy_fields(record),
+                "policy": format_cg_policy(record),
             }
         )
     return groups

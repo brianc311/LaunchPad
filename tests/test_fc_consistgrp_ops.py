@@ -38,6 +38,17 @@ def test_parse_lsfcconsistgrp():
     assert int(groups[0]["map_count"]) == 6
 
 
+def test_parse_lsfcconsistgrp_policy_fields():
+    sample = """id:name:status:copy_rate:autodelete
+0:cg_with_policy:idle:50:enabled
+1:cg_no_policy:empty::
+"""
+    groups = parse_lsfcconsistgrp(sample)
+    by_name = {g["name"]: g for g in groups}
+    assert by_name["cg_with_policy"]["policy"] == "50 · enabled"
+    assert by_name["cg_no_policy"]["policy"] == ""
+
+
 def test_parse_lsfcmap_rows_and_partition():
     maps = parse_lsfcmap_rows(MAP_SAMPLE)
     assert maps[0]["source"] == "AWD1_AS400_1"

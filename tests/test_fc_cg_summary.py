@@ -1,9 +1,16 @@
 from launchpad.fc_cg_summary import (
     build_cg_summaries,
     count_host_maps_for_targets,
+    format_cg_policy,
     schedule_interval_days,
     snaps_per_week_from_days,
 )
+
+
+def test_format_cg_policy_joins_and_empty():
+    assert format_cg_policy({"copy_rate": "50", "autodelete": "enabled"}) == "50 · enabled"
+    assert format_cg_policy({}) == ""
+    assert format_cg_policy({"copy_rate": "", "autodelete": "  "}) == ""
 
 
 def test_schedule_interval_and_snaps_week():
