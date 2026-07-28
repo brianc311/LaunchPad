@@ -1,0 +1,123 @@
+"""Shared FlashCopy consistency-group summary helpers."""
+
+from __future__ import annotations
+
+from launchpad.fc_consistgrp_ops import format_cg_total_size, sum_source_size_bytes
+
+_POLICY_KEYS = (
+    "copy_rate",
+    "autodelete",
+    "relationship",
+    "starting_status",
+    "policy",
+)
+
+
+def format_cg_policy(record_fields: dict[str, str]) -> str:
+    """Join non-empty known policy fields with middle-dot separators."""
+    parts: list[str] = []
+    for key in _POLICY_KEYS:
+        value = str(record_fields.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    return " · ".join(parts)
+
+
+def schedule_interval_days(used_pct: float, threshold: float = 80.0) -> int:
+    """Mirror Snapshot Schedule interval: max(2, round(2 + clamped_ratio * 19))."""
+    if threshold:
+        ratio = max(0.0, min(1.0, used_pct / threshold))
+    else:
+        ratio = 1.0
+    return max(2, round(2 + ratio * 19))
+
+
+def snaps_per_week_from_days(days: int) -> float:
+    """Approximate weekly snap rate from interval days (minimum 1 day)."""
+    safe_days = max(1, int(days))
+    return round(7 / safe_days, 2)
+
+
+def count_host_maps_for_targets(
+    host_maps: list[dict], target_volumes: set[str]
+) -> int:
+    """Count host-map rows whose volume/vdisk name is in target_volumes."""
+    count = 0
+    for row in host_maps:
+        volume = (
+            str(row.get("volume") or row.get("vdisk") or row.get("vdisk_name") or "")
+            .strip()
+        )
+        if volume and volume in target_volumes:
+            count += 1
+    return count
+
+
+def _member_maps_for_group(maps: list[dict], group_name: str) -> list[dict]:
+    members: list[dict] = []
+    for mapping in maps:
+        consistgrp = str(mapping.get("consistgrp") or "").strip()
+        if consistgrp == group_name:
+            members.append(mapping)
+    return members
+
+
+def _target_volumes(maps: list[dict]) -> set[str]:
+    targets: set[str] = set()
+    for mapping in maps:
+        target = str(mapping.get("target") or "").strip()
+        if target:
+            targets.add(target)
+    return targets
+
+
+def _resolve_snaps(
+    group: dict, schedule: dict | None
+) -> tuple[float | str | None, str]:
+    raw = group.get("snaps_per_week")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return float(raw), "array"
+        except (TypeError, ValueError):
+            pass
+
+    if schedule is None:
+        return None, "none"
+
+    held = bool(schedule.get("held"))
+    days = schedule.get("days")
+    label = str(schedule.get("label") or "")
+    if held or days is None:
+        return label, "schedule"
+
+    return snaps_per_week_from_days(int(days)), "schedule"
+
+
+def build_cg_summaries(
+    *,
+    groups: list[dict],
+    maps: list[dict],
+    host_maps: list[dict],
+    schedule: dict | None,
+) -> list[dict]:
+    """Build per-CG summary rows for FlashCopy CGs and Contingency pages."""
+    rows: list[dict] = []
+    for group in groups:
+        name = str(group.get("name") or "")
+        members = _member_maps_for_group(maps, name)
+        targets = _target_volumes(members)
+        snaps_per_week, snaps_source = _resolve_snaps(group, schedule)
+        rows.append(
+            {
+                "name": name,
+                "status": group.get("status") or "",
+                "policy": group.get("policy") or "",
+                "fc_map_count": len(members),
+                "host_map_count": count_host_maps_for_targets(host_maps, targets),
+                "total_size": format_cg_total_size(members),
+                "total_size_bytes": sum_source_size_bytes(members),
+                "snaps_per_week": snaps_per_week,
+                "snaps_source": snaps_source,
+            }
+        )
+    return rows
