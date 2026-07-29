@@ -68,6 +68,12 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
     .section[hidden] { display: none; }
     .section h2 { margin: 0 0 12px; font-size: 1.1rem; color: var(--accent2); }
     .hint { color: var(--muted); font-size: 0.88rem; margin: 0 0 12px; line-height: 1.45; }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
     th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; }

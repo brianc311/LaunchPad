@@ -35,3 +35,9 @@ def test_fc_consistgrp_render_groups_uses_summaries_fields():
     assert "snaps_per_week" in html
     assert "snaps_source" in html
     assert "Snaps/week from Snapshot Schedule" in html
+
+
+def test_fc_consistgrp_styles_content_links_for_dark_theme():
+    html = FC_CONSISTGRP_HTML
+    assert "a:not(.btn)" in html
+    assert "#9ec1ff" in html

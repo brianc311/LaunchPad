@@ -349,3 +349,10 @@ def test_contingency_groups_fc_cg_summary_refresh_calls_api():
         "async function loadGroups()", 1
     )[0]
     assert "refreshFcCgSummary" in sync
+
+
+def test_contingency_groups_styles_content_links_for_dark_theme():
+    html = CONTINGENCY_GROUPS_HTML
+    assert "a:not(.btn)" in html
+    assert "#9ec1ff" in html
+    assert 'href="/fc-consistgrp"' in html

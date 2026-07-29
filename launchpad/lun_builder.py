@@ -27,6 +27,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     h1 { margin:0 0 8px; color:var(--accent); font-size:1.85rem; }
     h2 { margin:0; color:var(--accent2); font-size:1.05rem; }
     .lede, .status, .hint, .footer { color:var(--muted); }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .picker, .actions, .section-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
     .picker, .actions { margin-top:16px; }
     .section-head { justify-content:space-between; margin-bottom:12px; }

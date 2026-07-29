@@ -38,6 +38,12 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
     }
     .hero h1 { margin: 0 0 8px; color: var(--accent); font-size: 1.85rem; }
     .hero p { margin: 0; color: var(--muted); line-height: 1.45; }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .hero-actions {
       display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px;
     }

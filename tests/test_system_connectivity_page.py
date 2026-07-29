@@ -60,3 +60,13 @@ def test_page_has_license_key_tab_after_firmware():
     assert "Encryption licensed" in html
     compact = html.replace(" ", "")
     assert compact.index('"firmware"') < compact.index('"license_key"')
+
+
+def test_system_connectivity_styles_content_links_for_dark_theme():
+    from launchpad.system_connectivity_page import SYSTEM_CONNECTIVITY_HTML
+
+    html = SYSTEM_CONNECTIVITY_HTML
+    assert "a:not(.btn)" in html
+    assert "#9ec1ff" in html
+    assert "#c5d9ff" in html
+    assert 'href="https://www.ibm.com/support/pages/node/5692850"' in html
