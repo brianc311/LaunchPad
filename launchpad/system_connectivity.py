@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from launchpad.firmware_catalog import latest_in_catalog, versions_behind
 from launchpad.flashsystem_parse import _parse_colon_table
 from launchpad.storage_presets import HPE_SHELL_PROFILES, SVC_PROFILES, is_svc_fc_profile
 from launchpad.volume_find import vendor_for_profile as _vendor_for_profile
 
-TOPICS: tuple[str, ...] = ("call_home", "dns", "snmp", "ntp")
+TOPICS: tuple[str, ...] = ("call_home", "dns", "snmp", "ntp", "firmware")
+FIRMWARE_EXTRA_FIELDS: tuple[str, ...] = ("current", "latest", "versions_behind")
 ROW_FIELDS: tuple[str, ...] = (
     "site",
     "card_name",
@@ -37,6 +39,16 @@ _DS_CALL_HOME_NA = (
 _HPE_LABEL_RE = re.compile(
     r"^(?P<label>DNS server|NTP server)\s*:\s*(?P<value>\S.*)?$",
     re.IGNORECASE,
+)
+_HPE_VERSION_RE = re.compile(
+    r"^(?:Release\s+version|Version)\s*:\s*(?P<version>\S.+)$",
+    re.IGNORECASE,
+)
+_DS_FIRMWARE_NA = (
+    "n/a",
+    "n/a",
+    "Firmware not available via DSCLI on this path",
+    "",
 )
 
 
@@ -221,6 +233,114 @@ def parse_svc_snmp(output: str) -> tuple[str, str, str]:
     if not parts:
         return "no", "empty", "no SNMP servers"
     return "yes", "configured", ", ".join(parts)
+
+
+def parse_svc_firmware_from_lssystem(output: str) -> tuple[str, str, str, str]:
+    text = str(output or "")
+    if not text.strip():
+        return "unknown", "", "empty lssystem output", ""
+    code_level: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        key, sep, value = stripped.partition(":")
+        if not sep:
+            continue
+        if key.strip().lower() == "code_level":
+            code_level = value.strip()
+            break
+    if code_level is None:
+        return "unknown", "", "code_level not found", ""
+    if not code_level:
+        return "no", "empty", "no firmware version", ""
+    return "yes", "configured", f"code_level={code_level}", code_level
+
+
+def parse_hpe_showversion_firmware(output: str) -> tuple[str, str, str, str]:
+    text = str(output or "")
+    if not text.strip():
+        return "unknown", "", "empty showversion output", ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _HPE_VERSION_RE.match(stripped)
+        if not match:
+            continue
+        version = match.group("version").strip()
+        if not version:
+            continue
+        lowered = version.lower()
+        if lowered in {"public", "private", "community"}:
+            continue
+        return "yes", "configured", f"version={version}", version
+    return "no", "empty", "no firmware version", ""
+
+
+def parse_ds_firmware(output: str) -> tuple[str, str, str, str]:
+    text = str(output or "").strip()
+    if not text:
+        return _DS_FIRMWARE_NA
+    lowered = text.lower()
+    version_keys = ("firmware", "version", "code level", "code_level", "microcode")
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        key, sep, value = stripped.partition(":")
+        if sep:
+            label = key.strip().lower()
+            if any(token in label for token in version_keys):
+                version = value.strip()
+                if version:
+                    return "yes", "configured", f"{key.strip()}={version}", version
+        match = re.search(
+            r"(?:firmware|version|code[_ ]level|microcode)\s*[:=]\s*(\S.+)",
+            stripped,
+            re.IGNORECASE,
+        )
+        if match:
+            version = match.group(1).strip()
+            if version:
+                return "yes", "configured", stripped, version
+    if any(key in lowered for key in version_keys):
+        return "unknown", "", "unrecognized DS firmware output", ""
+    return _DS_FIRMWARE_NA
+
+
+def enrich_firmware_row(
+    row: dict,
+    *,
+    current: str,
+    catalog: list[str],
+    configured: str,
+    status: str = "",
+    details: str = "",
+    error: str = "",
+) -> dict:
+    latest = latest_in_catalog(catalog)
+    behind = versions_behind(current, catalog)
+    resolved_status = status
+    if not resolved_status and not error:
+        if configured == "yes":
+            if behind == "0":
+                resolved_status = "current"
+            elif behind.isdigit() and int(behind) > 0:
+                resolved_status = "behind"
+            elif behind == "unknown":
+                resolved_status = "unknown"
+    out = finalize_row(
+        row,
+        configured=configured,
+        status=resolved_status,
+        details=details,
+        error=error,
+    )
+    out["current"] = current
+    out["latest"] = latest
+    out["versions_behind"] = behind
+    return out
 
 
 def parse_svc_ntp_from_lssystem(output: str) -> tuple[str, str, str]:
@@ -416,6 +536,7 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "dns": ["lsdnsserver -delim :"],
             "snmp": ["lssnmpserver -delim :"],
             "ntp": ["lssystem -delim :"],
+            "firmware": ["lssystem -delim :"],
         }
     if key in HPE_SHELL_PROFILES:
         return {
@@ -423,6 +544,7 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "dns": ["shownet"],
             "snmp": ["showsnmpmgr"],
             "ntp": ["shownet"],
+            "firmware": ["showversion"],
         }
     if key == _DS8884_PROFILE:
         return {
@@ -430,5 +552,6 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "dns": ["dscli lsnetworkport"],
             "snmp": [],
             "ntp": [],
+            "firmware": [],
         }
     return empty
