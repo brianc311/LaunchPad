@@ -24,3 +24,16 @@ def test_system_connectivity_path_and_controls():
         'href="/host-volume-health"',
     ):
         assert text in SYSTEM_CONNECTIVITY_HTML
+
+
+def test_page_has_firmware_tab_after_ntp():
+    html = SYSTEM_CONNECTIVITY_HTML
+    assert 'data-tab="firmware"' in html
+    assert html.index('data-tab="ntp"') < html.index('data-tab="firmware"')
+    assert "Versions behind" in html
+    assert "Admin Firmware catalog" in html
+    assert 'id="sc-panel-firmware"' in html
+    assert 'id="sc-firmware-body"' in html
+    compact = html.replace(" ", "")
+    assert '"firmware"' in compact and "TOPICS" in compact
+    assert compact.index('"ntp"') < compact.index('"firmware"')

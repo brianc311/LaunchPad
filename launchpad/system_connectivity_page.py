@@ -1,4 +1,4 @@
-"""System Connectivity report — Call Home / DNS / SNMP / NTP live scan page."""
+"""System Connectivity report — Call Home / DNS / SNMP / NTP / Firmware live scan page."""
 
 SYSTEM_CONNECTIVITY_PATH = "/system-connectivity"
 
@@ -86,7 +86,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <div class="hero">
       <h1>System Connectivity</h1>
-      <p>Live Call Home, DNS, SNMP, and NTP checks on monitored FlashSystem, HPE, and DS8884 arrays. Unlock LaunchPad, pick a site (or None for all), then Refresh live.</p>
+      <p>Live Call Home, DNS, SNMP, NTP, and Firmware checks on monitored FlashSystem, HPE, and DS8884 arrays. Unlock LaunchPad, pick a site (or None for all), then Refresh live.</p>
       <div class="hero-actions">
         <label>Site <select id="sc-site-select"><option value="">None</option></select></label>
         <button type="button" class="btn" id="sc-refresh-btn">Refresh live</button>
@@ -107,6 +107,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       <button type="button" class="tab-btn" data-tab="dns">DNS</button>
       <button type="button" class="tab-btn" data-tab="snmp">SNMP</button>
       <button type="button" class="tab-btn" data-tab="ntp">NTP</button>
+      <button type="button" class="tab-btn" data-tab="firmware">Firmware</button>
     </div>
 
     <div class="section" id="sc-panel-call_home" data-panel="call_home">
@@ -178,15 +179,35 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <div class="section" id="sc-panel-firmware" data-panel="firmware" hidden>
+      <h2>Firmware</h2>
+      <p class="hint">Versions behind uses the Admin Firmware catalog for this device profile. If Current is not in the catalog, behind shows unknown.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Site</th><th>Card</th><th>Host</th><th>Vendor</th><th>Profile</th>
+              <th>Current</th><th>Latest</th><th>Versions behind</th>
+              <th>Configured</th><th>Status</th><th>Details</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="sc-firmware-body">
+            <tr><td colspan="12" class="empty">No data yet — click Refresh live.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="footer">LaunchPad {{APP_VERSION}}</div>
   </div>
   <script>
-    const TOPICS = ["call_home", "dns", "snmp", "ntp"];
+    const TOPICS = ["call_home", "dns", "snmp", "ntp", "firmware"];
     const TOPIC_LABELS = {
       call_home: "Call Home",
       dns: "DNS",
       snmp: "SNMP",
       ntp: "NTP",
+      firmware: "Firmware",
     };
     const siteSelectEl = document.getElementById("sc-site-select");
     const refreshBtn = document.getElementById("sc-refresh-btn");
@@ -199,6 +220,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       dns: document.getElementById("sc-dns-body"),
       snmp: document.getElementById("sc-snmp-body"),
       ntp: document.getElementById("sc-ntp-body"),
+      firmware: document.getElementById("sc-firmware-body"),
     };
     const tabButtons = Array.from(document.querySelectorAll(".tab-btn[data-tab]"));
     const panels = Array.from(document.querySelectorAll("[data-panel]"));
@@ -241,32 +263,45 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       return "No " + (TOPIC_LABELS[topic] || topic) + " rows found.";
     }
 
+    function topicColspan(topic) {
+      return topic === "firmware" ? 12 : 9;
+    }
+
     function renderTopic(topic, rows) {
       const bodyEl = bodies[topic];
       if (!bodyEl) return;
+      const colspan = topicColspan(topic);
       if (!rows.length) {
-        bodyEl.innerHTML = '<tr><td colspan="9" class="empty">' + emptyMessage(topic) + "</td></tr>";
+        bodyEl.innerHTML = '<tr><td colspan="' + colspan + '" class="empty">' + emptyMessage(topic) + "</td></tr>";
         return;
       }
-      bodyEl.innerHTML = rows.map((row) => (
-        "<tr>"
-        + "<td>" + escapeHtml(row.site || "") + "</td>"
-        + "<td>" + escapeHtml(row.card_name || "") + "</td>"
-        + "<td>" + escapeHtml(row.host || "") + "</td>"
-        + "<td>" + escapeHtml(row.vendor || "") + "</td>"
-        + "<td>" + escapeHtml(row.profile || "") + "</td>"
-        + "<td>" + escapeHtml(row.configured || "") + "</td>"
-        + "<td>" + escapeHtml(row.status || "") + "</td>"
-        + "<td>" + escapeHtml(row.details || "") + "</td>"
-        + "<td>" + escapeHtml(row.error || "") + "</td>"
-        + "</tr>"
-      )).join("");
+      bodyEl.innerHTML = rows.map((row) => {
+        let cells =
+          "<td>" + escapeHtml(row.site || "") + "</td>"
+          + "<td>" + escapeHtml(row.card_name || "") + "</td>"
+          + "<td>" + escapeHtml(row.host || "") + "</td>"
+          + "<td>" + escapeHtml(row.vendor || "") + "</td>"
+          + "<td>" + escapeHtml(row.profile || "") + "</td>";
+        if (topic === "firmware") {
+          cells +=
+            "<td>" + escapeHtml(row.current || "") + "</td>"
+            + "<td>" + escapeHtml(row.latest || "") + "</td>"
+            + "<td>" + escapeHtml(row.versions_behind || "") + "</td>";
+        }
+        cells +=
+          "<td>" + escapeHtml(row.configured || "") + "</td>"
+          + "<td>" + escapeHtml(row.status || "") + "</td>"
+          + "<td>" + escapeHtml(row.details || "") + "</td>"
+          + "<td>" + escapeHtml(row.error || "") + "</td>";
+        return "<tr>" + cells + "</tr>";
+      }).join("");
     }
 
     function clearTopics() {
       TOPICS.forEach((topic) => {
+        const colspan = topicColspan(topic);
         bodies[topic].innerHTML =
-          '<tr><td colspan="9" class="empty">No data yet — click Refresh live.</td></tr>';
+          '<tr><td colspan="' + colspan + '" class="empty">No data yet — click Refresh live.</td></tr>';
       });
     }
 
