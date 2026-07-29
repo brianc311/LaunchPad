@@ -125,6 +125,33 @@ def insert_version_sorted(versions: list[str], new_version: str) -> tuple[list[s
     return out, True
 
 
+def normalize_hpe_firmware_version(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    base, _sep, _rest = text.partition("+")
+    return base.strip()
+
+
+def merge_seed_into_catalog(
+    catalog: dict[str, list[str]],
+    seed: dict[str, list[str]],
+) -> tuple[dict[str, list[str]], int]:
+    updated = {k: list(v) for k, v in (catalog or {}).items()}
+    inserted = 0
+    for profile, versions in (seed or {}).items():
+        key = str(profile or "").strip().lower()
+        if not key:
+            continue
+        current = list(updated.get(key) or [])
+        for version in versions or []:
+            current, did = insert_version_sorted(current, version)
+            if did:
+                inserted += 1
+        updated[key] = current
+    return updated, inserted
+
+
 def grow_catalog_from_currents(
     catalog: dict[str, list[str]],
     currents: list[tuple[str, str]],
