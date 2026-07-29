@@ -3,6 +3,7 @@ from pathlib import Path
 from launchpad.firmware_catalog import (
     load_firmware_catalog,
     merge_catalog_for_admin_save,
+    merge_seed_into_catalog,
     save_firmware_catalog,
 )
 
@@ -75,6 +76,39 @@ def test_admin_has_load_recommended_catalog_seed():
     assert "Merges built-in IBM/HPE release lists into each profile" in source
     assert "recommended_firmware_seed" in source
     assert "merge_seed_into_catalog" in source
+
+
+def test_seed_load_uses_fresh_db_plus_current_ui_like_save():
+    """Seed load must overlay UI edits on fresh DB before merge (same as Save)."""
+    db_after_grow = {
+        "flashsystem_7300": ["8.5.0", "8.6.0"],
+        "ibm_ds8884": ["7.9", "7.9.1"],
+    }
+    current_ui = ["8.5.0", "8.5.1", "9.9.9.9"]  # unsaved edits + operator version
+    seed = {"flashsystem_7300": ["8.7.0"], "hpe_primera": ["3.3.1.648 (MU5)"]}
+    base = merge_catalog_for_admin_save(db_after_grow, "flashsystem_7300", current_ui)
+    updated, inserted = merge_seed_into_catalog(base, seed)
+    assert inserted == 2
+    assert "8.5.1" in updated["flashsystem_7300"]
+    assert "9.9.9.9" in updated["flashsystem_7300"]
+    assert "8.7.0" in updated["flashsystem_7300"]
+    assert updated["ibm_ds8884"] == ["7.9", "7.9.1"]  # DB auto-grow preserved
+    # Idempotent: second merge inserts nothing
+    _, n2 = merge_seed_into_catalog(updated, seed)
+    assert n2 == 0
+
+
+def test_admin_seed_load_reloads_db_before_merge():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "admin_view.py"
+    ).read_text(encoding="utf-8")
+    seed_idx = source.index("def _firmware_catalog_load_seed")
+    seed_body = source[seed_idx : seed_idx + 900]
+    assert "merge_catalog_for_admin_save" in seed_body
+    assert "load_firmware_catalog(self.db)" in seed_body
+    assert "merge_seed_into_catalog" in seed_body
+    assert "Seed merged:" in seed_body
+    assert "Seed already up to date." in seed_body
 
 
 def test_admin_save_reloads_db_before_write():

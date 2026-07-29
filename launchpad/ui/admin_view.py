@@ -697,17 +697,23 @@ class AdminView(ctk.CTkFrame):
 
     def _firmware_catalog_load_seed(self) -> None:
         self._stash_firmware_profile()
-        catalog = load_firmware_catalog(self.db)
-        merged, inserted = merge_seed_into_catalog(catalog, recommended_firmware_seed())
+        current = self._firmware_current_profile
+        ui_versions = (
+            list(get_profile_catalog(self._firmware_catalog_map, current)) if current else []
+        )
+        # Prefer fresh DB (live auto-grow); overlay current profile UI edits; then merge seed.
+        base = merge_catalog_for_admin_save(
+            load_firmware_catalog(self.db), current, ui_versions
+        )
+        updated, inserted = merge_seed_into_catalog(base, recommended_firmware_seed())
         if inserted > 0:
-            saved = save_firmware_catalog(self.db, merged)
-            self._firmware_catalog_map = {
-                profile: list(versions) for profile, versions in saved.items()
-            }
-        if inserted > 0:
+            updated = save_firmware_catalog(self.db, updated)
             message = f"Seed merged: {inserted} new version(s)."
         else:
             message = "Seed already up to date."
+        self._firmware_catalog_map = {
+            profile: list(versions) for profile, versions in updated.items()
+        }
         self._refresh_firmware_version_list()
         self.firmware_catalog_status.configure(text=message)
         self.admin_status.configure(text=message)
