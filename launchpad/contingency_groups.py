@@ -19,6 +19,12 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     h2 { margin:0; color:var(--accent2); font-size:1.05rem; }
     p { line-height:1.45; }
     .lede, .hint, .status, .footer { color:var(--muted); }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .actions, .picker, .section-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
     .actions { margin-top:16px; }
     .picker { margin-top:16px; }

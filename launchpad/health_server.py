@@ -255,6 +255,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .hero h1 { margin: 0 0 6px; color: var(--accent); font-size: 2rem; }
     .hero p { margin: 0; color: var(--muted); }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; }
     .refresh-status { color: var(--muted); font-size: 0.9rem; }
     .summary { margin: 12px 0 0; font-size: 0.95rem; }

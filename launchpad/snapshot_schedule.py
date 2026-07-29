@@ -30,6 +30,12 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
       color: var(--text);
       min-height: 100vh;
     }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 48px; }
     .hero {
       background: linear-gradient(135deg, #1a2230 0%, #101722 100%);

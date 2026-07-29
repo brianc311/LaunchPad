@@ -36,6 +36,12 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     }
     .hero h1 { margin: 0 0 6px; color: var(--accent); font-size: 2rem; }
     .hero p { margin: 0; color: var(--muted); }
+    a:not(.btn) {
+      color: #9ec1ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    a:not(.btn):hover { color: #c5d9ff; }
     .report-hero-header { margin-bottom: 4px; }
     .report-title-input,
     .report-subtitle-input,
