@@ -46,8 +46,14 @@ from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
 from launchpad.fc_consistgrp_ops import (
     build_fc_consistgrp_steps,
     collect_fc_consistgrp_inventory,
+    is_fc_consistgrp_status_eligible,
+    normalize_fc_cg_status_bucket,
     partition_maps,
     preview_ok as fc_consistgrp_preview_ok,
+)
+from launchpad.fc_consistgrp_status_export import (
+    export_fc_consistgrp_status_xlsx,
+    filter_status_rows,
 )
 from launchpad.fc_wwpn_report import FC_WWPN_REPORT_HTML, FC_WWPN_REPORT_PATH
 from launchpad.host_volume_health import (
@@ -2009,6 +2015,78 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
+        if path == "/api/fc-consistgrp/status/live":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            try:
+                payload = server.scan_fc_consistgrp_status_live(card_id=card_id)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
+        if path == "/api/fc-consistgrp/status/export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            export_format = (query.get("format") or [""])[0].strip().lower()
+            if export_format != "xlsx":
+                self._send_json(
+                    {"error": "Export format must be xlsx."},
+                    status=400,
+                )
+                return
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            bucket = (query.get("bucket") or ["all"])[0].strip().lower() or "all"
+            open_after = (query.get("open") or ["1"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                body, filename, content_type = server.export_fc_consistgrp_status_bytes(
+                    format=export_format,
+                    card_id=card_id,
+                    bucket=bucket,
+                )
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"FlashCopy CG Status export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "FlashCopy CG Status export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
         if path == "/api/fc-consistgrp/inventory":
             query = parse_qs(parsed.query)
             raw_card_id = (query.get("card_id") or [""])[0].strip()
@@ -3079,6 +3157,7 @@ class HealthServer:
         self._lun_preview_session: dict[str, Any] | None = None
         self._host_volume_health_cache: dict[str, Any] | None = None
         self._system_connectivity_cache: dict[str, Any] | None = None
+        self._fc_consistgrp_status_cache: dict[str, Any] | None = None
 
     def set_sync_provider(self, provider: Callable[[], int] | None) -> None:
         with self._lock:
@@ -3810,15 +3889,22 @@ class HealthServer:
         self.sync_from_app()
         with self._lock:
             stored = list(sorted(self._cards.values(), key=lambda card: card.card_id))
-        return [
-            {
-                "id": card.card_id,
-                "name": card.name,
-                "host": card.host,
-                "url": card.url or "",
-            }
-            for card in stored
-        ]
+        cards: list[dict[str, Any]] = []
+        for card in stored:
+            site = str(card.category or "").strip() or card.name
+            cards.append(
+                {
+                    "id": card.card_id,
+                    "name": card.name,
+                    "host": card.host,
+                    "url": card.url or "",
+                    "site": site,
+                    "monitor_on": self.is_monitor_enabled(card.card_id),
+                    "device_profile": card.device_profile or "",
+                    "card_type": "ssh",
+                }
+            )
+        return cards
 
     def _fc_host_lun_maps(self, card: HealthCard) -> tuple[list[dict], str | None]:
         try:
@@ -4171,6 +4257,113 @@ class HealthServer:
                 card.name = new_name
                 card.host = new_host
         return plan
+
+    def scan_fc_consistgrp_status_live(
+        self, *, card_id: int | None = None
+    ) -> dict[str, Any]:
+        if not self.is_unlocked():
+            raise RuntimeError(
+                "LaunchPad must be unlocked to refresh FlashCopy CG Status live."
+            )
+        self.sync_from_app()
+        cards = self.list_cards(allow_sync=False)
+        rows: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = self.is_monitor_enabled(int(current_id))
+            eligible_card = dict(card_dict)
+            eligible_card["monitor_on"] = monitor_on
+            if not is_fc_consistgrp_status_eligible(eligible_card):
+                continue
+            card = self._cards.get(int(current_id))
+            if card is None:
+                continue
+            site = str(card.category or "").strip() or card.name
+            try:
+                groups, _maps = collect_fc_consistgrp_inventory(
+                    self._snap_run_command(card)
+                )
+                for group in groups:
+                    status = str(group.get("status") or "")
+                    rows.append(
+                        {
+                            "site": site,
+                            "card_name": card.name,
+                            "host": str(card.host or ""),
+                            "name": str(group.get("name") or ""),
+                            "status": status,
+                            "map_count": group.get("map_count", 0),
+                            "flash_time": str(group.get("flash_time") or ""),
+                            "error": "",
+                            "card_id": card.card_id,
+                            "bucket": normalize_fc_cg_status_bucket(status),
+                        }
+                    )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": str(exc),
+                    }
+                )
+        rows.sort(
+            key=lambda row: (
+                str(row.get("site") or "").lower(),
+                str(row.get("card_name") or "").lower(),
+                str(row.get("name") or "").lower(),
+            )
+        )
+        payload = {"rows": rows, "errors": errors}
+        with self._lock:
+            self._fc_consistgrp_status_cache = payload
+        return payload
+
+    def get_fc_consistgrp_status_cache(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._fc_consistgrp_status_cache is None:
+                return None
+            return {
+                "rows": list(self._fc_consistgrp_status_cache.get("rows") or []),
+                "errors": list(self._fc_consistgrp_status_cache.get("errors") or []),
+            }
+
+    def set_fc_consistgrp_status_cache(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._fc_consistgrp_status_cache = {
+                "rows": list(payload.get("rows") or []),
+                "errors": list(payload.get("errors") or []),
+            }
+
+    def export_fc_consistgrp_status_bytes(
+        self,
+        *,
+        format: str,
+        card_id: int | None = None,
+        bucket: str = "all",
+    ) -> tuple[bytes, str, str]:
+        cached = self.get_fc_consistgrp_status_cache()
+        if cached is None:
+            raise LookupError("Refresh live before exporting.")
+        export_format = str(format or "").strip().lower()
+        if export_format != "xlsx":
+            raise ValueError("Export format must be xlsx.")
+        rows = list(cached.get("rows") or [])
+        if card_id is not None:
+            rows = [row for row in rows if int(row.get("card_id") or -1) == int(card_id)]
+        rows = filter_status_rows(rows, bucket=bucket)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        body = export_fc_consistgrp_status_xlsx(rows)
+        return (
+            body,
+            f"FC_CG_Status_{stamp}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     def scan_host_volume_health_live(
         self, *, card_id: int | None = None
