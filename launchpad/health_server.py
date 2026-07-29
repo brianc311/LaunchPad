@@ -59,18 +59,23 @@ from launchpad.host_volume_health_page import (
     HOST_VOLUME_HEALTH_HTML,
     HOST_VOLUME_HEALTH_PATH,
 )
+from launchpad.firmware_catalog import get_profile_catalog, load_firmware_catalog
 from launchpad.system_connectivity import (
     TOPICS,
     base_row,
+    enrich_firmware_row,
     finalize_row,
     hpe_call_home_na_row,
     is_system_connectivity_eligible,
+    parse_ds_firmware,
     parse_ds_networkport_dns,
     parse_ds_showsp_call_home,
     parse_hpe_shownet_dns_ntp,
+    parse_hpe_showversion_firmware,
     parse_hpe_snmpmgr,
     parse_svc_call_home,
     parse_svc_dns,
+    parse_svc_firmware_from_lssystem,
     parse_svc_ntp_from_lssystem,
     parse_svc_snmp,
     topic_commands_for_profile,
@@ -4334,11 +4339,51 @@ class HealthServer:
             error=error,
         )
 
+    def _firmware_catalog_for_scan(self) -> dict[str, list[str]]:
+        with self._lock:
+            getter = self._get_setting
+        if getter is None:
+            return {}
+
+        class _SettingsView:
+            @staticmethod
+            def get_setting(key: str, default: str = "") -> str:
+                return getter(key, default)
+
+        return load_firmware_catalog(_SettingsView())
+
+    def _enrich_scanned_firmware_row(
+        self,
+        identity: dict[str, Any],
+        *,
+        catalog: dict[str, list[str]],
+        profile: str,
+        configured: str,
+        details: str,
+        current: str,
+        error: str = "",
+    ) -> dict[str, Any]:
+        return enrich_firmware_row(
+            dict(identity),
+            current=current,
+            catalog=get_profile_catalog(catalog, profile),
+            configured=configured,
+            status="error" if error else "",
+            details=details,
+            error=error,
+        )
+
     def _scan_system_connectivity_svc_card(
-        self, card: HealthCard, identity: dict[str, Any]
+        self,
+        card: HealthCard,
+        identity: dict[str, Any],
+        *,
+        catalog: dict[str, list[str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         run = self._lun_run_command(card)
         commands = topic_commands_for_profile(card.device_profile or "")
+        profile = str(card.device_profile or "")
+        fw_catalog = catalog or {}
         parsers = {
             "call_home": parse_svc_call_home,
             "dns": parse_svc_dns,
@@ -4346,7 +4391,8 @@ class HealthServer:
             "ntp": parse_svc_ntp_from_lssystem,
         }
         rows: dict[str, dict[str, Any]] = {}
-        for topic in TOPICS:
+        lssystem_output: str | None = None
+        for topic in ("call_home", "dns", "snmp", "ntp"):
             topic_cmds = list(commands.get(topic) or [])
             if not topic_cmds:
                 rows[topic] = self._system_connectivity_na_row(
@@ -4355,8 +4401,14 @@ class HealthServer:
                 )
                 continue
             try:
-                output = run(self._system_connectivity_svc_command(topic_cmds[0]))
-                configured, status, details = parsers[topic](output or "")
+                cmd = self._system_connectivity_svc_command(topic_cmds[0])
+                if "lssystem" in topic_cmds[0] and lssystem_output is not None:
+                    output = lssystem_output
+                else:
+                    output = run(cmd) or ""
+                    if "lssystem" in topic_cmds[0]:
+                        lssystem_output = output
+                configured, status, details = parsers[topic](output)
                 rows[topic] = finalize_row(
                     dict(identity),
                     configured=configured,
@@ -4367,16 +4419,54 @@ class HealthServer:
                 rows[topic] = self._system_connectivity_unknown_row(
                     identity, error=str(exc)
                 )
+
+        try:
+            topic_cmds = list(commands.get("firmware") or [])
+            if not topic_cmds:
+                configured, _status, details, current = parse_svc_firmware_from_lssystem(
+                    ""
+                )
+            else:
+                cmd = self._system_connectivity_svc_command(topic_cmds[0])
+                if "lssystem" in topic_cmds[0] and lssystem_output is not None:
+                    output = lssystem_output
+                else:
+                    output = run(cmd) or ""
+                configured, _status, details, current = parse_svc_firmware_from_lssystem(
+                    output
+                )
+            rows["firmware"] = self._enrich_scanned_firmware_row(
+                identity,
+                catalog=fw_catalog,
+                profile=profile,
+                configured=configured,
+                details=details,
+                current=current,
+            )
+        except Exception as exc:
+            rows["firmware"] = self._enrich_scanned_firmware_row(
+                identity,
+                catalog=fw_catalog,
+                profile=profile,
+                configured="unknown",
+                details="",
+                current="",
+                error=str(exc),
+            )
         return rows
 
     def _scan_system_connectivity_hpe_card(
-        self, card: HealthCard, identity: dict[str, Any]
+        self,
+        card: HealthCard,
+        identity: dict[str, Any],
+        *,
+        catalog: dict[str, list[str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        shownet_out, snmp_out = run_ssh_auth_hpe_commands(
+        shownet_out, snmp_out, version_out = run_ssh_auth_hpe_commands(
             card.host,
             card.port,
             card.username,
-            ["shownet", "showsnmpmgr"],
+            ["shownet", "showsnmpmgr", "showversion"],
             password=card.password,
             key_path=card.key_path,
             key_passphrase=card.key_passphrase,
@@ -4384,6 +4474,10 @@ class HealthServer:
         ch_configured, ch_status, ch_details = hpe_call_home_na_row()
         net = parse_hpe_shownet_dns_ntp(shownet_out or "")
         snmp_configured, snmp_status, snmp_details = parse_hpe_snmpmgr(snmp_out or "")
+        fw_configured, _fw_status, fw_details, fw_current = (
+            parse_hpe_showversion_firmware(version_out or "")
+        )
+        profile = str(card.device_profile or "")
         return {
             "call_home": finalize_row(
                 dict(identity),
@@ -4409,13 +4503,27 @@ class HealthServer:
                 status=net["ntp"][1],
                 details=net["ntp"][2],
             ),
+            "firmware": self._enrich_scanned_firmware_row(
+                identity,
+                catalog=catalog or {},
+                profile=profile,
+                configured=fw_configured,
+                details=fw_details,
+                current=fw_current,
+            ),
         }
 
     def _scan_system_connectivity_ds_card(
-        self, card: HealthCard, identity: dict[str, Any]
+        self,
+        card: HealthCard,
+        identity: dict[str, Any],
+        *,
+        catalog: dict[str, list[str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         run = self._lun_run_command(card)
         commands = topic_commands_for_profile(card.device_profile or "")
+        profile = str(card.device_profile or "")
+        fw_catalog = catalog or {}
         rows: dict[str, dict[str, Any]] = {}
 
         def _run_first(topic: str) -> str:
@@ -4460,6 +4568,27 @@ class HealthServer:
             identity,
             details="NTP not available via DSCLI on this path (often HMC)",
         )
+        try:
+            fw_out = _run_first("firmware")
+            configured, _status, details, current = parse_ds_firmware(fw_out)
+            rows["firmware"] = self._enrich_scanned_firmware_row(
+                identity,
+                catalog=fw_catalog,
+                profile=profile,
+                configured=configured,
+                details=details,
+                current=current,
+            )
+        except Exception as exc:
+            rows["firmware"] = self._enrich_scanned_firmware_row(
+                identity,
+                catalog=fw_catalog,
+                profile=profile,
+                configured="unknown",
+                details="",
+                current="",
+                error=str(exc),
+            )
         return rows
 
     def scan_system_connectivity_live(
@@ -4483,6 +4612,7 @@ class HealthServer:
         }
         topic_rows: dict[str, list[dict[str, Any]]] = {topic: [] for topic in TOPICS}
         errors: list[dict[str, Any]] = []
+        catalog = self._firmware_catalog_for_scan()
         for card_dict in cards:
             current_id = card_dict.get("id")
             if current_id is None:
@@ -4508,11 +4638,17 @@ class HealthServer:
             )
             try:
                 if profile in HPE_SHELL_PROFILES:
-                    scanned = self._scan_system_connectivity_hpe_card(card, identity)
+                    scanned = self._scan_system_connectivity_hpe_card(
+                        card, identity, catalog=catalog
+                    )
                 elif profile.strip().lower() == "ibm_ds8884":
-                    scanned = self._scan_system_connectivity_ds_card(card, identity)
+                    scanned = self._scan_system_connectivity_ds_card(
+                        card, identity, catalog=catalog
+                    )
                 else:
-                    scanned = self._scan_system_connectivity_svc_card(card, identity)
+                    scanned = self._scan_system_connectivity_svc_card(
+                        card, identity, catalog=catalog
+                    )
                 for topic in TOPICS:
                     topic_rows[topic].append(scanned[topic])
                     if scanned[topic].get("error"):
@@ -4545,6 +4681,18 @@ class HealthServer:
                                 error=err,
                             )
                         )
+                    elif topic == "firmware":
+                        topic_rows[topic].append(
+                            self._enrich_scanned_firmware_row(
+                                identity,
+                                catalog=catalog,
+                                profile=profile,
+                                configured="unknown",
+                                details="",
+                                current="",
+                                error=err,
+                            )
+                        )
                     else:
                         topic_rows[topic].append(
                             self._system_connectivity_unknown_row(
@@ -4560,6 +4708,7 @@ class HealthServer:
             "dns": topic_rows["dns"],
             "snmp": topic_rows["snmp"],
             "ntp": topic_rows["ntp"],
+            "firmware": topic_rows["firmware"],
             "errors": errors,
         }
         with self._lock:
@@ -4577,6 +4726,9 @@ class HealthServer:
                 "dns": list(self._system_connectivity_cache.get("dns") or []),
                 "snmp": list(self._system_connectivity_cache.get("snmp") or []),
                 "ntp": list(self._system_connectivity_cache.get("ntp") or []),
+                "firmware": list(
+                    self._system_connectivity_cache.get("firmware") or []
+                ),
                 "errors": list(self._system_connectivity_cache.get("errors") or []),
             }
 
@@ -4587,6 +4739,7 @@ class HealthServer:
                 "dns": list(payload.get("dns") or []),
                 "snmp": list(payload.get("snmp") or []),
                 "ntp": list(payload.get("ntp") or []),
+                "firmware": list(payload.get("firmware") or []),
                 "errors": list(payload.get("errors") or []),
             }
 
