@@ -67,6 +67,16 @@ def test_merge_catalog_for_admin_save_keeps_db_auto_grow_and_current_edits():
     assert merged["ibm_ds8884"] != stale_memory["ibm_ds8884"]
 
 
+def test_admin_has_load_recommended_catalog_seed():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "admin_view.py"
+    ).read_text(encoding="utf-8")
+    assert "Load recommended catalog seed" in source
+    assert "Merges built-in IBM/HPE release lists into each profile" in source
+    assert "recommended_firmware_seed" in source
+    assert "merge_seed_into_catalog" in source
+
+
 def test_admin_save_reloads_db_before_write():
     source = (
         Path(__file__).parents[1] / "launchpad" / "ui" / "admin_view.py"
