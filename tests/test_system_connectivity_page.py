@@ -48,3 +48,15 @@ def test_firmware_panel_includes_ibm_upgrade_matrix_link():
     assert 'target="_blank"' in html
     assert 'rel="noopener noreferrer"' in html
     assert "IBM FlashSystem software upgrade matrix" in html
+
+
+def test_page_has_license_key_tab_after_firmware():
+    html = SYSTEM_CONNECTIVITY_HTML
+    assert 'data-tab="license_key"' in html
+    assert html.index('data-tab="firmware"') < html.index('data-tab="license_key"')
+    assert 'id="sc-panel-license_key"' in html
+    assert 'id="sc-license_key-body"' in html
+    assert "Key generation date" in html
+    assert "Encryption licensed" in html
+    compact = html.replace(" ", "")
+    assert compact.index('"firmware"') < compact.index('"license_key"')

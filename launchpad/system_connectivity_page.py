@@ -1,4 +1,4 @@
-"""System Connectivity report — Call Home / DNS / SNMP / NTP / Firmware live scan page."""
+"""System Connectivity report — Call Home / DNS / SNMP / NTP / Firmware / License Key live scan page."""
 
 SYSTEM_CONNECTIVITY_PATH = "/system-connectivity"
 
@@ -86,7 +86,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <div class="hero">
       <h1>System Connectivity</h1>
-      <p>Live Call Home, DNS, SNMP, NTP, and Firmware checks on monitored FlashSystem, HPE, and DS8884 arrays. Unlock LaunchPad, pick a site (or None for all), then Refresh live.</p>
+      <p>Live Call Home, DNS, SNMP, NTP, Firmware, and License Key checks on monitored FlashSystem, HPE, and DS8884 arrays. Unlock LaunchPad, pick a site (or None for all), then Refresh live.</p>
       <div class="hero-actions">
         <label>Site <select id="sc-site-select"><option value="">None</option></select></label>
         <button type="button" class="btn" id="sc-refresh-btn">Refresh live</button>
@@ -108,6 +108,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       <button type="button" class="tab-btn" data-tab="snmp">SNMP</button>
       <button type="button" class="tab-btn" data-tab="ntp">NTP</button>
       <button type="button" class="tab-btn" data-tab="firmware">Firmware</button>
+      <button type="button" class="tab-btn" data-tab="license_key">License Key</button>
     </div>
 
     <div class="section" id="sc-panel-call_home" data-panel="call_home">
@@ -199,16 +200,37 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <div class="section" id="sc-panel-license_key" data-panel="license_key" hidden>
+      <h2>License Key</h2>
+      <p class="hint">HPE shows one row per enabled feature. FlashSystem shows encryption licensed and system date/time.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Site</th><th>Card</th><th>Host</th><th>Vendor</th><th>Profile</th>
+              <th>Key generation date</th><th>Date</th><th>Time</th><th>Encryption licensed</th>
+              <th>Feature</th><th>Expiration</th>
+              <th>Configured</th><th>Status</th><th>Details</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="sc-license_key-body">
+            <tr><td colspan="15" class="empty">No data yet — click Refresh live.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="footer">LaunchPad {{APP_VERSION}}</div>
   </div>
   <script>
-    const TOPICS = ["call_home", "dns", "snmp", "ntp", "firmware"];
+    const TOPICS = ["call_home", "dns", "snmp", "ntp", "firmware", "license_key"];
     const TOPIC_LABELS = {
       call_home: "Call Home",
       dns: "DNS",
       snmp: "SNMP",
       ntp: "NTP",
       firmware: "Firmware",
+      license_key: "License Key",
     };
     const siteSelectEl = document.getElementById("sc-site-select");
     const refreshBtn = document.getElementById("sc-refresh-btn");
@@ -222,6 +244,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       snmp: document.getElementById("sc-snmp-body"),
       ntp: document.getElementById("sc-ntp-body"),
       firmware: document.getElementById("sc-firmware-body"),
+      license_key: document.getElementById("sc-license_key-body"),
     };
     const tabButtons = Array.from(document.querySelectorAll(".tab-btn[data-tab]"));
     const panels = Array.from(document.querySelectorAll("[data-panel]"));
@@ -265,7 +288,9 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
     }
 
     function topicColspan(topic) {
-      return topic === "firmware" ? 12 : 9;
+      if (topic === "firmware") return 12;
+      if (topic === "license_key") return 15;
+      return 9;
     }
 
     function renderTopic(topic, rows) {
@@ -288,6 +313,14 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
             "<td>" + escapeHtml(row.current || "") + "</td>"
             + "<td>" + escapeHtml(row.latest || "") + "</td>"
             + "<td>" + escapeHtml(row.versions_behind || "") + "</td>";
+        } else if (topic === "license_key") {
+          cells +=
+            "<td>" + escapeHtml(row.key_generation_date || "") + "</td>"
+            + "<td>" + escapeHtml(row.date || "") + "</td>"
+            + "<td>" + escapeHtml(row.time || "") + "</td>"
+            + "<td>" + escapeHtml(row.encryption_licensed || "") + "</td>"
+            + "<td>" + escapeHtml(row.feature || "") + "</td>"
+            + "<td>" + escapeHtml(row.expiration || "") + "</td>";
         }
         cells +=
           "<td>" + escapeHtml(row.configured || "") + "</td>"
