@@ -59,7 +59,13 @@ from launchpad.host_volume_health_page import (
     HOST_VOLUME_HEALTH_HTML,
     HOST_VOLUME_HEALTH_PATH,
 )
-from launchpad.firmware_catalog import get_profile_catalog, load_firmware_catalog
+from launchpad.firmware_catalog import (
+    get_profile_catalog,
+    grow_catalog_from_currents,
+    load_firmware_auto_add,
+    load_firmware_catalog,
+    save_firmware_catalog,
+)
 from launchpad.system_connectivity import (
     TOPICS,
     base_row,
@@ -4339,18 +4345,31 @@ class HealthServer:
             error=error,
         )
 
-    def _firmware_catalog_for_scan(self) -> dict[str, list[str]]:
+    def _settings_view_for_scan(self):
         with self._lock:
             getter = self._get_setting
+            setter = self._set_setting
         if getter is None:
-            return {}
+            return None
 
         class _SettingsView:
             @staticmethod
             def get_setting(key: str, default: str = "") -> str:
                 return getter(key, default)
 
-        return load_firmware_catalog(_SettingsView())
+            @staticmethod
+            def set_setting(key: str, value: str) -> None:
+                if setter is None:
+                    raise RuntimeError("Settings backend is not writable.")
+                setter(key, value)
+
+        return _SettingsView()
+
+    def _firmware_catalog_for_scan(self) -> dict[str, list[str]]:
+        view = self._settings_view_for_scan()
+        if view is None:
+            return {}
+        return load_firmware_catalog(view)
 
     def _enrich_scanned_firmware_row(
         self,
@@ -4703,11 +4722,57 @@ class HealthServer:
                                 identity, error=err
                             )
                         )
+        catalog_updates = 0
+        db_view = self._settings_view_for_scan()
+        if db_view is not None and load_firmware_auto_add(db_view):
+            currents: list[tuple[str, str]] = []
+            for row in topic_rows["firmware"]:
+                profile = str(row.get("profile") or "").strip()
+                current = str(row.get("current") or "").strip()
+                if profile and current:
+                    currents.append((profile, current))
+            if currents:
+                updated, catalog_updates = grow_catalog_from_currents(
+                    catalog, currents
+                )
+                if catalog_updates > 0:
+                    save_firmware_catalog(db_view, updated)
+                    catalog = updated
+                    reenriched: list[dict[str, Any]] = []
+                    for row in topic_rows["firmware"]:
+                        profile = str(row.get("profile") or "")
+                        error = str(row.get("error") or "")
+                        identity = {
+                            key: row[key]
+                            for key in (
+                                "site",
+                                "card_name",
+                                "host",
+                                "vendor",
+                                "profile",
+                                "card_id",
+                            )
+                            if key in row
+                        }
+                        reenriched.append(
+                            self._enrich_scanned_firmware_row(
+                                identity,
+                                catalog=catalog,
+                                profile=profile,
+                                configured=str(row.get("configured") or ""),
+                                details=str(row.get("details") or ""),
+                                current=str(row.get("current") or ""),
+                                status="",
+                                error=error,
+                            )
+                        )
+                    topic_rows["firmware"] = reenriched
+
         for topic in TOPICS:
             topic_rows[topic].sort(
                 key=lambda row: (str(row.get("card_name") or "").lower(),)
             )
-        payload = {
+        payload: dict[str, Any] = {
             "call_home": topic_rows["call_home"],
             "dns": topic_rows["dns"],
             "snmp": topic_rows["snmp"],
@@ -4715,6 +4780,8 @@ class HealthServer:
             "firmware": topic_rows["firmware"],
             "errors": errors,
         }
+        if catalog_updates > 0:
+            payload["catalog_updates"] = catalog_updates
         with self._lock:
             self._system_connectivity_cache = payload
         return payload

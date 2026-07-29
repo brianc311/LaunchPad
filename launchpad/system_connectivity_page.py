@@ -342,8 +342,12 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
         const counts = TOPICS.map((topic) => (data[topic] || []).length);
         const total = counts.reduce((sum, n) => sum + n, 0);
         const errCount = (data.errors || []).length;
-        statusEl.textContent = "Found " + total + " connectivity row(s)."
+        let statusText = "Found " + total + " connectivity row(s)."
           + (errCount ? (" " + errCount + " site error(s).") : "");
+        if (data.catalog_updates > 0) {
+          statusText += " Catalog updated: " + data.catalog_updates + " new version(s).";
+        }
+        statusEl.textContent = statusText;
         refreshSucceeded = true;
         setExportEnabled(true);
       } catch (err) {
