@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from launchpad.firmware_catalog import latest_in_catalog, versions_behind
+from launchpad.firmware_catalog import latest_in_catalog, normalize_hpe_firmware_version, versions_behind
 from launchpad.flashsystem_parse import _parse_colon_table
 from launchpad.storage_presets import HPE_SHELL_PROFILES, SVC_PROFILES, is_svc_fc_profile
 from launchpad.volume_find import vendor_for_profile as _vendor_for_profile
@@ -287,7 +287,8 @@ def parse_hpe_showversion_firmware(output: str) -> tuple[str, str, str, str]:
         lowered = version.lower()
         if lowered in {"public", "private", "community"}:
             continue
-        return "yes", "configured", f"version={version}", version
+        current = normalize_hpe_firmware_version(version)
+        return "yes", "configured", f"version={current}", current
     return "no", "empty", "no firmware version", ""
 
 

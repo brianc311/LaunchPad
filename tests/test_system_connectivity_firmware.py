@@ -77,6 +77,13 @@ def test_parse_hpe_showversion_firmware():
     assert current == "4.1.2"
 
 
+def test_hpe_showversion_normalizes_patch_suffix():
+    output = "Version: 3.3.1.648 (MU5)+P126,P132\n"
+    configured, status, details, current = parse_hpe_showversion_firmware(output)
+    assert configured == "yes"
+    assert current == "3.3.1.648 (MU5)"
+
+
 def test_ds_firmware_na_preserves_status():
     configured, status, details, current = parse_ds_firmware("")
     row = base_row(
