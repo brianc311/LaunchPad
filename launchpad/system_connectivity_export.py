@@ -17,6 +17,7 @@ TOPIC_SHEETS: dict[str, str] = {
     "snmp": "SNMP",
     "ntp": "NTP",
     "firmware": "Firmware",
+    "license_key": "License Key",
 }
 
 TOPIC_CSV_NAMES: dict[str, str] = {
@@ -25,6 +26,7 @@ TOPIC_CSV_NAMES: dict[str, str] = {
     "snmp": "snmp.csv",
     "ntp": "ntp.csv",
     "firmware": "firmware.csv",
+    "license_key": "license_key.csv",
 }
 
 HEADERS: tuple[str, ...] = (
@@ -80,7 +82,42 @@ FIRMWARE_FIELDS: tuple[str, ...] = (
     "error",
 )
 
-_TOPIC_KEYS = ("call_home", "dns", "snmp", "ntp", "firmware")
+LICENSE_KEY_HEADERS: tuple[str, ...] = (
+    "Site",
+    "Card",
+    "Host",
+    "Vendor",
+    "Profile",
+    "Key generation date",
+    "Date",
+    "Time",
+    "Encryption licensed",
+    "Feature",
+    "Expiration",
+    "Configured",
+    "Status",
+    "Details",
+    "Error",
+)
+LICENSE_KEY_FIELDS: tuple[str, ...] = (
+    "site",
+    "card_name",
+    "host",
+    "vendor",
+    "profile",
+    "key_generation_date",
+    "date",
+    "time",
+    "encryption_licensed",
+    "feature",
+    "expiration",
+    "configured",
+    "status",
+    "details",
+    "error",
+)
+
+_TOPIC_KEYS = ("call_home", "dns", "snmp", "ntp", "firmware", "license_key")
 
 
 def filter_payload_by_card_id(
@@ -153,11 +190,13 @@ def _write_sheet(
 def _topic_headers_fields(topic_key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if topic_key == "firmware":
         return FIRMWARE_HEADERS, FIRMWARE_FIELDS
+    if topic_key == "license_key":
+        return LICENSE_KEY_HEADERS, LICENSE_KEY_FIELDS
     return HEADERS, _FIELDS
 
 
 def export_system_connectivity_xlsx(payload: dict[str, Any]) -> bytes:
-    """Return a workbook with Call Home, DNS, SNMP, NTP, and Firmware sheets."""
+    """Return a workbook with Call Home, DNS, SNMP, NTP, Firmware, and License Key sheets."""
     workbook = Workbook()
     first = True
     for topic_key, sheet_name in TOPIC_SHEETS.items():
@@ -185,7 +224,7 @@ def _csv_bytes(headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> bytes:
 
 
 def export_system_connectivity_csv_zip(payload: dict[str, Any]) -> bytes:
-    """Return a ZIP containing call_home.csv, dns.csv, snmp.csv, ntp.csv, and firmware.csv."""
+    """Return a ZIP containing call_home.csv, dns.csv, snmp.csv, ntp.csv, firmware.csv, and license_key.csv."""
     output = BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for topic_key, csv_name in TOPIC_CSV_NAMES.items():

@@ -32,17 +32,24 @@ def test_filter_by_card_id():
     assert scoped["call_home"][0]["card_name"] == "Hartford"
 
 
-def test_xlsx_five_sheets():
+def test_xlsx_six_sheets():
     body = export_system_connectivity_xlsx(_sample())
     wb = load_workbook(BytesIO(body))
-    assert wb.sheetnames == ["Call Home", "DNS", "SNMP", "NTP", "Firmware"]
+    assert wb.sheetnames == ["Call Home", "DNS", "SNMP", "NTP", "Firmware", "License Key"]
 
 
 def test_csv_zip_members():
     body = export_system_connectivity_csv_zip(_sample())
     with zipfile.ZipFile(BytesIO(body)) as zf:
         names = set(zf.namelist())
-    assert names == {"call_home.csv", "dns.csv", "snmp.csv", "ntp.csv", "firmware.csv"}
+    assert names == {
+        "call_home.csv",
+        "dns.csv",
+        "snmp.csv",
+        "ntp.csv",
+        "firmware.csv",
+        "license_key.csv",
+    }
 
 
 def test_export_includes_firmware_sheet_and_columns():
@@ -78,3 +85,49 @@ def test_export_includes_firmware_sheet_and_columns():
     assert "Versions behind" in headers
     z = zipfile.ZipFile(BytesIO(export_system_connectivity_csv_zip(payload)))
     assert "firmware.csv" in z.namelist()
+
+
+def test_export_includes_license_key_sheet_and_columns():
+    payload = {
+        "call_home": [],
+        "dns": [],
+        "snmp": [],
+        "ntp": [],
+        "firmware": [],
+        "license_key": [
+            {
+                "site": "A",
+                "card_name": "A",
+                "host": "1.1.1.1",
+                "vendor": "hpe",
+                "profile": "hpe_3par_8450",
+                "configured": "yes",
+                "status": "ok",
+                "details": "3 features",
+                "error": "",
+                "key_generation_date": "2017-09-19",
+                "date": "",
+                "time": "",
+                "encryption_licensed": "",
+                "feature": "Remote Copy",
+                "expiration": "—",
+            }
+        ],
+        "errors": [],
+    }
+    assert TOPIC_SHEETS["license_key"] == "License Key"
+    assert TOPIC_CSV_NAMES["license_key"] == "license_key.csv"
+    wb = load_workbook(BytesIO(export_system_connectivity_xlsx(payload)))
+    assert "License Key" in wb.sheetnames
+    sheet = wb["License Key"]
+    headers = [cell.value for cell in sheet[1]]
+    assert "Key generation date" in headers
+    assert "Date" in headers
+    assert "Time" in headers
+    assert "Encryption licensed" in headers
+    assert "Feature" in headers
+    assert "Expiration" in headers
+    assert headers.index("Profile") < headers.index("Key generation date")
+    assert headers.index("Expiration") < headers.index("Configured")
+    z = zipfile.ZipFile(BytesIO(export_system_connectivity_csv_zip(payload)))
+    assert "license_key.csv" in z.namelist()
