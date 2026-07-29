@@ -300,8 +300,8 @@ def test_dashboard_view_exposes_lun_builder_button():
         Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
     ).read_text(encoding="utf-8")
 
-    assert 'text="LUN Builder"' in source
-    assert "command=self._open_lun_builder" in source
+    assert '"LUN Builder"' in source
+    assert "self._open_lun_builder" in source
 
 
 def test_lun_builder_persists_completion_state():

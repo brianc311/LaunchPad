@@ -13,8 +13,8 @@ def test_dashboard_view_exposes_hosts_volumes_button():
         Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
     ).read_text(encoding="utf-8")
 
-    assert 'text="Hosts & Volumes"' in source
-    assert "command=self._open_host_volume_health" in source
+    assert '"Hosts & Volumes"' in source
+    assert "self._open_host_volume_health" in source
 
 
 def test_health_dashboard_links_to_host_volume_health():

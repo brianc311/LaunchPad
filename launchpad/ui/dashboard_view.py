@@ -38,6 +38,8 @@ from launchpad.ui.theme import get_theme
 
 SSH_STATUS_INTERVAL_MS = 90_000
 CAPACITY_EMAIL_POLL_MS = 60_000
+# Keep report tools on two horizontal rows so they stay on-screen.
+HEADER_TOOLS_PER_ROW = 6
 
 
 class DashboardView(ctk.CTkFrame):
@@ -147,7 +149,7 @@ class DashboardView(ctk.CTkFrame):
         header.grid_columnconfigure(1, weight=1)
 
         title_row = ctk.CTkFrame(header, fg_color="transparent")
-        title_row.grid(row=0, column=0, rowspan=2, sticky="w")
+        title_row.grid(row=0, column=0, sticky="w")
 
         self._logo_image = load_ctk_logo(self.db, size=(40, 40))
         if self._logo_image:
@@ -176,104 +178,8 @@ class DashboardView(ctk.CTkFrame):
         )
         self.subtitle_label.pack(anchor="w")
 
-        actions = ctk.CTkFrame(header, fg_color="transparent")
-        actions.grid(row=0, column=2, rowspan=2, sticky="e")
-
-        tools = ctk.CTkFrame(actions, fg_color="transparent")
-        tools.grid(row=0, column=0, sticky="e")
-
-        ctk.CTkButton(
-            tools,
-            text="Health Dashboard",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_health_dashboard_all,
-        ).grid(row=0, column=0, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="Capacity Report",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_capacity_report_all,
-        ).grid(row=0, column=1, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="FC WWPN",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_fc_wwpn_report_all,
-        ).grid(row=0, column=2, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="Consistency Groups",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_contingency_groups,
-        ).grid(row=0, column=3, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="FlashCopy CGs",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_fc_consistgrp,
-        ).grid(row=0, column=4, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="LUN Builder",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_lun_builder,
-        ).grid(row=0, column=5, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="Host / Volume Find",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_volume_find,
-        ).grid(row=0, column=6, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="Hosts & Volumes",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_host_volume_health,
-        ).grid(row=0, column=7, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="System Connectivity",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_system_connectivity,
-        ).grid(row=0, column=8, padx=6)
-
-        self.export_excel_btn = ctk.CTkButton(
-            tools,
-            text="Export Excel ▾",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._open_export_excel_menu,
-            width=140,
-        )
-        self.export_excel_btn.grid(row=0, column=9, padx=6)
-
-        ctk.CTkButton(
-            tools,
-            text="Refresh Stats",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._fetch_all_ssh_stats,
-        ).grid(row=0, column=10, padx=6)
-
-        controls = ctk.CTkFrame(actions, fg_color="transparent")
-        controls.grid(row=1, column=0, sticky="e", pady=(8, 0))
+        controls = ctk.CTkFrame(header, fg_color="transparent")
+        controls.grid(row=0, column=2, sticky="e")
 
         self.theme_switch = ctk.CTkSwitch(
             controls,
@@ -297,6 +203,38 @@ class DashboardView(ctk.CTkFrame):
             hover_color="#B91C1C",
             command=self.on_lock,
         ).grid(row=0, column=2, padx=6)
+
+        # Full-width tools under the title, fixed to two horizontal rows.
+        tools = ctk.CTkFrame(header, fg_color="transparent")
+        tools.grid(row=1, column=0, columnspan=3, sticky="w", pady=(12, 0))
+
+        tool_specs = [
+            ("Health Dashboard", self._open_health_dashboard_all, None),
+            ("Capacity Report", self._open_capacity_report_all, None),
+            ("FC WWPN", self._open_fc_wwpn_report_all, None),
+            ("Consistency Groups", self._open_contingency_groups, None),
+            ("FlashCopy CGs", self._open_fc_consistgrp, None),
+            ("LUN Builder", self._open_lun_builder, None),
+            ("Host / Volume Find", self._open_volume_find, None),
+            ("Hosts & Volumes", self._open_host_volume_health, None),
+            ("System Connectivity", self._open_system_connectivity, None),
+            ("Export Excel ▾", self._open_export_excel_menu, 140),
+            ("Refresh Stats", self._fetch_all_ssh_stats, None),
+        ]
+        for index, (text, command, width) in enumerate(tool_specs):
+            kwargs = {
+                "text": text,
+                "fg_color": self.theme["surface_alt"],
+                "hover_color": self.theme["border"],
+                "command": command,
+            }
+            if width is not None:
+                kwargs["width"] = width
+            btn = ctk.CTkButton(tools, **kwargs)
+            row, col = divmod(index, HEADER_TOOLS_PER_ROW)
+            btn.grid(row=row, column=col, padx=6, pady=(0, 6), sticky="w")
+            if text.startswith("Export Excel"):
+                self.export_excel_btn = btn
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")

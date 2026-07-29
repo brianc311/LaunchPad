@@ -1,0 +1,21 @@
+from pathlib import Path
+
+from launchpad.ui.dashboard_view import HEADER_TOOLS_PER_ROW
+
+
+def test_header_tools_per_row_is_two_row_layout():
+    # 11 tools with 6 per row => row0 has 6, row1 has 5.
+    assert HEADER_TOOLS_PER_ROW == 6
+    assert 11 > HEADER_TOOLS_PER_ROW
+    assert (11 + HEADER_TOOLS_PER_ROW - 1) // HEADER_TOOLS_PER_ROW == 2
+
+
+def test_dashboard_header_uses_two_row_tools_layout():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
+    ).read_text(encoding="utf-8")
+
+    assert "HEADER_TOOLS_PER_ROW" in source
+    assert "divmod(index, HEADER_TOOLS_PER_ROW)" in source
+    assert '"System Connectivity"' in source
+    assert "def _reflow_header_tools" not in source

@@ -14,8 +14,10 @@ def test_dashboard_view_exposes_system_connectivity_button():
         Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
     ).read_text(encoding="utf-8")
 
-    assert 'text="System Connectivity"' in source
-    assert "command=self._open_system_connectivity" in source
+    assert '"System Connectivity"' in source
+    assert "command=self._open_system_connectivity" in source or (
+        "self._open_system_connectivity" in source
+    )
     assert "def _open_system_connectivity" in source
 
 
