@@ -24,6 +24,12 @@ from launchpad.capacity_email_settings import (
 )
 from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, DEFAULT_SSH_PORT, APP_VERSION
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
+from launchpad.firmware_catalog import (
+    eligible_firmware_profiles,
+    get_profile_catalog,
+    load_firmware_catalog,
+    save_firmware_catalog,
+)
 from launchpad.icons import ICON_CHOICES, resolve_icon
 from launchpad.storage_presets import (
     DEVICE_PROFILES,
@@ -166,10 +172,15 @@ class AdminView(ctk.CTkFrame):
         email_tab.grid_columnconfigure(0, weight=1)
         email_tab.grid_rowconfigure(0, weight=1)
 
+        firmware_tab = self.tabs.add("Firmware catalog")
+        firmware_tab.grid_columnconfigure(0, weight=1)
+        firmware_tab.grid_rowconfigure(0, weight=1)
+
         self._build_card_list(connections_tab)
         self._build_card_form(connections_tab)
         self._build_branding_panel(branding_tab)
         self._build_capacity_email_panel(email_tab)
+        self._build_firmware_catalog_panel(firmware_tab)
         self.refresh_list()
 
         self.admin_status = ctk.CTkLabel(
@@ -507,6 +518,259 @@ class AdminView(ctk.CTkFrame):
         self.email_last_error_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
 
         self._load_capacity_email_form()
+
+    def _build_firmware_catalog_panel(self, parent) -> None:
+        panel = ctk.CTkFrame(parent, fg_color=self.theme["surface_alt"], corner_radius=16)
+        panel.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        panel.grid_columnconfigure(1, weight=1)
+        panel.grid_rowconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            panel,
+            text="Firmware Catalog",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.theme["text"],
+        ).grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 4), sticky="w")
+
+        ctk.CTkLabel(
+            panel,
+            text=(
+                "Ordered release list per device profile (oldest at top, newest at bottom). "
+                "Used by System Connectivity Versions behind."
+            ),
+            font=ctk.CTkFont(size=12),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 16), sticky="w")
+
+        profiles = eligible_firmware_profiles()
+        self._firmware_catalog_map = {
+            profile: list(versions)
+            for profile, versions in load_firmware_catalog(self.db).items()
+        }
+        self._firmware_selected_index: int | None = None
+        self._firmware_list_buttons: list[ctk.CTkButton] = []
+
+        ctk.CTkLabel(panel, text="Profile", text_color=self.theme["muted"]).grid(
+            row=2, column=0, padx=20, pady=8, sticky="w"
+        )
+        initial = profiles[0] if profiles else ""
+        self.firmware_profile_var = ctk.StringVar(value=initial)
+        self._firmware_current_profile = initial
+        self.firmware_profile_menu = ctk.CTkOptionMenu(
+            panel,
+            variable=self.firmware_profile_var,
+            values=profiles or [""],
+            command=self._on_firmware_profile_change,
+        )
+        self.firmware_profile_menu.grid(row=2, column=1, padx=20, pady=8, sticky="ew")
+
+        self.firmware_list_frame = ctk.CTkScrollableFrame(
+            panel,
+            fg_color=self.theme["surface"],
+            corner_radius=8,
+            height=220,
+        )
+        self.firmware_list_frame.grid(row=3, column=0, columnspan=2, padx=20, pady=8, sticky="nsew")
+        self.firmware_list_frame.grid_columnconfigure(0, weight=1)
+
+        add_row = ctk.CTkFrame(panel, fg_color="transparent")
+        add_row.grid(row=4, column=0, columnspan=2, padx=20, pady=8, sticky="ew")
+        add_row.grid_columnconfigure(0, weight=1)
+
+        self.firmware_version_entry = ctk.CTkEntry(
+            add_row, placeholder_text="Version string (exact match)"
+        )
+        self.firmware_version_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        ctk.CTkButton(
+            add_row,
+            text="Add",
+            fg_color=self.theme["accent"],
+            hover_color=self.theme["accent_soft"],
+            width=80,
+            command=self._firmware_catalog_add,
+        ).grid(row=0, column=1)
+
+        buttons = ctk.CTkFrame(panel, fg_color="transparent")
+        buttons.grid(row=5, column=0, columnspan=2, padx=20, pady=(8, 8), sticky="w")
+
+        ctk.CTkButton(
+            buttons,
+            text="Remove",
+            fg_color=self.theme["surface"],
+            hover_color=self.theme["border"],
+            border_width=1,
+            border_color=self.theme["accent"],
+            command=self._firmware_catalog_remove,
+        ).grid(row=0, column=0, padx=(0, 8))
+
+        ctk.CTkButton(
+            buttons,
+            text="Move up",
+            fg_color=self.theme["surface"],
+            hover_color=self.theme["border"],
+            border_width=1,
+            border_color=self.theme["accent"],
+            command=self._firmware_catalog_move_up,
+        ).grid(row=0, column=1, padx=(0, 8))
+
+        ctk.CTkButton(
+            buttons,
+            text="Move down",
+            fg_color=self.theme["surface"],
+            hover_color=self.theme["border"],
+            border_width=1,
+            border_color=self.theme["accent"],
+            command=self._firmware_catalog_move_down,
+        ).grid(row=0, column=2, padx=(0, 8))
+
+        ctk.CTkButton(
+            buttons,
+            text="Save",
+            fg_color=self.theme["accent"],
+            hover_color=self.theme["accent_soft"],
+            command=self._firmware_catalog_save,
+        ).grid(row=0, column=3, padx=(0, 8))
+
+        self.firmware_catalog_status = ctk.CTkLabel(
+            panel,
+            text="",
+            text_color=self.theme["muted"],
+            font=ctk.CTkFont(size=11),
+            wraplength=520,
+            justify="left",
+        )
+        self.firmware_catalog_status.grid(
+            row=6, column=0, columnspan=2, padx=20, pady=(4, 20), sticky="w"
+        )
+
+        self._refresh_firmware_version_list()
+
+    def _firmware_versions_for_current(self) -> list[str]:
+        profile = self._firmware_current_profile
+        if not profile:
+            return []
+        return get_profile_catalog(self._firmware_catalog_map, profile)
+
+    def _stash_firmware_profile(self) -> None:
+        profile = self._firmware_current_profile
+        if not profile:
+            return
+        self._firmware_catalog_map[profile] = list(
+            get_profile_catalog(self._firmware_catalog_map, profile)
+        )
+
+    def _on_firmware_profile_change(self, selected: str) -> None:
+        self._stash_firmware_profile()
+        self._firmware_current_profile = selected
+        self._firmware_selected_index = None
+        self._refresh_firmware_version_list()
+        self.firmware_catalog_status.configure(text="")
+
+    def _refresh_firmware_version_list(self) -> None:
+        for child in self.firmware_list_frame.winfo_children():
+            child.destroy()
+        self._firmware_list_buttons = []
+        versions = self._firmware_versions_for_current()
+        if self._firmware_selected_index is not None and (
+            self._firmware_selected_index < 0 or self._firmware_selected_index >= len(versions)
+        ):
+            self._firmware_selected_index = None
+        for index, version in enumerate(versions):
+            selected = index == self._firmware_selected_index
+            btn = ctk.CTkButton(
+                self.firmware_list_frame,
+                text=version,
+                anchor="w",
+                fg_color=self.theme["accent"] if selected else self.theme["surface_alt"],
+                hover_color=self.theme["accent_soft"] if selected else self.theme["border"],
+                text_color=self.theme["text"],
+                command=lambda i=index: self._select_firmware_version(i),
+            )
+            btn.grid(row=index, column=0, sticky="ew", padx=4, pady=2)
+            self._firmware_list_buttons.append(btn)
+
+    def _select_firmware_version(self, index: int) -> None:
+        self._firmware_selected_index = index
+        self._refresh_firmware_version_list()
+
+    def _firmware_catalog_add(self) -> None:
+        profile = self._firmware_current_profile
+        if not profile:
+            self.firmware_catalog_status.configure(text="No profile selected.")
+            return
+        version = self.firmware_version_entry.get().strip()
+        if not version:
+            self.firmware_catalog_status.configure(text="Version cannot be blank.")
+            return
+        versions = list(get_profile_catalog(self._firmware_catalog_map, profile))
+        if version in versions:
+            self.firmware_catalog_status.configure(text=f"Duplicate version: {version}")
+            return
+        versions.append(version)
+        self._firmware_catalog_map[profile] = versions
+        self.firmware_version_entry.delete(0, "end")
+        self._firmware_selected_index = len(versions) - 1
+        self._refresh_firmware_version_list()
+        self.firmware_catalog_status.configure(text=f"Added {version}.")
+
+    def _firmware_catalog_remove(self) -> None:
+        profile = self._firmware_current_profile
+        versions = list(get_profile_catalog(self._firmware_catalog_map, profile))
+        if not versions:
+            self.firmware_catalog_status.configure(text="Nothing to remove.")
+            return
+        index = self._firmware_selected_index
+        if index is None or index < 0 or index >= len(versions):
+            index = len(versions) - 1
+        removed = versions.pop(index)
+        self._firmware_catalog_map[profile] = versions
+        if not versions:
+            self._firmware_selected_index = None
+        elif index >= len(versions):
+            self._firmware_selected_index = len(versions) - 1
+        else:
+            self._firmware_selected_index = index
+        self._refresh_firmware_version_list()
+        self.firmware_catalog_status.configure(text=f"Removed {removed}.")
+
+    def _firmware_catalog_move_up(self) -> None:
+        profile = self._firmware_current_profile
+        versions = list(get_profile_catalog(self._firmware_catalog_map, profile))
+        index = self._firmware_selected_index
+        if index is None or index <= 0 or index >= len(versions):
+            self.firmware_catalog_status.configure(text="Select a version to move up.")
+            return
+        versions[index - 1], versions[index] = versions[index], versions[index - 1]
+        self._firmware_catalog_map[profile] = versions
+        self._firmware_selected_index = index - 1
+        self._refresh_firmware_version_list()
+        self.firmware_catalog_status.configure(text="")
+
+    def _firmware_catalog_move_down(self) -> None:
+        profile = self._firmware_current_profile
+        versions = list(get_profile_catalog(self._firmware_catalog_map, profile))
+        index = self._firmware_selected_index
+        if index is None or index < 0 or index >= len(versions) - 1:
+            self.firmware_catalog_status.configure(text="Select a version to move down.")
+            return
+        versions[index + 1], versions[index] = versions[index], versions[index + 1]
+        self._firmware_catalog_map[profile] = versions
+        self._firmware_selected_index = index + 1
+        self._refresh_firmware_version_list()
+        self.firmware_catalog_status.configure(text="")
+
+    def _firmware_catalog_save(self) -> None:
+        self._stash_firmware_profile()
+        saved = save_firmware_catalog(self.db, self._firmware_catalog_map)
+        self._firmware_catalog_map = {
+            profile: list(versions) for profile, versions in saved.items()
+        }
+        self._refresh_firmware_version_list()
+        self.firmware_catalog_status.configure(text="Firmware catalog saved.")
+        self.admin_status.configure(text="Firmware catalog saved.")
 
     def _load_capacity_email_form(self) -> None:
         settings = load_capacity_email_settings(self.db)
