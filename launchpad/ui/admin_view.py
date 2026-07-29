@@ -27,7 +27,9 @@ from launchpad.crypto import decrypt_text, encrypt_text, verify_password
 from launchpad.firmware_catalog import (
     eligible_firmware_profiles,
     get_profile_catalog,
+    load_firmware_auto_add,
     load_firmware_catalog,
+    save_firmware_auto_add,
     save_firmware_catalog,
 )
 from launchpad.icons import ICON_CHOICES, resolve_icon
@@ -523,7 +525,7 @@ class AdminView(ctk.CTkFrame):
         panel = ctk.CTkFrame(parent, fg_color=self.theme["surface_alt"], corner_radius=16)
         panel.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         panel.grid_columnconfigure(1, weight=1)
-        panel.grid_rowconfigure(3, weight=1)
+        panel.grid_rowconfigure(5, weight=1)
 
         ctk.CTkLabel(
             panel,
@@ -542,7 +544,28 @@ class AdminView(ctk.CTkFrame):
             text_color=self.theme["muted"],
             wraplength=520,
             justify="left",
-        ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 16), sticky="w")
+        ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+
+        self.firmware_auto_add_var = ctk.BooleanVar(value=load_firmware_auto_add(self.db))
+        self.firmware_auto_add_check = ctk.CTkCheckBox(
+            panel,
+            text="Auto-add firmware from live scans",
+            variable=self.firmware_auto_add_var,
+            command=self._on_firmware_auto_add_toggle,
+        )
+        self.firmware_auto_add_check.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w")
+
+        ctk.CTkLabel(
+            panel,
+            text=(
+                "When on, Refresh live inserts unseen Current versions into this profile's list "
+                "by version order."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, padx=20, pady=(0, 16), sticky="w")
 
         profiles = eligible_firmware_profiles()
         self._firmware_catalog_map = {
@@ -552,7 +575,7 @@ class AdminView(ctk.CTkFrame):
         self._firmware_selected_index: int | None = None
 
         ctk.CTkLabel(panel, text="Profile", text_color=self.theme["muted"]).grid(
-            row=2, column=0, padx=20, pady=8, sticky="w"
+            row=4, column=0, padx=20, pady=8, sticky="w"
         )
         initial = profiles[0] if profiles else ""
         self.firmware_profile_var = ctk.StringVar(value=initial)
@@ -563,7 +586,7 @@ class AdminView(ctk.CTkFrame):
             values=profiles or [""],
             command=self._on_firmware_profile_change,
         )
-        self.firmware_profile_menu.grid(row=2, column=1, padx=20, pady=8, sticky="ew")
+        self.firmware_profile_menu.grid(row=4, column=1, padx=20, pady=8, sticky="ew")
 
         self.firmware_list_frame = ctk.CTkScrollableFrame(
             panel,
@@ -571,11 +594,11 @@ class AdminView(ctk.CTkFrame):
             corner_radius=8,
             height=220,
         )
-        self.firmware_list_frame.grid(row=3, column=0, columnspan=2, padx=20, pady=8, sticky="nsew")
+        self.firmware_list_frame.grid(row=5, column=0, columnspan=2, padx=20, pady=8, sticky="nsew")
         self.firmware_list_frame.grid_columnconfigure(0, weight=1)
 
         add_row = ctk.CTkFrame(panel, fg_color="transparent")
-        add_row.grid(row=4, column=0, columnspan=2, padx=20, pady=8, sticky="ew")
+        add_row.grid(row=6, column=0, columnspan=2, padx=20, pady=8, sticky="ew")
         add_row.grid_columnconfigure(0, weight=1)
 
         self.firmware_version_entry = ctk.CTkEntry(
@@ -593,7 +616,7 @@ class AdminView(ctk.CTkFrame):
         ).grid(row=0, column=1)
 
         buttons = ctk.CTkFrame(panel, fg_color="transparent")
-        buttons.grid(row=5, column=0, columnspan=2, padx=20, pady=(8, 8), sticky="w")
+        buttons.grid(row=7, column=0, columnspan=2, padx=20, pady=(8, 8), sticky="w")
 
         ctk.CTkButton(
             buttons,
@@ -642,10 +665,18 @@ class AdminView(ctk.CTkFrame):
             justify="left",
         )
         self.firmware_catalog_status.grid(
-            row=6, column=0, columnspan=2, padx=20, pady=(4, 20), sticky="w"
+            row=8, column=0, columnspan=2, padx=20, pady=(4, 20), sticky="w"
         )
 
         self._refresh_firmware_version_list()
+
+    def _on_firmware_auto_add_toggle(self) -> None:
+        enabled = bool(self.firmware_auto_add_var.get())
+        save_firmware_auto_add(self.db, enabled)
+        state = "on" if enabled else "off"
+        message = f"Auto-add from live scans: {state}."
+        self.firmware_catalog_status.configure(text=message)
+        self.admin_status.configure(text=message)
 
     def _firmware_versions_for_current(self) -> list[str]:
         profile = self._firmware_current_profile

@@ -27,6 +27,16 @@ def test_admin_view_has_firmware_catalog_tab():
     assert "_build_firmware_catalog_panel" in source
 
 
+def test_admin_firmware_auto_add_checkbox():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "admin_view.py"
+    ).read_text(encoding="utf-8")
+    assert "Auto-add firmware from live scans" in source
+    assert "save_firmware_auto_add" in source
+    assert "load_firmware_auto_add" in source
+    assert "When on, Refresh live inserts unseen Current" in source
+
+
 def test_save_load_firmware_catalog_round_trip():
     db = _FakeDb()
     catalog = {
