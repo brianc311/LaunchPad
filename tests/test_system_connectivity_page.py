@@ -37,3 +37,14 @@ def test_page_has_firmware_tab_after_ntp():
     compact = html.replace(" ", "")
     assert '"firmware"' in compact and "TOPICS" in compact
     assert compact.index('"ntp"') < compact.index('"firmware"')
+
+
+def test_firmware_panel_includes_ibm_upgrade_matrix_link():
+    from launchpad.system_connectivity_page import SYSTEM_CONNECTIVITY_HTML
+
+    html = SYSTEM_CONNECTIVITY_HTML
+    assert 'id="sc-panel-firmware"' in html
+    assert 'href="https://www.ibm.com/support/pages/node/5692850"' in html
+    assert 'target="_blank"' in html
+    assert 'rel="noopener noreferrer"' in html
+    assert "IBM FlashSystem software upgrade matrix" in html
