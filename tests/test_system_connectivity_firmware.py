@@ -9,7 +9,8 @@ from launchpad.system_connectivity import (
 
 
 def test_topics_include_firmware():
-    assert TOPICS[-1] == "firmware"
+    assert "firmware" in TOPICS
+    assert TOPICS.index("firmware") < TOPICS.index("license_key")
     assert "ntp" in TOPICS
 
 

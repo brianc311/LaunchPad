@@ -1,4 +1,4 @@
-"""System Connectivity helpers — Call Home / DNS / SNMP / NTP parsers."""
+"""System Connectivity helpers — Call Home / DNS / SNMP / NTP / Firmware / License Key parsers."""
 
 from __future__ import annotations
 
@@ -10,8 +10,16 @@ from launchpad.flashsystem_parse import _parse_colon_table
 from launchpad.storage_presets import HPE_SHELL_PROFILES, SVC_PROFILES, is_svc_fc_profile
 from launchpad.volume_find import vendor_for_profile as _vendor_for_profile
 
-TOPICS: tuple[str, ...] = ("call_home", "dns", "snmp", "ntp", "firmware")
+TOPICS: tuple[str, ...] = ("call_home", "dns", "snmp", "ntp", "firmware", "license_key")
 FIRMWARE_EXTRA_FIELDS: tuple[str, ...] = ("current", "latest", "versions_behind")
+LICENSE_KEY_EXTRA_FIELDS: tuple[str, ...] = (
+    "key_generation_date",
+    "date",
+    "time",
+    "encryption_licensed",
+    "feature",
+    "expiration",
+)
 ROW_FIELDS: tuple[str, ...] = (
     "site",
     "card_name",
@@ -53,6 +61,27 @@ _DS_FIRMWARE_NA = (
 _SVC_CODE_LEVEL_BUILD_RE = re.compile(
     r"\s*\([^)]*build[^)]*\)\s*$",
     re.IGNORECASE,
+)
+_HPE_LICENSE_GENERATED_RE = re.compile(
+    r"License\s+key\s+was\s+generated\s+on\s+(?P<when>.+)$",
+    re.IGNORECASE,
+)
+_HPE_LICENSE_EXPIRATION_RE = re.compile(
+    r"^Expiration\s+Date\s*:\s*(?P<when>.+)$",
+    re.IGNORECASE,
+)
+_HPE_LICENSE_SECTION_RE = re.compile(
+    r"^License\s+features?\s+(currently\s+)?(?P<section>enabled|expired|trial)\s*:?\s*$",
+    re.IGNORECASE,
+)
+_SVC_CLOCK_RE = re.compile(
+    r"^(?P<weekday>\w{3})\s+(?P<month>\w{3})\s+(?P<day>\d{1,2})\s+"
+    r"(?P<time>\d{1,2}:\d{2}:\d{2})\s+(?P<tz>\S+)\s+(?P<year>\d{4})\s*$"
+)
+_DS_LICENSE_KEY_NA = (
+    "n/a",
+    "n/a",
+    "License Key not available via DSCLI on this path",
 )
 
 
@@ -357,6 +386,228 @@ def enrich_firmware_row(
     return out
 
 
+def _normalize_encryption_licensed(raw: str) -> str:
+    token = str(raw or "").strip().lower()
+    if not token:
+        return "unknown"
+    if token in {"yes", "licensed", "enabled", "active", "on", "true", "1"}:
+        return "yes"
+    if token in {"no", "not_licensed", "unlicensed", "disabled", "inactive", "off", "false", "0"}:
+        return "no"
+    if "not" in token and "licen" in token:
+        return "no"
+    if "licen" in token or token == "enabled":
+        return "yes"
+    return "unknown"
+
+
+def parse_svc_lsencryption(output: str) -> tuple[str, str, str, str]:
+    text = str(output or "").strip()
+    if not text:
+        return "unknown", "", "empty lsencryption output", "unknown"
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or ":" not in stripped:
+            continue
+        key, _, value = stripped.partition(":")
+        fields[key.strip().lower()] = value.strip()
+    status_raw = fields.get("status") or fields.get("encryption_status") or ""
+    licensed_raw = (
+        fields.get("encryption_licensed")
+        or fields.get("licensed")
+        or fields.get("license")
+        or status_raw
+    )
+    enc = _normalize_encryption_licensed(licensed_raw)
+    if enc == "yes":
+        status = status_raw.strip().lower() or "licensed"
+        return "yes", status, f"encryption={enc}", enc
+    if enc == "no":
+        status = status_raw.strip().lower() or "not_licensed"
+        return "no", status, f"encryption={enc}", enc
+    if status_raw or fields:
+        return "unknown", status_raw.strip().lower(), "unrecognized encryption status", "unknown"
+    return "unknown", "", "unrecognized lsencryption output", "unknown"
+
+
+def parse_svc_svqueryclock(output: str) -> tuple[str, str]:
+    text = str(output or "").strip()
+    if not text:
+        return "", ""
+
+    def parse_candidate(candidate: str) -> tuple[str, str] | None:
+        match = _SVC_CLOCK_RE.match(candidate)
+        if match:
+            day = match.group("day").lstrip("0") or match.group("day")
+            date_s = f"{match.group('weekday')} {match.group('month')} {day} {match.group('year')}"
+            return date_s, match.group("time")
+        time_match = re.search(r"\b(\d{1,2}:\d{2}:\d{2})\b", candidate)
+        if not time_match:
+            return None
+        time_s = time_match.group(1)
+        date_bits = candidate[: time_match.start()] + candidate[time_match.end() :]
+        # Drop timezone-ish tokens (CET, UTC, EDT, …)
+        date_bits = re.sub(r"\b[A-Z]{2,5}\b", " ", date_bits)
+        date_s = " ".join(date_bits.split())
+        if not date_s:
+            return None
+        return date_s, time_s
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed = parse_candidate(stripped)
+        if parsed:
+            return parsed
+        # label: value form (only when the left side is not a partial time)
+        if ":" in stripped:
+            label, _, value = stripped.partition(":")
+            if value.strip() and not re.search(r"\d$", label.strip()):
+                parsed = parse_candidate(value.strip())
+                if parsed:
+                    return parsed
+    return "", ""
+
+
+def parse_hpe_showlicense(output: str) -> list[dict[str, str]]:
+    text = str(output or "")
+    if not text.strip():
+        return []
+
+    key_generation_date = ""
+    section_status = "ok"
+    rows: list[dict[str, str]] = []
+    pending: dict[str, str] | None = None
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if pending is None:
+            return
+        rows.append(pending)
+        pending = None
+
+    def make_row(feature: str, expiration: str = "") -> dict[str, str]:
+        exp = str(expiration or "").strip()
+        if exp in {"—", "–", "-", "n/a", "N/A", "none", "None"}:
+            exp = ""
+        status = section_status
+        lowered_exp = exp.lower()
+        if status == "ok" and exp and any(tok in lowered_exp for tok in ("expir", "lapsed")):
+            status = "expired"
+        details_parts = [feature]
+        if exp:
+            details_parts.append(f"expires {exp}")
+        elif key_generation_date:
+            details_parts.append(f"key {key_generation_date}")
+        return {
+            "key_generation_date": key_generation_date,
+            "feature": feature.strip(),
+            "expiration": exp,
+            "status": status,
+            "details": "; ".join(details_parts),
+        }
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        gen_match = _HPE_LICENSE_GENERATED_RE.match(stripped)
+        if gen_match:
+            flush_pending()
+            key_generation_date = gen_match.group("when").strip()
+            continue
+
+        section_match = _HPE_LICENSE_SECTION_RE.match(stripped)
+        if section_match:
+            flush_pending()
+            section = section_match.group("section").lower()
+            if section == "expired":
+                section_status = "expired"
+            elif section == "trial":
+                section_status = "trial"
+            else:
+                section_status = "ok"
+            continue
+
+        # Skip other header-ish lines
+        lowered = stripped.lower()
+        if lowered.startswith("license ") and ":" in lowered and "expiration" not in lowered:
+            flush_pending()
+            continue
+
+        exp_match = _HPE_LICENSE_EXPIRATION_RE.match(stripped)
+        if exp_match:
+            when = exp_match.group("when").strip()
+            if when in {"—", "–", "-"}:
+                when = ""
+            if pending is not None:
+                pending["expiration"] = when
+                if when:
+                    pending["details"] = f"{pending['feature']}; expires {when}"
+                if when and pending.get("status") == "ok":
+                    if any(tok in when.lower() for tok in ("expir", "lapsed")):
+                        pending["status"] = "expired"
+            continue
+
+        # Feature name line (optionally with inline expiration)
+        inline_exp = ""
+        feature_name = stripped
+        inline_match = re.search(
+            r"^(?P<feature>.+?)\s+[—–-]\s*(?P<exp>.+)$",
+            stripped,
+        )
+        if inline_match and "expiration" not in stripped.lower():
+            feature_name = inline_match.group("feature").strip()
+            inline_exp = inline_match.group("exp").strip()
+
+        if lowered.startswith("expiration"):
+            continue
+
+        flush_pending()
+        pending = make_row(feature_name, inline_exp)
+
+    flush_pending()
+    return rows
+
+
+def enrich_license_key_row(
+    row: dict,
+    *,
+    configured: str,
+    status: str = "",
+    details: str = "",
+    error: str = "",
+    key_generation_date: str = "",
+    date: str = "",
+    time: str = "",
+    encryption_licensed: str = "",
+    feature: str = "",
+    expiration: str = "",
+) -> dict:
+    out = finalize_row(
+        row,
+        configured=configured,
+        status=status,
+        details=details,
+        error=error,
+    )
+    out["key_generation_date"] = key_generation_date
+    out["date"] = date
+    out["time"] = time
+    out["encryption_licensed"] = encryption_licensed
+    out["feature"] = feature
+    out["expiration"] = expiration
+    return out
+
+
+def parse_ds_license_key(_output: str = "") -> tuple[str, str, str]:
+    return _DS_LICENSE_KEY_NA
+
+
 def parse_svc_ntp_from_lssystem(output: str) -> tuple[str, str, str]:
     text = str(output or "")
     if not text.strip():
@@ -551,6 +802,7 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "snmp": ["lssnmpserver -delim :"],
             "ntp": ["lssystem -delim :"],
             "firmware": ["lssystem -delim :"],
+            "license_key": ["lsencryption -delim :", "svqueryclock"],
         }
     if key in HPE_SHELL_PROFILES:
         return {
@@ -559,6 +811,7 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "snmp": ["showsnmpmgr"],
             "ntp": ["shownet"],
             "firmware": ["showversion"],
+            "license_key": ["showlicense"],
         }
     if key == _DS8884_PROFILE:
         return {
@@ -567,5 +820,6 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "snmp": [],
             "ntp": [],
             "firmware": [],
+            "license_key": [],
         }
     return empty
