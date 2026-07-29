@@ -182,6 +182,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
     <div class="section" id="sc-panel-firmware" data-panel="firmware" hidden>
       <h2>Firmware</h2>
       <p class="hint">Versions behind uses the Admin Firmware catalog for this device profile. If Current is not in the catalog, behind shows unknown.</p>
+      <p class="hint"><a href="https://www.ibm.com/support/pages/node/5692850" target="_blank" rel="noopener noreferrer">IBM FlashSystem software upgrade matrix</a></p>
       <div class="table-wrap">
         <table>
           <thead>
