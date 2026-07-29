@@ -70,6 +70,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <a class="btn secondary" href="/contingency-groups">Contingency Groups</a>
         <a class="btn secondary" href="/host-volume-health">Hosts & Volumes</a>
+        <a class="btn secondary" href="/system-connectivity">System Connectivity</a>
       </div>
     </section>
 

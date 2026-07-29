@@ -81,6 +81,7 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
         <button type="button" class="btn secondary" id="hv-export-csv-btn" disabled>Export CSV</button>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <a class="btn secondary" href="/capacity-report">Capacity</a>
+        <a class="btn secondary" href="/system-connectivity">System Connectivity</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
       </div>

@@ -131,6 +131,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
         <a class="btn secondary" href="/host-volume-health">Hosts & Volumes</a>
+        <a class="btn secondary" href="/system-connectivity">System Connectivity</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <span id="status" class="status" aria-live="polite"></span>
       </div>
