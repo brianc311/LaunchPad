@@ -70,20 +70,25 @@ from launchpad.system_connectivity import (
     TOPICS,
     base_row,
     enrich_firmware_row,
+    enrich_license_key_row,
     finalize_row,
     hpe_call_home_na_row,
     is_system_connectivity_eligible,
     parse_ds_firmware,
+    parse_ds_license_key,
     parse_ds_networkport_dns,
     parse_ds_showsp_call_home,
+    parse_hpe_showlicense,
     parse_hpe_shownet_dns_ntp,
     parse_hpe_showversion_firmware,
     parse_hpe_snmpmgr,
     parse_svc_call_home,
     parse_svc_dns,
     parse_svc_firmware_from_lssystem,
+    parse_svc_lsencryption,
     parse_svc_ntp_from_lssystem,
     parse_svc_snmp,
+    parse_svc_svqueryclock,
     topic_commands_for_profile,
     vendor_for_profile as system_connectivity_vendor,
 )
@@ -4321,6 +4326,9 @@ class HealthServer:
             return cmd
         if cmd.startswith("svcinfo ") or cmd.startswith("svctask "):
             return cmd
+        # svqueryclock is a standalone binary, not an svcinfo subcommand.
+        if cmd == "svqueryclock" or cmd.startswith("svqueryclock "):
+            return cmd
         return f"svcinfo {cmd}"
 
     @staticmethod
@@ -4399,7 +4407,7 @@ class HealthServer:
         identity: dict[str, Any],
         *,
         catalog: dict[str, list[str]] | None = None,
-    ) -> dict[str, dict[str, Any]]:
+    ) -> dict[str, Any]:
         run = self._lun_run_command(card)
         commands = topic_commands_for_profile(card.device_profile or "")
         profile = str(card.device_profile or "")
@@ -4474,6 +4482,38 @@ class HealthServer:
                 current="",
                 error=str(exc),
             )
+
+        try:
+            topic_cmds = list(commands.get("license_key") or [])
+            enc_out = ""
+            clock_out = ""
+            if topic_cmds:
+                enc_cmd = self._system_connectivity_svc_command(topic_cmds[0])
+                enc_out = run(enc_cmd) or ""
+                if len(topic_cmds) > 1:
+                    clock_cmd = self._system_connectivity_svc_command(topic_cmds[1])
+                    clock_out = run(clock_cmd) or ""
+            configured, status, details, encryption_licensed = parse_svc_lsencryption(
+                enc_out
+            )
+            date_s, time_s = parse_svc_svqueryclock(clock_out)
+            rows["license_key"] = enrich_license_key_row(
+                dict(identity),
+                configured=configured,
+                status=status,
+                details=details,
+                encryption_licensed=encryption_licensed,
+                date=date_s,
+                time=time_s,
+            )
+        except Exception as exc:
+            rows["license_key"] = enrich_license_key_row(
+                dict(identity),
+                configured="unknown",
+                status="error",
+                details="",
+                error=str(exc),
+            )
         return rows
 
     def _scan_system_connectivity_hpe_card(
@@ -4482,12 +4522,12 @@ class HealthServer:
         identity: dict[str, Any],
         *,
         catalog: dict[str, list[str]] | None = None,
-    ) -> dict[str, dict[str, Any]]:
-        shownet_out, snmp_out, version_out = run_ssh_auth_hpe_commands(
+    ) -> dict[str, Any]:
+        shownet_out, snmp_out, version_out, license_out = run_ssh_auth_hpe_commands(
             card.host,
             card.port,
             card.username,
-            ["shownet", "showsnmpmgr", "showversion"],
+            ["shownet", "showsnmpmgr", "showversion", "showlicense"],
             password=card.password,
             key_path=card.key_path,
             key_passphrase=card.key_passphrase,
@@ -4499,6 +4539,29 @@ class HealthServer:
             parse_hpe_showversion_firmware(version_out or "")
         )
         profile = str(card.device_profile or "")
+        license_features = parse_hpe_showlicense(license_out or "")
+        if license_features:
+            license_rows = [
+                enrich_license_key_row(
+                    dict(identity),
+                    configured="yes",
+                    status=str(feat.get("status") or "ok"),
+                    details=str(feat.get("details") or ""),
+                    key_generation_date=str(feat.get("key_generation_date") or ""),
+                    feature=str(feat.get("feature") or ""),
+                    expiration=str(feat.get("expiration") or ""),
+                )
+                for feat in license_features
+            ]
+        else:
+            license_rows = [
+                enrich_license_key_row(
+                    dict(identity),
+                    configured="unknown",
+                    status="",
+                    details="empty showlicense output",
+                )
+            ]
         return {
             "call_home": finalize_row(
                 dict(identity),
@@ -4533,6 +4596,7 @@ class HealthServer:
                 details=fw_details,
                 current=fw_current,
             ),
+            "license_key": license_rows,
         }
 
     def _scan_system_connectivity_ds_card(
@@ -4541,7 +4605,7 @@ class HealthServer:
         identity: dict[str, Any],
         *,
         catalog: dict[str, list[str]] | None = None,
-    ) -> dict[str, dict[str, Any]]:
+    ) -> dict[str, Any]:
         run = self._lun_run_command(card)
         commands = topic_commands_for_profile(card.device_profile or "")
         profile = str(card.device_profile or "")
@@ -4612,6 +4676,23 @@ class HealthServer:
                 current="",
                 error=str(exc),
             )
+
+        try:
+            configured, status, details = parse_ds_license_key()
+            rows["license_key"] = enrich_license_key_row(
+                dict(identity),
+                configured=configured,
+                status=status,
+                details=details,
+            )
+        except Exception as exc:
+            rows["license_key"] = enrich_license_key_row(
+                dict(identity),
+                configured="unknown",
+                status="error",
+                details="",
+                error=str(exc),
+            )
         return rows
 
     def scan_system_connectivity_live(
@@ -4673,16 +4754,30 @@ class HealthServer:
                         card, identity, catalog=catalog
                     )
                 for topic in TOPICS:
-                    topic_rows[topic].append(scanned[topic])
-                    if scanned[topic].get("error"):
-                        errors.append(
-                            {
-                                "card_id": card.card_id,
-                                "card_name": card.name,
-                                "topic": topic,
-                                "error": scanned[topic]["error"],
-                            }
-                        )
+                    value = scanned[topic]
+                    if topic == "license_key" and isinstance(value, list):
+                        topic_rows[topic].extend(value)
+                        for row in value:
+                            if row.get("error"):
+                                errors.append(
+                                    {
+                                        "card_id": card.card_id,
+                                        "card_name": card.name,
+                                        "topic": topic,
+                                        "error": row["error"],
+                                    }
+                                )
+                    else:
+                        topic_rows[topic].append(value)
+                        if value.get("error"):
+                            errors.append(
+                                {
+                                    "card_id": card.card_id,
+                                    "card_name": card.name,
+                                    "topic": topic,
+                                    "error": value["error"],
+                                }
+                            )
             except Exception as exc:
                 err = str(exc)
                 errors.append(
@@ -4713,6 +4808,16 @@ class HealthServer:
                                 configured="unknown",
                                 details="",
                                 current="",
+                                error=err,
+                            )
+                        )
+                    elif topic == "license_key":
+                        topic_rows[topic].append(
+                            enrich_license_key_row(
+                                dict(identity),
+                                configured="unknown",
+                                status="error",
+                                details="",
                                 error=err,
                             )
                         )
@@ -4769,15 +4874,24 @@ class HealthServer:
                     topic_rows["firmware"] = reenriched
 
         for topic in TOPICS:
-            topic_rows[topic].sort(
-                key=lambda row: (str(row.get("card_name") or "").lower(),)
-            )
+            if topic == "license_key":
+                topic_rows[topic].sort(
+                    key=lambda row: (
+                        str(row.get("card_name") or "").lower(),
+                        str(row.get("feature") or "").lower(),
+                    )
+                )
+            else:
+                topic_rows[topic].sort(
+                    key=lambda row: (str(row.get("card_name") or "").lower(),)
+                )
         payload: dict[str, Any] = {
             "call_home": topic_rows["call_home"],
             "dns": topic_rows["dns"],
             "snmp": topic_rows["snmp"],
             "ntp": topic_rows["ntp"],
             "firmware": topic_rows["firmware"],
+            "license_key": topic_rows["license_key"],
             "errors": errors,
         }
         if catalog_updates > 0:
@@ -4800,6 +4914,9 @@ class HealthServer:
                 "firmware": list(
                     self._system_connectivity_cache.get("firmware") or []
                 ),
+                "license_key": list(
+                    self._system_connectivity_cache.get("license_key") or []
+                ),
                 "errors": list(self._system_connectivity_cache.get("errors") or []),
             }
 
@@ -4811,6 +4928,7 @@ class HealthServer:
                 "snmp": list(payload.get("snmp") or []),
                 "ntp": list(payload.get("ntp") or []),
                 "firmware": list(payload.get("firmware") or []),
+                "license_key": list(payload.get("license_key") or []),
                 "errors": list(payload.get("errors") or []),
             }
 
