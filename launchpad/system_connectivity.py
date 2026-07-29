@@ -50,6 +50,18 @@ _DS_FIRMWARE_NA = (
     "Firmware not available via DSCLI on this path",
     "",
 )
+_SVC_CODE_LEVEL_BUILD_RE = re.compile(
+    r"\s*\([^)]*build[^)]*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def normalize_svc_code_level(code_level: str) -> str:
+    """Strip trailing ``(build …)``-style suffixes for display and catalog match."""
+    text = str(code_level or "").strip()
+    if not text:
+        return ""
+    return _SVC_CODE_LEVEL_BUILD_RE.sub("", text).strip()
 
 
 def vendor_for_profile(profile: str) -> str:
@@ -254,7 +266,8 @@ def parse_svc_firmware_from_lssystem(output: str) -> tuple[str, str, str, str]:
         return "unknown", "", "code_level not found", ""
     if not code_level:
         return "no", "empty", "no firmware version", ""
-    return "yes", "configured", f"code_level={code_level}", code_level
+    current = normalize_svc_code_level(code_level) or code_level
+    return "yes", "configured", f"code_level={current}", current
 
 
 def parse_hpe_showversion_firmware(output: str) -> tuple[str, str, str, str]:

@@ -4361,6 +4361,7 @@ class HealthServer:
         configured: str,
         details: str,
         current: str,
+        status: str = "",
         error: str = "",
     ) -> dict[str, Any]:
         return enrich_firmware_row(
@@ -4368,7 +4369,7 @@ class HealthServer:
             current=current,
             catalog=get_profile_catalog(catalog, profile),
             configured=configured,
-            status="error" if error else "",
+            status="error" if error else status,
             details=details,
             error=error,
         )
@@ -4423,7 +4424,7 @@ class HealthServer:
         try:
             topic_cmds = list(commands.get("firmware") or [])
             if not topic_cmds:
-                configured, _status, details, current = parse_svc_firmware_from_lssystem(
+                configured, status, details, current = parse_svc_firmware_from_lssystem(
                     ""
                 )
             else:
@@ -4432,7 +4433,7 @@ class HealthServer:
                     output = lssystem_output
                 else:
                     output = run(cmd) or ""
-                configured, _status, details, current = parse_svc_firmware_from_lssystem(
+                configured, status, details, current = parse_svc_firmware_from_lssystem(
                     output
                 )
             rows["firmware"] = self._enrich_scanned_firmware_row(
@@ -4440,6 +4441,7 @@ class HealthServer:
                 catalog=fw_catalog,
                 profile=profile,
                 configured=configured,
+                status=status,
                 details=details,
                 current=current,
             )
@@ -4474,7 +4476,7 @@ class HealthServer:
         ch_configured, ch_status, ch_details = hpe_call_home_na_row()
         net = parse_hpe_shownet_dns_ntp(shownet_out or "")
         snmp_configured, snmp_status, snmp_details = parse_hpe_snmpmgr(snmp_out or "")
-        fw_configured, _fw_status, fw_details, fw_current = (
+        fw_configured, fw_status, fw_details, fw_current = (
             parse_hpe_showversion_firmware(version_out or "")
         )
         profile = str(card.device_profile or "")
@@ -4508,6 +4510,7 @@ class HealthServer:
                 catalog=catalog or {},
                 profile=profile,
                 configured=fw_configured,
+                status=fw_status,
                 details=fw_details,
                 current=fw_current,
             ),
@@ -4570,12 +4573,13 @@ class HealthServer:
         )
         try:
             fw_out = _run_first("firmware")
-            configured, _status, details, current = parse_ds_firmware(fw_out)
+            configured, status, details, current = parse_ds_firmware(fw_out)
             rows["firmware"] = self._enrich_scanned_firmware_row(
                 identity,
                 catalog=fw_catalog,
                 profile=profile,
                 configured=configured,
+                status=status,
                 details=details,
                 current=current,
             )

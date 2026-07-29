@@ -550,7 +550,6 @@ class AdminView(ctk.CTkFrame):
             for profile, versions in load_firmware_catalog(self.db).items()
         }
         self._firmware_selected_index: int | None = None
-        self._firmware_list_buttons: list[ctk.CTkButton] = []
 
         ctk.CTkLabel(panel, text="Profile", text_color=self.theme["muted"]).grid(
             row=2, column=0, padx=20, pady=8, sticky="w"
@@ -672,7 +671,6 @@ class AdminView(ctk.CTkFrame):
     def _refresh_firmware_version_list(self) -> None:
         for child in self.firmware_list_frame.winfo_children():
             child.destroy()
-        self._firmware_list_buttons = []
         versions = self._firmware_versions_for_current()
         if self._firmware_selected_index is not None and (
             self._firmware_selected_index < 0 or self._firmware_selected_index >= len(versions)
@@ -690,7 +688,6 @@ class AdminView(ctk.CTkFrame):
                 command=lambda i=index: self._select_firmware_version(i),
             )
             btn.grid(row=index, column=0, sticky="ew", padx=4, pady=2)
-            self._firmware_list_buttons.append(btn)
 
     def _select_firmware_version(self, index: int) -> None:
         self._firmware_selected_index = index

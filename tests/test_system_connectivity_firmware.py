@@ -1,6 +1,7 @@
 from launchpad.system_connectivity import (
     base_row,
     enrich_firmware_row,
+    parse_ds_firmware,
     parse_hpe_showversion_firmware,
     parse_svc_firmware_from_lssystem,
     TOPICS,
@@ -16,8 +17,28 @@ def test_parse_svc_firmware_code_level():
     output = "id:1\nname:fs1\ncode_level:8.6.0.0 (build 152.24.2403051134)\n"
     configured, status, details, current = parse_svc_firmware_from_lssystem(output)
     assert configured == "yes"
-    assert current == "8.6.0.0 (build 152.24.2403051134)"
+    assert current == "8.6.0.0"
     assert "8.6.0.0" in details
+    assert "build" not in current
+
+
+def test_svc_normalized_current_matches_catalog():
+    output = "id:1\nname:fs1\ncode_level:8.6.0.0 (build 152.24.2403051134)\n"
+    configured, status, details, current = parse_svc_firmware_from_lssystem(output)
+    row = base_row(
+        card_name="SiteA", host="1.2.3.4", vendor="ibm", profile="flashsystem_7300"
+    )
+    out = enrich_firmware_row(
+        row,
+        current=current,
+        catalog=["8.6.0.0", "8.6.1.0"],
+        configured=configured,
+        status=status,
+        details=details,
+    )
+    assert out["current"] == "8.6.0.0"
+    assert out["latest"] == "8.6.1.0"
+    assert out["versions_behind"] == "1"
 
 
 def test_enrich_firmware_row_behind_count():
@@ -54,3 +75,22 @@ def test_parse_hpe_showversion_firmware():
     configured, status, details, current = parse_hpe_showversion_firmware(output)
     assert configured == "yes"
     assert current == "4.1.2"
+
+
+def test_ds_firmware_na_preserves_status():
+    configured, status, details, current = parse_ds_firmware("")
+    row = base_row(
+        card_name="DS1", host="1.2.3.4", vendor="ibm", profile="ibm_ds8884"
+    )
+    out = enrich_firmware_row(
+        row,
+        current=current,
+        catalog=[],
+        configured=configured,
+        status=status,
+        details=details,
+    )
+    assert configured == "n/a"
+    assert out["status"] == "n/a"
+    assert out["configured"] == "n/a"
+    assert out["current"] == ""
