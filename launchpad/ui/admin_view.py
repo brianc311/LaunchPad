@@ -29,6 +29,7 @@ from launchpad.firmware_catalog import (
     get_profile_catalog,
     load_firmware_auto_add,
     load_firmware_catalog,
+    merge_catalog_for_admin_save,
     save_firmware_auto_add,
     save_firmware_catalog,
 )
@@ -792,7 +793,15 @@ class AdminView(ctk.CTkFrame):
 
     def _firmware_catalog_save(self) -> None:
         self._stash_firmware_profile()
-        saved = save_firmware_catalog(self.db, self._firmware_catalog_map)
+        current = self._firmware_current_profile
+        current_list = (
+            list(get_profile_catalog(self._firmware_catalog_map, current)) if current else []
+        )
+        # Prefer DB (live auto-grow) for other profiles; overlay current profile UI edits.
+        to_save = merge_catalog_for_admin_save(
+            load_firmware_catalog(self.db), current, current_list
+        )
+        saved = save_firmware_catalog(self.db, to_save)
         self._firmware_catalog_map = {
             profile: list(versions) for profile, versions in saved.items()
         }

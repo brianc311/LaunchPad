@@ -60,6 +60,19 @@ def get_profile_catalog(catalog: dict[str, list[str]], profile: str) -> list[str
     return list(catalog.get(key) or [])
 
 
+def merge_catalog_for_admin_save(
+    db_catalog: dict[str, list[str]],
+    current_profile: str,
+    current_versions: list[str],
+) -> dict[str, list[str]]:
+    """Prefer DB catalog (includes live auto-grow); overlay current profile UI edits."""
+    merged = {profile: list(versions) for profile, versions in (db_catalog or {}).items()}
+    key = str(current_profile or "").strip().lower()
+    if key:
+        merged[key] = list(current_versions or [])
+    return merged
+
+
 def latest_in_catalog(versions: list[str]) -> str:
     return versions[-1] if versions else ""
 
