@@ -396,7 +396,7 @@ def _normalize_encryption_licensed(raw: str) -> str:
         return "no"
     if "not" in token and "licen" in token:
         return "no"
-    if "licen" in token or token == "enabled":
+    if "licen" in token:
         return "yes"
     return "unknown"
 

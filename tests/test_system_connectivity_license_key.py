@@ -49,8 +49,14 @@ def test_parse_svc_lsencryption_licensed():
     output = "status:licensed\nerror_sequence_number:\n"
     configured, status, details, enc = parse_svc_lsencryption(output)
     assert configured == "yes"
-    assert enc in ("yes", "licensed") or enc == "yes"
-    # Prefer normalized enc == "yes" for licensed/enabled
+    assert enc == "yes"
+
+
+def test_parse_svc_lsencryption_not_licensed():
+    output = "status:not_licensed\nencryption_licensed:no\n"
+    configured, status, details, enc = parse_svc_lsencryption(output)
+    assert configured == "no"
+    assert enc == "no"
 
 
 def test_parse_svc_svqueryclock():

@@ -4483,37 +4483,44 @@ class HealthServer:
                 error=str(exc),
             )
 
+        lk_configured = "unknown"
+        lk_status = ""
+        lk_details = ""
+        lk_encryption = "unknown"
+        lk_date = ""
+        lk_time = ""
+        lk_error = ""
+        topic_cmds = list(commands.get("license_key") or [])
         try:
-            topic_cmds = list(commands.get("license_key") or [])
             enc_out = ""
-            clock_out = ""
             if topic_cmds:
                 enc_cmd = self._system_connectivity_svc_command(topic_cmds[0])
                 enc_out = run(enc_cmd) or ""
-                if len(topic_cmds) > 1:
-                    clock_cmd = self._system_connectivity_svc_command(topic_cmds[1])
-                    clock_out = run(clock_cmd) or ""
-            configured, status, details, encryption_licensed = parse_svc_lsencryption(
-                enc_out
-            )
-            date_s, time_s = parse_svc_svqueryclock(clock_out)
-            rows["license_key"] = enrich_license_key_row(
-                dict(identity),
-                configured=configured,
-                status=status,
-                details=details,
-                encryption_licensed=encryption_licensed,
-                date=date_s,
-                time=time_s,
+            lk_configured, lk_status, lk_details, lk_encryption = (
+                parse_svc_lsencryption(enc_out)
             )
         except Exception as exc:
-            rows["license_key"] = enrich_license_key_row(
-                dict(identity),
-                configured="unknown",
-                status="error",
-                details="",
-                error=str(exc),
-            )
+            lk_error = str(exc)
+        if len(topic_cmds) > 1:
+            try:
+                clock_cmd = self._system_connectivity_svc_command(topic_cmds[1])
+                clock_out = run(clock_cmd) or ""
+                lk_date, lk_time = parse_svc_svqueryclock(clock_out)
+            except Exception as exc:
+                clock_note = f"svqueryclock failed: {exc}"
+                lk_details = f"{lk_details}; {clock_note}".strip("; ")
+                if not lk_error:
+                    lk_error = clock_note
+        rows["license_key"] = enrich_license_key_row(
+            dict(identity),
+            configured=lk_configured,
+            status=lk_status,
+            details=lk_details,
+            encryption_licensed=lk_encryption,
+            date=lk_date,
+            time=lk_time,
+            error=lk_error,
+        )
         return rows
 
     def _scan_system_connectivity_hpe_card(
