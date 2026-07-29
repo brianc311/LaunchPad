@@ -41,3 +41,33 @@ def test_fc_consistgrp_styles_content_links_for_dark_theme():
     html = FC_CONSISTGRP_HTML
     assert "a:not(.btn)" in html
     assert "#9ec1ff" in html
+
+
+def test_fc_consistgrp_manage_status_mode_toggle():
+    html = FC_CONSISTGRP_HTML
+    assert "Manage" in html
+    assert "Status" in html
+    assert 'data-mode="manage"' in html
+    assert 'data-mode="status"' in html
+    assert 'id="fc-manage-panel"' in html
+    assert 'id="fc-status-panel"' in html
+
+
+def test_fc_consistgrp_status_tabs_and_export():
+    html = FC_CONSISTGRP_HTML
+    assert "All" in html
+    assert "Idle or Copied" in html
+    assert "Stopped" in html
+    assert "Copying" in html
+    assert 'data-bucket="all"' in html
+    assert 'data-bucket="idle_or_copied"' in html
+    assert 'data-bucket="stopped"' in html
+    assert 'data-bucket="copying"' in html
+    assert "Export Excel" in html
+    assert "Refresh live" in html
+
+
+def test_fc_consistgrp_status_api_paths():
+    html = FC_CONSISTGRP_HTML
+    assert "/api/fc-consistgrp/status/live" in html
+    assert "/api/fc-consistgrp/status/export" in html

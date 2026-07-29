@@ -55,6 +55,12 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     .skipped { color:var(--muted); text-decoration:line-through; }
     .warning { margin:8px 0; padding:9px 10px; border-left:3px solid var(--danger); background:#32151a; color:#fecaca; }
     .footer { margin:20px 0 0; font-size:.85rem; }
+    .mode-toggle { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    .mode-btn.active { background:var(--accent); color:#111; border-color:var(--accent); }
+    .tabs { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+    .tab-btn { min-height:32px; padding:0 12px; border:1px solid var(--border); border-radius:999px; background:#0f141d; color:var(--text); font:inherit; font-weight:600; cursor:pointer; }
+    .tab-btn.active { background:var(--accent); color:#111; border-color:var(--accent); }
+    .errors { white-space:pre-wrap; color:var(--danger); margin-top:8px; font-size:.9rem; }
     @media (max-width:720px) { select { width:100%; } }
   </style>
 </head>
@@ -62,8 +68,12 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
   <main class="wrap">
     <section class="hero">
       <h1>FlashCopy Consistency Groups</h1>
-      <p class="lede">View and manage array-level FlashCopy Consistency Groups (create, assign, remove, start, delete) with Preview &rarr; Confirm &rarr; Run safety.</p>
-      <div class="picker">
+      <p class="lede">Manage array-level FlashCopy Consistency Groups (create, assign, remove, start, delete) with Preview &rarr; Confirm &rarr; Run, or scan Status across sites.</p>
+      <div class="mode-toggle" role="group" aria-label="Page mode">
+        <button type="button" class="secondary mode-btn active" data-mode="manage" id="mode-manage-btn">Manage</button>
+        <button type="button" class="secondary mode-btn" data-mode="status" id="mode-status-btn">Status</button>
+      </div>
+      <div class="picker" id="fc-manage-picker">
         <label for="card-select">Array
           <select id="card-select" aria-label="Array"><option value="">Loading arrays&hellip;</option></select>
         </label>
@@ -80,6 +90,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
+    <div id="fc-manage-panel">
     <section class="section">
       <div class="section-head"><h2>Consistency Groups</h2></div>
       <p class="hint" id="selected-group-hint">No group selected.</p>
@@ -116,6 +127,40 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
       <p class="hint">FlashCopy maps not currently in a consistency group. Select one or more, then assign to the CG selected above.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>Map</th><th>Source</th><th>Target</th><th>Size</th><th>Status</th></tr></thead><tbody id="standalone-maps-body"></tbody></table></div>
     </section>
+    </div>
+
+    <div id="fc-status-panel" hidden>
+      <section class="section">
+        <div class="section-head"><h2>CG Status</h2></div>
+        <div class="actions">
+          <label>Site
+            <select id="fc-status-site-select" aria-label="Status site filter"><option value="">None</option></select>
+          </label>
+          <button type="button" id="fc-status-refresh-btn">Refresh live</button>
+          <button type="button" class="secondary" id="fc-status-export-btn" disabled>Export Excel</button>
+          <span class="status" id="fc-status-msg" aria-live="polite">Pick a site (or None for all), then Refresh live.</span>
+        </div>
+        <div class="errors" id="fc-status-errors"></div>
+        <div class="tabs" role="tablist" aria-label="Status buckets">
+          <button type="button" class="tab-btn active" data-bucket="all">All</button>
+          <button type="button" class="tab-btn" data-bucket="idle_or_copied">Idle or Copied</button>
+          <button type="button" class="tab-btn" data-bucket="stopped">Stopped</button>
+          <button type="button" class="tab-btn" data-bucket="copying">Copying</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Site</th><th>Card</th><th>Host</th><th>CG name</th><th>Status</th><th>Maps</th><th>Flash time</th><th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="fc-status-body">
+              <tr><td colspan="8" class="empty">No data yet — click Refresh live.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
 
     <p class="footer">LaunchPad FlashCopy Consistency Groups v{{APP_VERSION}} &middot; mutations run only after Preview &rarr; Run confirmation.</p>
   </main>
@@ -147,6 +192,17 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     const modalTitle = document.getElementById("cg-modal-title");
     const modalContent = document.getElementById("cg-modal-content");
     const modalCloseBtn = document.getElementById("cg-modal-close");
+    const managePanel = document.getElementById("fc-manage-panel");
+    const managePicker = document.getElementById("fc-manage-picker");
+    const statusPanel = document.getElementById("fc-status-panel");
+    const modeManageBtn = document.getElementById("mode-manage-btn");
+    const modeStatusBtn = document.getElementById("mode-status-btn");
+    const statusSiteSelect = document.getElementById("fc-status-site-select");
+    const statusRefreshBtn = document.getElementById("fc-status-refresh-btn");
+    const statusExportBtn = document.getElementById("fc-status-export-btn");
+    const statusMsg = document.getElementById("fc-status-msg");
+    const statusErrors = document.getElementById("fc-status-errors");
+    const statusBody = document.getElementById("fc-status-body");
 
     let inventory = { groups: [], maps: [], stand_alone: [], card: null };
     let cardCatalog = [];
@@ -154,6 +210,10 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     const selectedMemberMaps = new Set();
     const selectedStandAloneMaps = new Set();
     let pending = null;
+    let pageMode = "manage";
+    let statusRows = [];
+    let statusBucket = "all";
+    let statusLoaded = false;
 
     function escapeHtml(value) {
       return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -523,6 +583,164 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
       runAction("delete_group", { group_name: selectedGroupName }, `Delete ${selectedGroupName}`);
     });
 
+    function setPageMode(mode) {
+      pageMode = mode === "status" ? "status" : "manage";
+      const isManage = pageMode === "manage";
+      managePanel.hidden = !isManage;
+      managePicker.hidden = !isManage;
+      statusPanel.hidden = isManage;
+      modeManageBtn.classList.toggle("active", isManage);
+      modeStatusBtn.classList.toggle("active", !isManage);
+      if (!isManage) loadStatusSiteOptions();
+    }
+
+    function filteredStatusRows() {
+      if (statusBucket === "all") return statusRows.slice();
+      return statusRows.filter((row) => String(row.bucket || "") === statusBucket);
+    }
+
+    function renderStatusErrors(errors) {
+      if (!errors || !errors.length) {
+        statusErrors.textContent = "";
+        return;
+      }
+      statusErrors.textContent = errors.map((entry) => (
+        (entry.card_name || entry.card_id || "Site") + ": " + (entry.error || "error")
+      )).join(String.fromCharCode(10));
+    }
+
+    function renderStatusTable() {
+      const rows = filteredStatusRows();
+      if (!statusLoaded) {
+        statusBody.innerHTML = '<tr><td colspan="8" class="empty">No data yet — click Refresh live.</td></tr>';
+        statusExportBtn.disabled = true;
+        return;
+      }
+      if (!rows.length) {
+        statusBody.innerHTML = '<tr><td colspan="8" class="empty">No consistency groups match this tab.</td></tr>';
+        statusExportBtn.disabled = statusRows.length === 0;
+        return;
+      }
+      statusBody.innerHTML = rows.map((row) => (
+        "<tr>"
+        + "<td>" + escapeHtml(row.site || "") + "</td>"
+        + "<td>" + escapeHtml(row.card_name || "") + "</td>"
+        + "<td>" + escapeHtml(row.host || "") + "</td>"
+        + "<td>" + escapeHtml(row.name || "") + "</td>"
+        + "<td>" + escapeHtml(row.status || "") + "</td>"
+        + "<td>" + escapeHtml(String(row.map_count ?? "")) + "</td>"
+        + "<td>" + escapeHtml(row.flash_time || "") + "</td>"
+        + "<td>" + escapeHtml(row.error || "") + "</td>"
+        + "</tr>"
+      )).join("");
+      statusExportBtn.disabled = false;
+    }
+
+    async function loadStatusSiteOptions() {
+      try {
+        const res = await fetch("/api/fc-consistgrp/cards");
+        const data = await res.json();
+        const cards = data.cards || [];
+        const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+        statusSiteSelect.innerHTML = '<option value="">None</option>' + sorted.map(
+          (card) => `<option value="${escapeAttr(card.id)}">${escapeHtml(card.name || card.id)}</option>`
+        ).join("");
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+
+    async function refreshStatusLive() {
+      statusRefreshBtn.disabled = true;
+      statusMsg.textContent = "Scanning live\u2026";
+      statusErrors.textContent = "";
+      const cardId = statusSiteSelect.value || "";
+      const url = "/api/fc-consistgrp/status/live" + (cardId ? ("?card_id=" + encodeURIComponent(cardId)) : "");
+      try {
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 403) {
+          statusMsg.textContent = data.error || "Unlock LaunchPad to refresh live.";
+          return;
+        }
+        if (!res.ok) {
+          statusMsg.textContent = data.error || ("Refresh failed (" + res.status + ")");
+          return;
+        }
+        statusRows = Array.isArray(data.rows) ? data.rows : [];
+        statusLoaded = true;
+        renderStatusErrors(data.errors || []);
+        renderStatusTable();
+        const errCount = (data.errors || []).length;
+        statusMsg.textContent = "Found " + statusRows.length + " CG(s)."
+          + (errCount ? (" " + errCount + " site error(s).") : "");
+      } catch (err) {
+        statusMsg.textContent = String(err && err.message ? err.message : err);
+      } finally {
+        statusRefreshBtn.disabled = false;
+      }
+    }
+
+    function statusExportUrl() {
+      const cardId = statusSiteSelect.value || "";
+      let url = "/api/fc-consistgrp/status/export?format=xlsx&bucket="
+        + encodeURIComponent(statusBucket) + "&open=1";
+      if (cardId) url += "&card_id=" + encodeURIComponent(cardId);
+      return url;
+    }
+
+    async function exportStatusExcel() {
+      statusExportBtn.disabled = true;
+      statusMsg.textContent = "Exporting Excel\u2026";
+      try {
+        const res = await fetch(statusExportUrl());
+        if (res.status === 404) {
+          const data = await res.json().catch(() => ({}));
+          statusMsg.textContent = data.error || "Refresh live before exporting.";
+          return;
+        }
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          statusMsg.textContent = data.error || ("Export failed (" + res.status + ")");
+          return;
+        }
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        const filename = match ? match[1] : "FC_CG_Status.xlsx";
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        statusMsg.textContent = "Export saved.";
+      } catch (err) {
+        statusMsg.textContent = String(err && err.message ? err.message : err);
+      } finally {
+        statusExportBtn.disabled = !statusLoaded || statusRows.length === 0;
+      }
+    }
+
+    modeManageBtn.addEventListener("click", () => setPageMode("manage"));
+    modeStatusBtn.addEventListener("click", () => setPageMode("status"));
+    statusRefreshBtn.addEventListener("click", refreshStatusLive);
+    statusExportBtn.addEventListener("click", exportStatusExcel);
+    statusSiteSelect.addEventListener("change", () => {
+      statusRows = [];
+      statusLoaded = false;
+      statusErrors.textContent = "";
+      renderStatusTable();
+      statusMsg.textContent = "Site changed — click Refresh live to scan again.";
+    });
+    statusPanel.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        statusBucket = btn.getAttribute("data-bucket") || "all";
+        statusPanel.querySelectorAll(".tab-btn").forEach((el) => el.classList.toggle("active", el === btn));
+        renderStatusTable();
+      });
+    });
+
+    setPageMode("manage");
     render();
     loadCards();
   </script>
