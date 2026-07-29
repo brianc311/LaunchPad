@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from launchpad.fc_consistgrp_ops import (
     ACTIONS,
     build_fc_consistgrp_steps,
@@ -5,6 +7,8 @@ from launchpad.fc_consistgrp_ops import (
     enrich_group_map_counts,
     enrich_maps_with_source_size,
     format_cg_total_size,
+    is_fc_consistgrp_status_eligible,
+    normalize_fc_cg_status_bucket,
     parse_lsfcconsistgrp,
     parse_lsfcmap_rows,
     partition_maps,
@@ -229,3 +233,71 @@ def test_sum_and_format_cg_total():
     assert sum_source_size_bytes(maps) == int(300 * (1024**3))
     total = format_cg_total_size(maps)
     assert total  # non-empty formatted string from _format_bytes
+
+
+def test_normalize_idle_or_copied_variants():
+    assert normalize_fc_cg_status_bucket("idle_or_copied") == "idle_or_copied"
+    assert normalize_fc_cg_status_bucket("Idle or Copied") == "idle_or_copied"
+
+
+def test_normalize_stopped_and_copying():
+    assert normalize_fc_cg_status_bucket("stopped") == "stopped"
+    assert normalize_fc_cg_status_bucket("Copying") == "copying"
+
+
+def test_normalize_unknown_empty():
+    assert normalize_fc_cg_status_bucket("weird_state") == ""
+    assert normalize_fc_cg_status_bucket("") == ""
+
+
+def _eligible_card(**overrides):
+    base = {
+        "monitor_on": True,
+        "card_type": "ssh",
+        "device_profile": "flashsystem_7200",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_status_eligible_monitor_on_svc_ssh():
+    assert is_fc_consistgrp_status_eligible(_eligible_card()) is True
+
+
+def test_status_eligible_rejects_monitor_off():
+    assert is_fc_consistgrp_status_eligible(_eligible_card(monitor_on=False)) is False
+
+
+def test_status_eligible_rejects_non_ssh():
+    assert is_fc_consistgrp_status_eligible(_eligible_card(card_type="web")) is False
+
+
+def test_status_eligible_rejects_hpe_profile():
+    assert (
+        is_fc_consistgrp_status_eligible(
+            _eligible_card(device_profile="hpe_3par_8450")
+        )
+        is False
+    )
+
+
+def test_status_eligible_accepts_object_card():
+    card = SimpleNamespace(
+        monitor_on=True,
+        card_type="ssh",
+        device_profile="flashsystem_7200",
+    )
+    assert is_fc_consistgrp_status_eligible(card) is True
+
+
+def test_parse_lsfcconsistgrp_flash_time_when_present():
+    sample = """id:name:status:flash_time:FC_mapping_count
+0:cg_with_flash:idle_or_copied:2026-07-29 120000:2
+"""
+    groups = parse_lsfcconsistgrp(sample)
+    assert groups[0]["flash_time"] == "2026-07-29 120000"
+
+
+def test_parse_lsfcconsistgrp_flash_time_blank_when_absent():
+    groups = parse_lsfcconsistgrp(CG_SAMPLE)
+    assert groups[0]["flash_time"] == ""

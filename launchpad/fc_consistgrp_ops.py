@@ -7,12 +7,48 @@ from collections.abc import Callable
 from launchpad.contingency_snap_create import SnapStep, cli_token
 from launchpad.flashsystem_fc import _get, _table_records, parse_lsvdisk_volumes
 from launchpad.flashsystem_parse import _format_bytes, _parse_size_bytes
+from launchpad.storage_presets import is_svc_fc_profile
 
 ACTIONS = frozenset(
     {"create_group", "assign_maps", "remove_maps", "start_group", "delete_group"}
 )
 
 _STANDALONE_CONSISTGRP = frozenset({"", "0", "no", "none"})
+
+_STATUS_BUCKET_ALIASES: dict[str, str] = {
+    "idle_or_copied": "idle_or_copied",
+    "idle or copied": "idle_or_copied",
+    "stopped": "stopped",
+    "copying": "copying",
+}
+
+
+def _card_field(card: dict | object, key: str, default: object = "") -> object:
+    if isinstance(card, dict):
+        return card.get(key, default)
+    return getattr(card, key, default)
+
+
+def normalize_fc_cg_status_bucket(status: str) -> str:
+    """Map raw lsfcconsistgrp status to a Status tab bucket, or empty when unknown."""
+    normalized = str(status or "").strip().lower().replace("_", " ")
+    normalized = " ".join(normalized.split())
+    key = normalized.replace(" ", "_")
+    if key in _STATUS_BUCKET_ALIASES:
+        return _STATUS_BUCKET_ALIASES[key]
+    if normalized in _STATUS_BUCKET_ALIASES:
+        return _STATUS_BUCKET_ALIASES[normalized]
+    return ""
+
+
+def is_fc_consistgrp_status_eligible(card: dict | object) -> bool:
+    """Return True for monitor-on SSH FlashSystem/SVC cards eligible for Status scan."""
+    if not bool(_card_field(card, "monitor_on")):
+        return False
+    if str(_card_field(card, "card_type") or "").lower() != "ssh":
+        return False
+    profile = str(_card_field(card, "device_profile") or "")
+    return is_svc_fc_profile(profile)
 
 
 def _normalize_map_count(value: str | int | None) -> str | int:
@@ -54,6 +90,7 @@ def parse_lsfcconsistgrp(output: str) -> list[dict]:
                     )
                 ),
                 "policy": format_cg_policy(record),
+                "flash_time": _get(record, "flash_time", "Flash_time", "flashTime"),
             }
         )
     return groups
