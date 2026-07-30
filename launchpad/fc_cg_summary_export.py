@@ -12,6 +12,7 @@ from openpyxl.utils import get_column_letter
 
 SUMMARY_HEADERS: tuple[str, ...] = (
     "Site",
+    "Host",
     "Name",
     "Status",
     "Flash time",
@@ -25,6 +26,7 @@ SUMMARY_HEADERS: tuple[str, ...] = (
 
 SUMMARY_FIELDS: tuple[str, ...] = (
     "site",
+    "host",
     "name",
     "status",
     "flash_time",

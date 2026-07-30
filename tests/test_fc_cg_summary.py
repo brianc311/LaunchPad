@@ -1,11 +1,31 @@
 from launchpad.fc_cg_summary import (
     build_cg_summaries,
+    compose_cg_policy_display,
     count_host_maps_for_targets,
     format_cg_policy,
     min_map_progress_pct,
     schedule_interval_days,
     snaps_per_week_from_days,
 )
+
+
+def test_compose_cg_policy_schedule_then_array():
+    assert compose_cg_policy_display(
+        array_policy="50 · enabled",
+        schedule={"label": "WEEKLY"},
+    ) == "WEEKLY · 50 · enabled"
+    assert compose_cg_policy_display(array_policy="", schedule={"label": "WEEKLY"}) == "WEEKLY"
+    assert compose_cg_policy_display(array_policy="50", schedule=None) == "50"
+    assert compose_cg_policy_display() == ""
+
+
+def test_build_cg_summaries_policy_includes_schedule_label():
+    groups = [{"name": "CG1", "status": "idle_or_copied", "policy": "50"}]
+    rows = build_cg_summaries(
+        groups=groups, maps=[], host_maps=[],
+        schedule={"days": 7, "held": False, "label": "WEEKLY"},
+    )
+    assert rows[0]["policy"] == "WEEKLY · 50"
 
 
 def test_format_cg_policy_joins_and_empty():

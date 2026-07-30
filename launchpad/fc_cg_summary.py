@@ -13,6 +13,21 @@ _POLICY_KEYS = (
 )
 
 
+def compose_cg_policy_display(
+    *, array_policy: str = "", schedule: dict | None = None
+) -> str:
+    """Combine Snapshot Schedule label with array CG policy text."""
+    parts: list[str] = []
+    if isinstance(schedule, dict):
+        label = str(schedule.get("label") or "").strip()
+        if label:
+            parts.append(label)
+    policy = str(array_policy or "").strip()
+    if policy:
+        parts.append(policy)
+    return " · ".join(parts)
+
+
 def format_cg_policy(record_fields: dict[str, str]) -> str:
     """Join non-empty known policy fields with middle-dot separators."""
     parts: list[str] = []
@@ -193,7 +208,10 @@ def build_cg_summaries(
                 "status": status,
                 "flash_time": str(group.get("flash_time") or ""),
                 "progress_pct": min_map_progress_pct(members, status=status),
-                "policy": group.get("policy") or "",
+                "policy": compose_cg_policy_display(
+                    array_policy=group.get("policy") or "",
+                    schedule=schedule,
+                ),
                 "fc_map_count": len(members),
                 "host_map_count": count_host_maps_for_targets(host_maps, targets),
                 "total_size": format_cg_total_size(members),
