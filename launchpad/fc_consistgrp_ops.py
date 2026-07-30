@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 from launchpad.contingency_snap_create import SnapStep, cli_token
@@ -66,6 +67,45 @@ def _normalize_map_count(value: str | int | None) -> str | int:
     return text
 
 
+def format_flash_time_display(raw: str) -> str:
+    """Format IBM FlashCopy timestamps for display (GUI-style US date/time).
+
+    Compact CLI values like ``260502060129`` (YYMMDDHHMMSS) become
+    ``5/2/2026 6:01:29 AM``. Already-readable strings are returned as-is when
+    they cannot be parsed as a 12- or 14-digit timestamp.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    digits = re.sub(r"\D", "", text)
+    try:
+        if len(digits) == 12:
+            year = 2000 + int(digits[0:2])
+            month = int(digits[2:4])
+            day = int(digits[4:6])
+            hour = int(digits[6:8])
+            minute = int(digits[8:10])
+            second = int(digits[10:12])
+        elif len(digits) == 14:
+            year = int(digits[0:4])
+            month = int(digits[4:6])
+            day = int(digits[6:8])
+            hour = int(digits[8:10])
+            minute = int(digits[10:12])
+            second = int(digits[12:14])
+        else:
+            return text
+        if not (1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23):
+            return text
+        if not (0 <= minute <= 59 and 0 <= second <= 59):
+            return text
+    except ValueError:
+        return text
+    hour12 = hour % 12 or 12
+    ampm = "AM" if hour < 12 else "PM"
+    return f"{month}/{day}/{year} {hour12}:{minute:02d}:{second:02d} {ampm}"
+
+
 def _is_standalone_consistgrp(consistgrp: str) -> bool:
     return (consistgrp or "").strip().lower() in _STANDALONE_CONSISTGRP
 
@@ -94,7 +134,9 @@ def parse_lsfcconsistgrp(output: str) -> list[dict]:
                     )
                 ),
                 "policy": format_cg_policy(record),
-                "flash_time": _get(record, "flash_time", "Flash_time", "flashTime"),
+                "flash_time": format_flash_time_display(
+                    _get(record, "flash_time", "Flash_time", "flashTime")
+                ),
             }
         )
     return groups
@@ -240,7 +282,7 @@ def format_cg_total_size(maps: list[dict]) -> str:
 def _flash_time_from_detail(output: str) -> str:
     """Extract flash/start time from detailed lsfcconsistgrp key:value output."""
     fields = _parse_key_values(output or "")
-    return (
+    return format_flash_time_display(
         str(fields.get("flash_time") or "").strip()
         or str(fields.get("Flash_time") or "").strip()
         or str(fields.get("start_time") or "").strip()
@@ -258,7 +300,8 @@ def _earliest_map_start_time(maps: list[dict], group_name: str) -> str:
             times.append(start)
     if not times:
         return ""
-    return min(times)
+    # Prefer chronological min on raw compact values, then format for display.
+    return format_flash_time_display(min(times))
 
 
 def enrich_groups_flash_time(
@@ -281,7 +324,7 @@ def enrich_groups_flash_time(
                     detail = run_cmd(f"svcinfo lsfcconsistgrp {cli_token(name)}")
                     flash = _flash_time_from_detail(detail)
                 if flash:
-                    group["flash_time"] = flash
+                    group["flash_time"] = format_flash_time_display(flash)
                     continue
             except Exception:
                 pass

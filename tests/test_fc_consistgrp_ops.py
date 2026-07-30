@@ -298,12 +298,21 @@ def test_parse_lsfcconsistgrp_flash_time_when_present():
 0:cg_with_flash:idle_or_copied:2026-07-29 120000:2
 """
     groups = parse_lsfcconsistgrp(sample)
-    assert groups[0]["flash_time"] == "2026-07-29 120000"
+    assert groups[0]["flash_time"] == "7/29/2026 12:00:00 PM"
 
 
 def test_parse_lsfcconsistgrp_flash_time_blank_when_absent():
     groups = parse_lsfcconsistgrp(CG_SAMPLE)
     assert groups[0]["flash_time"] == ""
+
+
+def test_format_flash_time_display_compact_yymmddhhmmss():
+    from launchpad.fc_consistgrp_ops import format_flash_time_display
+
+    assert format_flash_time_display("260502060129") == "5/2/2026 6:01:29 AM"
+    assert format_flash_time_display("260502050129") == "5/2/2026 5:01:29 AM"
+    assert format_flash_time_display("") == ""
+    assert format_flash_time_display("not-a-time") == "not-a-time"
 
 
 def test_enrich_groups_flash_time_from_detailed_view():
@@ -318,7 +327,7 @@ def test_enrich_groups_flash_time_from_detailed_view():
         return ""
 
     enrich_groups_flash_time(groups, maps, run_cmd)
-    assert groups[0]["flash_time"] == "210730:12:00:00"
+    assert groups[0]["flash_time"] == "7/30/2021 12:00:00 PM"
 
 
 def test_enrich_groups_flash_time_from_map_start_time():
@@ -330,7 +339,7 @@ def test_enrich_groups_flash_time_from_map_start_time():
         {"consistgrp": "CG1", "start_time": "210730120000"},
     ]
     enrich_groups_flash_time(groups, maps, run_cmd=None)
-    assert groups[0]["flash_time"] == "210730120000"
+    assert groups[0]["flash_time"] == "7/30/2021 12:00:00 PM"
 
 
 def test_parse_lsfcmap_rows_includes_start_time():

@@ -90,7 +90,7 @@ def test_build_cg_summaries_flash_time_and_min_progress_while_copying():
         {"name": "m3", "consistgrp": "other", "progress": "10", "source": "s3", "target": "t3"},
     ]
     rows = build_cg_summaries(groups=groups, maps=maps, host_maps=[], schedule=None)
-    assert rows[0]["flash_time"] == "2026-07-30 10:00:00"
+    assert rows[0]["flash_time"] == "7/30/2026 10:00:00 AM"
     assert rows[0]["progress_pct"] == 40
 
 

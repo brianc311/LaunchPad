@@ -46,6 +46,7 @@ from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
 from launchpad.fc_consistgrp_ops import (
     build_fc_consistgrp_steps,
     collect_fc_consistgrp_inventory,
+    format_flash_time_display,
     is_fc_consistgrp_status_eligible,
     normalize_fc_cg_status_bucket,
     partition_maps,
@@ -4423,7 +4424,9 @@ class HealthServer:
                             "name": str(group.get("name") or ""),
                             "status": status,
                             "map_count": group.get("map_count", 0),
-                            "flash_time": str(group.get("flash_time") or ""),
+                            "flash_time": format_flash_time_display(
+                                str(group.get("flash_time") or "")
+                            ),
                             "error": "",
                             "card_id": card.card_id,
                             "bucket": normalize_fc_cg_status_bucket(status),
