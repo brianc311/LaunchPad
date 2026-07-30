@@ -121,6 +121,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       <div class="section-head">
         <h2>Array FlashCopy CG summary</h2>
         <button type="button" id="fc-cg-summary-refresh" class="secondary">Refresh CG summary</button>
+        <button type="button" id="fc-cg-summary-export" class="secondary">Export Excel</button>
       </div>
       <p class="hint">Live FlashCopy Consistency Groups on the linked array (read-only). Manage membership on <a href="/fc-consistgrp">FlashCopy CGs</a>.</p>
       <div class="table-wrap">
@@ -840,7 +841,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       const summaryStatus = document.getElementById("fc-cg-summary-status");
       if (!currentId) {
         summaryStatus.textContent = "Select a group to refresh CG summary.";
-        return;
+        return false;
       }
       summaryStatus.textContent = "Loading FlashCopy CG summary…";
       try {
@@ -858,9 +859,23 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         summaryStatus.textContent = cardLabel
           ? `Loaded ${Array.isArray(data.summaries) ? data.summaries.length : 0} CG(s) from ${cardLabel}.`
           : `Loaded ${Array.isArray(data.summaries) ? data.summaries.length : 0} CG(s).`;
+        return true;
       } catch (error) {
         summaryStatus.textContent = `CG summary failed: ${error.message || error}`;
+        return false;
       }
+    }
+    async function exportFcCgSummary() {
+      const summaryStatus = document.getElementById("fc-cg-summary-status");
+      if (!currentId) {
+        summaryStatus.textContent = "Select a group to export CG summary.";
+        return;
+      }
+      const ok = await refreshFcCgSummary();
+      if (!ok) return;
+      window.location.assign(
+        `/api/contingency-groups/fc-cg-summary/export?group_id=${encodeURIComponent(currentId)}&format=xlsx&open=1`
+      );
     }
     async function syncFromArray() {
       if (!currentId) { statusEl.textContent = "Select a group to sync."; return; }
@@ -1008,6 +1023,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     });
     document.getElementById("sync-array-btn").addEventListener("click", syncFromArray);
     document.getElementById("fc-cg-summary-refresh").addEventListener("click", refreshFcCgSummary);
+    document.getElementById("fc-cg-summary-export").addEventListener("click", exportFcCgSummary);
     loadGroups();
   </script>
 </body>

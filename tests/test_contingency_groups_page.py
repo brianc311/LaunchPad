@@ -351,6 +351,21 @@ def test_contingency_groups_fc_cg_summary_refresh_calls_api():
     assert "refreshFcCgSummary" in sync
 
 
+def test_contingency_groups_fc_cg_summary_export_control():
+    html = CONTINGENCY_GROUPS_HTML
+    section = html.split('id="fc-cg-summary-section"', 1)[1].split(
+        'id="wizard-panel"', 1
+    )[0]
+    assert 'id="fc-cg-summary-export"' in section
+    assert "Export Excel" in section
+    assert section.index('id="fc-cg-summary-refresh"') < section.index(
+        'id="fc-cg-summary-export"'
+    )
+    assert "/api/contingency-groups/fc-cg-summary/export" in html
+    assert "format=xlsx" in html
+    assert "function exportFcCgSummary" in html or "exportFcCgSummary(" in html
+
+
 def test_contingency_groups_styles_content_links_for_dark_theme():
     html = CONTINGENCY_GROUPS_HTML
     assert "a:not(.btn)" in html
