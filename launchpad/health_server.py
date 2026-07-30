@@ -69,6 +69,10 @@ from launchpad.host_volume_health_page import (
     HOST_VOLUME_HEALTH_HTML,
     HOST_VOLUME_HEALTH_PATH,
 )
+from launchpad.snapcopy_summary_page import (
+    SNAPCOPY_SUMMARY_HTML,
+    SNAPCOPY_SUMMARY_PATH,
+)
 from launchpad.firmware_catalog import (
     get_profile_catalog,
     grow_catalog_from_currents,
@@ -2012,6 +2016,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == HOST_VOLUME_HEALTH_PATH:
             self._send_html(HOST_VOLUME_HEALTH_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
+        if path == SNAPCOPY_SUMMARY_PATH:
+            self._send_html(SNAPCOPY_SUMMARY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == SYSTEM_CONNECTIVITY_PATH:
             self._send_html(SYSTEM_CONNECTIVITY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
@@ -5655,6 +5662,10 @@ class HealthServer:
         return f"http://127.0.0.1:{self._port}{HOST_VOLUME_HEALTH_PATH}"
 
     @property
+    def snapcopy_summary_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{SNAPCOPY_SUMMARY_PATH}"
+
+    @property
     def system_connectivity_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{SYSTEM_CONNECTIVITY_PATH}"
 
@@ -5998,6 +6009,13 @@ class HealthServer:
         webbrowser.open(self.host_volume_health_url)
         _log(f"Opened Hosts & Volumes Health in browser: {self.host_volume_health_url}")
         return self.host_volume_health_url
+
+    def open_snapcopy_summary(self) -> str:
+        """Open the Snapcopy Summary page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.snapcopy_summary_url)
+        _log(f"Opened Snapcopy Summary in browser: {self.snapcopy_summary_url}")
+        return self.snapcopy_summary_url
 
     def open_system_connectivity(self) -> str:
         """Open the System Connectivity page in the default browser."""
