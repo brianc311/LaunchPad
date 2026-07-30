@@ -307,117 +307,14 @@ def test_contingency_groups_reads_and_writes_snap_assign_fields():
     assert "snap_assign_cg_name" in read_summary
 
 
-def test_contingency_groups_exposes_fc_cg_summary_section():
-    html = CONTINGENCY_GROUPS_HTML
-    assert 'id="fc-cg-summary-section"' in html
-    assert html.index("group-notes") < html.index('id="fc-cg-summary-section"')
-    assert html.index('id="fc-cg-summary-section"') < html.index('id="wizard-panel"')
-    section = html.split('id="fc-cg-summary-section"', 1)[1].split(
-        'id="wizard-panel"', 1
-    )[0]
-    for text in (
-        "Array FlashCopy CG summary",
-        'id="fc-cg-summary-site"',
-        'id="fc-cg-summary-refresh"',
-        "Refresh CG summary",
-        'href="/fc-consistgrp"',
-        "FlashCopy CGs",
-        'id="fc-cg-summary-select-all"',
-        "<th>Site</th>",
-        "<th>Name</th>",
-        "<th>Status</th>",
-        "<th>Flash time</th>",
-        "<th>Progress</th>",
-        "<th>Maps</th>",
-        "<th>Host maps</th>",
-        "<th>Size</th>",
-        "<th>Policy</th>",
-        "<th>Snaps/week</th>",
-        'colspan="11"',
-        'id="fc-cg-summary-body"',
-        'id="fc-cg-summary-status"',
-        "Click Refresh CG summary (Unlock required).",
-    ):
-        assert text in section
-    assert section.index("<th>Site</th>") < section.index("<th>Name</th>")
-    assert section.index("<th>Status</th>") < section.index("<th>Flash time</th>")
-    assert section.index("<th>Flash time</th>") < section.index("<th>Progress</th>")
-    assert section.index("<th>Progress</th>") < section.index("<th>Maps</th>")
+def test_contingency_has_snapcopy_summary_link():
+    assert 'href="/snapcopy-summary"' in CONTINGENCY_GROUPS_HTML
+    assert "Snapcopy Summary" in CONTINGENCY_GROUPS_HTML
 
 
-def test_contingency_groups_fc_cg_summary_site_select_loads_cards():
-    html = CONTINGENCY_GROUPS_HTML
-    loader = html.split("async function loadFcCgSummarySiteOptions(", 1)[1].split(
-        "\n    async function ", 1
-    )[0]
-    assert "/api/fc-consistgrp/cards" in loader or "/api/cards" in loader
-    assert 'getElementById("fc-cg-summary-site")' in html
-    assert "loadFcCgSummarySiteOptions" in html
-
-
-def test_contingency_groups_fc_cg_summary_render_uses_flash_time_and_progress():
-    render = CONTINGENCY_GROUPS_HTML.split("function renderFcCgSummaryRows(rows) {", 1)[
-        1
-    ].split("\n    async function ", 1)[0]
-    assert "flash_time" in render
-    assert "progress_pct" in render
-    assert "row.site" in render or "row.site ||" in render
-    assert "data-row-key" in render
-    assert "row_key" in render
-    assert 'colspan="11"' in render
-
-
-def test_contingency_groups_fc_cg_summary_select_all_checkbox():
-    html = CONTINGENCY_GROUPS_HTML
-    assert 'id="fc-cg-summary-select-all"' in html
-    assert "fc-cg-summary-select-all" in html
-    sync = html.split("function syncFcCgSummarySelectAll(", 1)[1].split(
-        "\n    async function ", 1
-    )[0]
-    assert "fc-cg-summary-row-cb" in sync or "data-row-key" in sync
-
-
-def test_contingency_groups_fc_cg_summary_refresh_calls_live_api():
-    html = CONTINGENCY_GROUPS_HTML
-    assert "async function refreshFcCgSummary(" in html
-    body = html.split("async function refreshFcCgSummary(", 1)[1].split(
-        "async function syncFromArray()", 1
-    )[0]
-    assert "/api/contingency-groups/fc-cg-summary/live" in body
-    assert "/api/contingency-groups/fc-cg-summary?group_id=" not in body
-    assert "currentId" not in body
-    assert "fc-cg-summary-site" in body
-    assert "sourceVolumeEntries" not in body
-    assert "At least one source volume" not in body
-    assert 'getElementById("fc-cg-summary-refresh")' in html
-    sync = html.split("async function syncFromArray() {", 1)[1].split(
-        "async function loadGroups()", 1
-    )[0]
-    assert "refreshFcCgSummary" in sync
-
-
-def test_contingency_groups_fc_cg_summary_export_control():
-    html = CONTINGENCY_GROUPS_HTML
-    section = html.split('id="fc-cg-summary-section"', 1)[1].split(
-        'id="wizard-panel"', 1
-    )[0]
-    assert 'id="fc-cg-summary-export"' in section
-    assert "Export Excel" in section
-    assert section.index('id="fc-cg-summary-refresh"') < section.index(
-        'id="fc-cg-summary-export"'
-    )
-    export_fn = html.split("async function exportFcCgSummary(", 1)[1].split(
-        "\n    async function ", 1
-    )[0]
-    keys_fn = html.split("function selectedFcCgSummaryKeys(", 1)[1].split(
-        "\n    async function ", 1
-    )[0]
-    assert "/api/contingency-groups/fc-cg-summary/export-selected" in export_fn
-    assert '"selected"' in export_fn or "'selected'" in export_fn or "{ selected" in export_fn
-    assert "data-row-key" in keys_fn
-    assert "Select at least one" in export_fn or "at least one" in export_fn.lower()
-    assert "response.blob()" in export_fn or "res.blob()" in export_fn
-    assert "function exportFcCgSummary" in html or "exportFcCgSummary(" in html
+def test_contingency_no_embedded_fc_cg_summary():
+    assert 'id="fc-cg-summary-section"' not in CONTINGENCY_GROUPS_HTML
+    assert 'id="fc-cg-summary-refresh"' not in CONTINGENCY_GROUPS_HTML
 
 
 def test_contingency_groups_styles_content_links_for_dark_theme():
