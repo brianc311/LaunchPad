@@ -156,6 +156,7 @@ from launchpad.storage_presets import (
     DEVICE_PROFILES,
     HPE_SHELL_PROFILES,
     SVC_PROFILES,
+    is_svc_fc_profile,
 )
 from launchpad.volume_find import (
     anderson_rename_plan,
@@ -4500,6 +4501,8 @@ class HealthServer:
         cards = self.list_cards(allow_sync=False)
         rows: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        skipped_monitor_off: list[str] = []
+        eligible = 0
         for card_dict in cards:
             current_id = card_dict.get("id")
             if current_id is None:
@@ -4510,10 +4513,24 @@ class HealthServer:
             eligible_card = dict(card_dict)
             eligible_card["monitor_on"] = monitor_on
             if not is_fc_consistgrp_status_eligible(eligible_card):
+                profile = str(card_dict.get("device_profile") or "")
+                if (
+                    not monitor_on
+                    and str(card_dict.get("card_type") or "ssh").lower() == "ssh"
+                    and is_svc_fc_profile(profile)
+                ):
+                    card_obj = self._cards.get(int(current_id))
+                    card_name = str(
+                        card_dict.get("name")
+                        or (card_obj.name if card_obj is not None else "")
+                        or current_id
+                    ).strip()
+                    skipped_monitor_off.append(card_name or str(current_id))
                 continue
             card = self._cards.get(int(current_id))
             if card is None:
                 continue
+            eligible += 1
             site = str(card.name or "").strip() or "Unknown"
             try:
                 inventory = self.fc_consistgrp_inventory(int(current_id))
@@ -4564,7 +4581,12 @@ class HealthServer:
                 str(row.get("name") or "").lower(),
             )
         )
-        payload = {"rows": rows, "errors": errors}
+        payload = {
+            "rows": rows,
+            "errors": errors,
+            "eligible": eligible,
+            "skipped_monitor_off": skipped_monitor_off,
+        }
         with self._lock:
             self._fc_cg_summary_live_cache = payload
         return payload

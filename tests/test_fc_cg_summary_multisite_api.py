@@ -88,6 +88,8 @@ def test_live_scan_happy_path_mocked_inventory(monkeypatch):
 
     result = server.scan_fc_cg_summary_live()
     assert result["errors"] == []
+    assert result["eligible"] == 2
+    assert result["skipped_monitor_off"] == []
     assert len(result["rows"]) == 3
     by_key = {row["row_key"]: row for row in result["rows"]}
     hartford = by_key["1:AWD1_FC"]
@@ -223,6 +225,25 @@ def test_export_selected_unknown_keys_raise():
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "matching" in str(exc).lower()
+
+
+def test_live_scan_reports_monitor_off_when_no_eligible(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    server._cards[1] = _svc_card(1, "Pendergrass, GA", "10.0.0.9", category="General")
+    server.set_monitor_enabled(card_id=1, enabled=False)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    def fake_inventory(card_id: int, *, include_summaries: bool = True):
+        raise AssertionError("inventory should not run for monitor-off cards")
+
+    monkeypatch.setattr(server, "fc_consistgrp_inventory", fake_inventory)
+
+    result = server.scan_fc_cg_summary_live()
+    assert result["rows"] == []
+    assert result["errors"] == []
+    assert result["eligible"] == 0
+    assert result["skipped_monitor_off"] == ["Pendergrass, GA"]
 
 
 def test_api_fc_cg_summary_multisite_routes_declared():
