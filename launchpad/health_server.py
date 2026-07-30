@@ -51,7 +51,10 @@ from launchpad.fc_consistgrp_ops import (
     partition_maps,
     preview_ok as fc_consistgrp_preview_ok,
 )
-from launchpad.fc_cg_summary_export import export_fc_cg_summary_xlsx
+from launchpad.fc_cg_summary_export import (
+    export_fc_cg_summary_multisite_xlsx,
+    export_fc_cg_summary_xlsx,
+)
 from launchpad.fc_consistgrp_status_export import (
     export_fc_consistgrp_status_xlsx,
     filter_status_rows,
@@ -2102,6 +2105,23 @@ class _HealthHandler(BaseHTTPRequestHandler):
             result = server.fc_consistgrp_inventory(card_id)
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path == "/api/contingency-groups/fc-cg-summary/live":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            try:
+                payload = server.scan_fc_cg_summary_live(card_id=card_id)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
         if path == "/api/contingency-groups/fc-cg-summary":
             query = parse_qs(parsed.query)
             group_id = (query.get("group_id") or [""])[0].strip()
@@ -3148,6 +3168,53 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({"ok": True, **result})
             return
+        if path == "/api/contingency-groups/fc-cg-summary/export-selected":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            selected = payload.get("selected")
+            if not isinstance(selected, list):
+                self._send_json({"error": "selected must be a list"}, status=400)
+                return
+            open_after = bool(payload.get("open"))
+            try:
+                body, filename, content_type = server.export_fc_cg_summary_selected_bytes(
+                    selected=[str(item) for item in selected],
+                    open_after=open_after,
+                )
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"FlashCopy CG multi-site summary export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "FlashCopy CG multi-site summary export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
         if not path.startswith("/api/refresh/"):
             self.send_error(404)
             return
@@ -3207,6 +3274,7 @@ class HealthServer:
         self._host_volume_health_cache: dict[str, Any] | None = None
         self._system_connectivity_cache: dict[str, Any] | None = None
         self._fc_consistgrp_status_cache: dict[str, Any] | None = None
+        self._fc_cg_summary_live_cache: dict[str, Any] | None = None
 
     def set_sync_provider(self, provider: Callable[[], int] | None) -> None:
         with self._lock:
@@ -4411,6 +4479,129 @@ class HealthServer:
         return (
             body,
             f"FC_CG_Status_{stamp}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    def scan_fc_cg_summary_live(
+        self, *, card_id: int | None = None
+    ) -> dict[str, Any]:
+        if not self.is_unlocked():
+            raise RuntimeError(
+                "LaunchPad must be unlocked to refresh FlashCopy CG summary live."
+            )
+        self.sync_from_app()
+        cards = self.list_cards(allow_sync=False)
+        rows: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = self.is_monitor_enabled(int(current_id))
+            eligible_card = dict(card_dict)
+            eligible_card["monitor_on"] = monitor_on
+            if not is_fc_consistgrp_status_eligible(eligible_card):
+                continue
+            card = self._cards.get(int(current_id))
+            if card is None:
+                continue
+            site = str(card.category or "").strip() or card.name
+            try:
+                inventory = self.fc_consistgrp_inventory(int(current_id))
+                if not inventory.get("ok"):
+                    warnings = [
+                        str(w) for w in (inventory.get("warnings") or []) if w
+                    ]
+                    errors.append(
+                        {
+                            "card_id": card.card_id,
+                            "card_name": card.name,
+                            "error": "; ".join(warnings) or "inventory failed",
+                        }
+                    )
+                    continue
+                for summary in inventory.get("summaries") or []:
+                    name = str(summary.get("name") or "")
+                    rows.append(
+                        {
+                            "site": site,
+                            "card_name": card.name,
+                            "host": str(card.host or ""),
+                            "card_id": card.card_id,
+                            "name": name,
+                            "status": str(summary.get("status") or ""),
+                            "flash_time": str(summary.get("flash_time") or ""),
+                            "progress_pct": summary.get("progress_pct"),
+                            "fc_map_count": summary.get("fc_map_count", 0),
+                            "host_map_count": summary.get("host_map_count", 0),
+                            "total_size": str(summary.get("total_size") or ""),
+                            "policy": str(summary.get("policy") or ""),
+                            "snaps_per_week": summary.get("snaps_per_week"),
+                            "row_key": f"{card.card_id}:{name}",
+                        }
+                    )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "card_id": card.card_id,
+                        "card_name": card.name,
+                        "error": str(exc),
+                    }
+                )
+        rows.sort(
+            key=lambda row: (
+                str(row.get("site") or "").lower(),
+                str(row.get("card_name") or "").lower(),
+                str(row.get("name") or "").lower(),
+            )
+        )
+        payload = {"rows": rows, "errors": errors}
+        with self._lock:
+            self._fc_cg_summary_live_cache = payload
+        return payload
+
+    def get_fc_cg_summary_live_cache(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._fc_cg_summary_live_cache is None:
+                return None
+            return {
+                "rows": list(self._fc_cg_summary_live_cache.get("rows") or []),
+                "errors": list(self._fc_cg_summary_live_cache.get("errors") or []),
+            }
+
+    def set_fc_cg_summary_live_cache(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._fc_cg_summary_live_cache = {
+                "rows": list(payload.get("rows") or []),
+                "errors": list(payload.get("errors") or []),
+            }
+
+    def export_fc_cg_summary_selected_bytes(
+        self,
+        *,
+        selected: list[str],
+        open_after: bool = False,
+    ) -> tuple[bytes, str, str]:
+        del open_after
+        if not selected:
+            raise ValueError("At least one row must be selected.")
+        with self._lock:
+            cached = self._fc_cg_summary_live_cache
+        if cached is None:
+            raise LookupError("Refresh CG summary before exporting.")
+        selected_set = set(selected)
+        rows = [
+            row
+            for row in (cached.get("rows") or [])
+            if row.get("row_key") in selected_set
+        ]
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        body = export_fc_cg_summary_multisite_xlsx(rows)
+        return (
+            body,
+            f"FC_CG_Summary_MultiSite_{stamp}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
