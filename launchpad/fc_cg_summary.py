@@ -99,6 +99,35 @@ def _member_maps_for_group(maps: list[dict], group_name: str) -> list[dict]:
     return members
 
 
+def _parse_map_progress(raw: object) -> float | int | None:
+    text = str(raw or "").strip()
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    if value == int(value):
+        return int(value)
+    return value
+
+
+def min_map_progress_pct(maps: list[dict], *, status: str) -> float | int | None:
+    """Return minimum parseable member progress while status is copying."""
+    if str(status or "").strip().lower() != "copying":
+        return None
+    values: list[float | int] = []
+    for mapping in maps:
+        parsed = _parse_map_progress(mapping.get("progress"))
+        if parsed is not None:
+            values.append(parsed)
+    if not values:
+        return None
+    return min(values)
+
+
 def _target_volumes(maps: list[dict]) -> set[str]:
     targets: set[str] = set()
     for mapping in maps:
@@ -144,10 +173,13 @@ def build_cg_summaries(
         members = _member_maps_for_group(maps, name)
         targets = _target_volumes(members)
         snaps_per_week, snaps_source = _resolve_snaps(group, schedule)
+        status = str(group.get("status") or "")
         rows.append(
             {
                 "name": name,
-                "status": group.get("status") or "",
+                "status": status,
+                "flash_time": str(group.get("flash_time") or ""),
+                "progress_pct": min_map_progress_pct(members, status=status),
                 "policy": group.get("policy") or "",
                 "fc_map_count": len(members),
                 "host_map_count": count_host_maps_for_targets(host_maps, targets),

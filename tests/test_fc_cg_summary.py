@@ -2,6 +2,7 @@ from launchpad.fc_cg_summary import (
     build_cg_summaries,
     count_host_maps_for_targets,
     format_cg_policy,
+    min_map_progress_pct,
     schedule_interval_days,
     snaps_per_week_from_days,
 )
@@ -52,3 +53,44 @@ def test_build_cg_summaries_schedule_fallback():
     assert rows[0]["host_map_count"] == 1
     assert rows[0]["snaps_per_week"] == 1.0
     assert rows[0]["snaps_source"] == "schedule"
+
+
+def test_build_cg_summaries_flash_time_and_min_progress_while_copying():
+    groups = [
+        {
+            "name": "CG1",
+            "status": "copying",
+            "policy": "",
+            "flash_time": "2026-07-30 10:00:00",
+        }
+    ]
+    maps = [
+        {"name": "m1", "consistgrp": "CG1", "progress": "80%", "source": "s", "target": "t"},
+        {"name": "m2", "consistgrp": "CG1", "progress": "40", "source": "s2", "target": "t2"},
+        {"name": "m3", "consistgrp": "other", "progress": "10", "source": "s3", "target": "t3"},
+    ]
+    rows = build_cg_summaries(groups=groups, maps=maps, host_maps=[], schedule=None)
+    assert rows[0]["flash_time"] == "2026-07-30 10:00:00"
+    assert rows[0]["progress_pct"] == 40
+
+
+def test_build_cg_summaries_progress_none_when_not_copying():
+    groups = [{"name": "CG1", "status": "idle_or_copied", "flash_time": "x"}]
+    maps = [{"name": "m1", "consistgrp": "CG1", "progress": "90", "source": "s", "target": "t"}]
+    rows = build_cg_summaries(groups=groups, maps=maps, host_maps=[], schedule=None)
+    assert rows[0]["progress_pct"] is None
+
+
+def test_min_map_progress_pct_ignores_non_numeric():
+    maps = [
+        {"progress": "50%"},
+        {"progress": "n/a"},
+        {"progress": "30"},
+    ]
+    assert min_map_progress_pct(maps, status="copying") == 30
+
+
+def test_min_map_progress_pct_copying_case_insensitive():
+    maps = [{"progress": "75"}]
+    assert min_map_progress_pct(maps, status="COPYING") == 75
+    assert min_map_progress_pct(maps, status="Copying") == 75
