@@ -489,6 +489,11 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
       gap: 4px;
     }
     .cal-cell.other { opacity: 0.35; }
+    .cal-cell.completed {
+      background: #16a34a;
+      border-color: #15803d;
+    }
+    .cal-cell.completed .cal-daynum { color: #ecfdf5; }
     .cal-cell.today {
       border-color: rgba(96, 165, 250, 0.7);
       box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.25);
@@ -597,6 +602,17 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
     .mini-day.snap {
       color: #0b0f14;
       font-weight: 700;
+      cursor: pointer;
+    }
+    .mini-day.snap:hover {
+      filter: brightness(1.08);
+    }
+    .mini-day.completed {
+      background: #16a34a !important;
+      color: #ecfdf5;
+      font-weight: 700;
+      cursor: pointer;
+      border-color: #15803d;
     }
     .mini-day.oneoff {
       outline: 2px solid #38bdf8;
@@ -693,7 +709,8 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         <div class="cal-grid" id="overall-calendar"></div>
         <div class="cal-legend" id="cal-legend"></div>
         <p class="cal-hint">
-          Color dots mark planned snapshot days. Orange = held back (flagged). Green → amber = scheduled,
+          Color dots mark planned snapshot days. Solid green = completed / done (click a site calendar day to toggle).
+          Orange = held back (flagged). Green → amber = scheduled,
           warmer colors mean fuller capacity / less frequent snapshots.
         </p>
       </div>
@@ -911,6 +928,7 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
                 start_date: "",
                 time: "02:00",
                 one_offs: [],
+                completed_dates: [],
               },
             }),
           });
@@ -934,7 +952,11 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
           start_date: "",
           time: "02:00",
           one_offs: [],
+          completed_dates: [],
         };
+      }
+      if (!Array.isArray(overridesCache[key].completed_dates)) {
+        overridesCache[key].completed_dates = [];
       }
       return overridesCache[key];
     }
@@ -1359,6 +1381,10 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
       const { first, last, gridStart, gridEnd } = monthBounds(monthDate);
       const events = scheduleEventsInRange(row, gridStart, gridEnd);
       const eventsByDate = Object.fromEntries(events.map((event) => [dateKey(event.date), event]));
+      const cardId = String(row.card.id);
+      const completedSet = new Set(
+        ((getOverride(cardId) || {}).completed_dates || []).map(String)
+      );
       const monthLabel = monthDate.toLocaleDateString("en-US", { month: "short", year: "numeric" });
       let cells = DOW.map((d) => `<div class="mini-dow">${d[0]}</div>`).join("");
       let cursor = new Date(gridStart.getTime());
@@ -1370,19 +1396,24 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         if (other) cls += " other";
         if (isToday) cls += " today";
         let style = "";
+        let toggleAttrs = "";
         if (row.held) {
           if (!other && cursor.getDate() === today.getDate() && sameDay(cursor, today)) {
             cls += " hold-mark";
           }
         } else if (eventsByDate[key]) {
           const event = eventsByDate[key];
-          cls += " snap";
+          const isCompleted = completedSet.has(key);
+          cls += isCompleted ? " completed" : " snap";
           if (event.kind === "oneoff") cls += " oneoff";
-          style = ` style="background:${row.color};"`;
+          if (!isCompleted) style = ` style="background:${row.color};"`;
+          toggleAttrs = ` data-card-id="${escapeHtml(cardId)}" data-date="${escapeHtml(key)}" role="button" tabindex="0"`;
         }
         const event = eventsByDate[key];
-        const title = event ? ` title="${escapeHtml(eventTooltip(row, event))}"` : "";
-        cells += `<div class="${cls}"${style}${title}>${cursor.getDate()}</div>`;
+        let titleText = event ? eventTooltip(row, event) : "";
+        if (event && completedSet.has(key)) titleText = `${titleText} · completed`;
+        const title = titleText ? ` title="${escapeHtml(titleText)}"` : "";
+        cells += `<div class="${cls}"${style}${toggleAttrs}${title}>${cursor.getDate()}</div>`;
         cursor = addDays(cursor, 1);
       }
       const caption = row.held
@@ -1421,6 +1452,10 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         const other = cursor.getMonth() !== first.getMonth();
         const isToday = sameDay(cursor, today);
         const events = byDay[key] || [];
+        const anyCompleted = events.some(({ row }) => {
+          const dates = ((getOverride(row.card.id) || {}).completed_dates || []).map(String);
+          return dates.includes(key);
+        });
         const shown = events.slice(0, 3);
         const extra = events.length - shown.length;
         const chips = shown
@@ -1431,7 +1466,7 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
           .join("");
         const moreChip = extra > 0 ? `<span class="cal-chip more">+${extra}</span>` : "";
         html += `
-          <div class="cal-cell${other ? " other" : ""}${isToday ? " today" : ""}">
+          <div class="cal-cell${other ? " other" : ""}${isToday ? " today" : ""}${anyCompleted ? " completed" : ""}">
             <div class="cal-daynum">${cursor.getDate()}</div>
             <div class="cal-chips">${chips}${moreChip}</div>
           </div>
@@ -1619,6 +1654,43 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
       render();
     }
 
+    function toggleCompletedDate(cardId, dateStr) {
+      const key = String(dateStr || "");
+      if (!validDate(key)) return;
+      const override = ensureOverride(cardId);
+      const dates = Array.isArray(override.completed_dates)
+        ? override.completed_dates.map(String)
+        : [];
+      const idx = dates.indexOf(key);
+      if (idx >= 0) dates.splice(idx, 1);
+      else dates.push(key);
+      dates.sort();
+      override.completed_dates = dates;
+      persistOverride(cardId);
+      render();
+    }
+
+    function pruneCompletedForRows(rows) {
+      const today = startOfDay(new Date());
+      const rangeStart = addDays(today, -400);
+      const rangeEnd = addDays(today, 800);
+      for (const row of rows) {
+        if (row.held || row.noData) continue;
+        const cardId = String(row.card.id);
+        const ov = getOverride(cardId);
+        if (!ov || !Array.isArray(ov.completed_dates) || !ov.completed_dates.length) continue;
+        const planned = new Set(
+          scheduleEventsInRange(row, rangeStart, rangeEnd).map((event) => dateKey(event.date))
+        );
+        const next = ov.completed_dates.map(String).filter((d) => planned.has(d)).sort();
+        const prev = ov.completed_dates.map(String).slice().sort();
+        if (next.join(",") !== prev.join(",")) {
+          ov.completed_dates = next;
+          persistOverride(cardId);
+        }
+      }
+    }
+
     function updateCustomSchedule(cardId) {
       const cardEl = document.querySelector(`.card[data-card-id="${cardId}"]`);
       if (!cardEl) return;
@@ -1727,6 +1799,18 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
           );
         });
       });
+      document.querySelectorAll(".mini-day[data-date][data-card-id]").forEach((dayEl) => {
+        const activate = () => {
+          toggleCompletedDate(dayEl.getAttribute("data-card-id"), dayEl.getAttribute("data-date"));
+        };
+        dayEl.addEventListener("click", activate);
+        dayEl.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activate();
+          }
+        });
+      });
     }
 
     function setAllCardCalendarsCollapsed(collapsed) {
@@ -1755,6 +1839,7 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
 
       const rows = buildRows(threshold);
       lastRows = rows;
+      pruneCompletedForRows(rows);
       const flagged = rows.filter((r) => r.held && !r.noData);
       const scheduled = rows.filter((r) => !r.held && !r.noData);
       const pending = rows.filter((r) => r.noData);
