@@ -4597,6 +4597,8 @@ class HealthServer:
             for row in (cached.get("rows") or [])
             if row.get("row_key") in selected_set
         ]
+        if not rows:
+            raise ValueError("No matching rows for the selected keys.")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         body = export_fc_cg_summary_multisite_xlsx(rows)
         return (

@@ -186,6 +186,42 @@ def test_export_selected_empty_selection_raises():
         assert "select" in str(exc).lower()
 
 
+def test_export_selected_unknown_keys_raise():
+    server = HealthServer()
+    _unlock(server)
+    server.set_fc_cg_summary_live_cache(
+        {
+            "rows": [
+                {
+                    "site": "Hartford",
+                    "card_name": "Hartford",
+                    "host": "10.0.0.1",
+                    "card_id": 1,
+                    "name": "AWD1_FC",
+                    "status": "idle_or_copied",
+                    "flash_time": "",
+                    "progress_pct": None,
+                    "fc_map_count": 1,
+                    "host_map_count": 1,
+                    "total_size": "1 GB",
+                    "policy": "",
+                    "snaps_per_week": 1,
+                    "row_key": "1:AWD1_FC",
+                }
+            ],
+            "errors": [],
+        }
+    )
+    try:
+        server.export_fc_cg_summary_selected_bytes(
+            selected=["99:MISSING"],
+            open_after=False,
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "matching" in str(exc).lower()
+
+
 def test_api_fc_cg_summary_multisite_routes_declared():
     get_src = inspect.getsource(_HealthHandler.do_GET)
     post_src = inspect.getsource(_HealthHandler.do_POST)
