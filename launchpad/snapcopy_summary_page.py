@@ -219,44 +219,98 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
       }
     }
 
+    function isSnapcopyEligibleCard(card) {
+      const typeOk = String(card.card_type || "ssh").toLowerCase() === "ssh";
+      return typeOk && !!card.monitor_on;
+    }
+
+    async function scanOneCard(cardId, reset) {
+      const url = "/api/contingency-groups/fc-cg-summary/live?card_id="
+        + encodeURIComponent(cardId)
+        + (reset ? "&reset=1" : "");
+      const response = await fetch(url);
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    }
+
     async function refreshSummary() {
-      statusEl.textContent = "Loading FlashCopy CG summary…";
-      const cardId = siteSelectEl && siteSelectEl.value ? siteSelectEl.value : "";
-      const url = "/api/contingency-groups/fc-cg-summary/live"
-        + (cardId ? ("?card_id=" + encodeURIComponent(cardId)) : "");
+      refreshBtn.disabled = true;
       try {
-        const response = await fetch(url);
-        const data = await response.json().catch(() => ({}));
-        if (response.status === 403) {
-          statusEl.textContent = data.error || "Unlock LaunchPad to refresh CG summary.";
-          return false;
+        const selectedId = siteSelectEl && siteSelectEl.value ? siteSelectEl.value : "";
+        let cards = [];
+        try {
+          const cardsRes = await fetch("/api/fc-consistgrp/cards");
+          const cardsData = await cardsRes.json();
+          cards = Array.isArray(cardsData.cards) ? cardsData.cards : [];
+        } catch (_err) {
+          cards = [];
         }
-        if (!response.ok) {
-          statusEl.textContent = data.error || ("CG summary failed (HTTP " + response.status + ")");
-          return false;
-        }
-        snapcopyRows = Array.isArray(data.rows) ? data.rows : [];
-        snapcopyLoaded = true;
-        renderRows(snapcopyRows);
-        const errCount = (data.errors || []).length;
-        const skipped = Array.isArray(data.skipped_monitor_off) ? data.skipped_monitor_off : [];
-        const eligible = data.eligible != null ? Number(data.eligible) : null;
-        if (!snapcopyRows.length && eligible === 0 && skipped.length) {
+        const online = cards.filter(isSnapcopyEligibleCard);
+        const onlineCount = online.length;
+        const toScan = selectedId
+          ? online.filter((card) => String(card.id) === String(selectedId))
+          : online.slice().sort((a, b) => Number(a.id) - Number(b.id));
+
+        if (selectedId && !toScan.length) {
+          const picked = cards.find((card) => String(card.id) === String(selectedId));
+          const name = picked ? (picked.name || selectedId) : selectedId;
+          snapcopyRows = [];
+          snapcopyLoaded = true;
+          renderRows([]);
           statusEl.textContent = "No monitored sites to scan. Turn on Monitor in Health Dashboard for: "
-            + skipped.join(", ") + ", then Refresh.";
+            + name + ", then Refresh.";
           return true;
         }
-        if (!snapcopyRows.length && eligible === 0) {
-          statusEl.textContent = "No monitored FlashSystem/SVC sites. Turn on Monitor in Health Dashboard, then Refresh.";
+        if (!toScan.length) {
+          const skipped = cards
+            .filter((card) => String(card.card_type || "ssh").toLowerCase() === "ssh" && !card.monitor_on)
+            .map((card) => card.name || card.id);
+          snapcopyRows = [];
+          snapcopyLoaded = true;
+          renderRows([]);
+          if (skipped.length) {
+            statusEl.textContent = "No monitored sites to scan. Turn on Monitor in Health Dashboard for: "
+              + skipped.join(", ") + ", then Refresh.";
+          } else {
+            statusEl.textContent = "No monitored FlashSystem/SVC sites. Turn on Monitor in Health Dashboard, then Refresh.";
+          }
           return true;
         }
-        statusEl.textContent = "Loaded " + snapcopyRows.length + " CG(s)."
+
+        statusEl.textContent = "Online SSH: " + onlineCount
+          + ". Scanning 0/" + toScan.length + "…";
+        let lastData = { rows: [], errors: [] };
+        for (let index = 0; index < toScan.length; index += 1) {
+          const card = toScan[index];
+          const label = card.name || card.id;
+          statusEl.textContent = "Online SSH: " + onlineCount
+            + ". Scanning " + (index + 1) + "/" + toScan.length + ": " + label + "…";
+          const { response, data } = await scanOneCard(card.id, index === 0);
+          if (response.status === 403) {
+            statusEl.textContent = data.error || "Unlock LaunchPad to refresh CG summary.";
+            return false;
+          }
+          if (!response.ok) {
+            statusEl.textContent = data.error || ("CG summary failed (HTTP " + response.status + ")");
+            return false;
+          }
+          lastData = data;
+          snapcopyRows = Array.isArray(data.rows) ? data.rows : [];
+          snapcopyLoaded = true;
+          renderRows(snapcopyRows);
+        }
+        const errCount = (lastData.errors || []).length;
+        statusEl.textContent = "Online SSH: " + onlineCount
+          + ". Scanned " + toScan.length + "/" + toScan.length
+          + ". Loaded " + snapcopyRows.length + " CG(s)."
           + (errCount ? (" " + errCount + " site error(s).") : "")
           + (snapcopyRows.length ? " Select rows, then Export Excel." : "");
         return true;
       } catch (error) {
         statusEl.textContent = "CG summary failed: " + (error.message || error);
         return false;
+      } finally {
+        refreshBtn.disabled = false;
       }
     }
 

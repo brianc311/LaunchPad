@@ -18,6 +18,9 @@ def test_snapcopy_summary_markers():
     assert "Turn on Monitor" in SNAPCOPY_SUMMARY_HTML
     assert "Select at least one CG to export" in SNAPCOPY_SUMMARY_HTML
     assert "monitor_on" in SNAPCOPY_SUMMARY_HTML
+    assert "Online SSH:" in SNAPCOPY_SUMMARY_HTML
+    assert "Scanning " in SNAPCOPY_SUMMARY_HTML
+    assert "reset=1" in SNAPCOPY_SUMMARY_HTML
 
 
 def test_health_server_serves_snapcopy_summary():
