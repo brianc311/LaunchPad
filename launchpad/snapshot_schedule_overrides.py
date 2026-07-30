@@ -56,6 +56,25 @@ def _normalize_one_off(raw: Any) -> dict[str, str] | None:
     return item
 
 
+def _normalize_completed_dates(raw: Any) -> list[str]:
+    completed_raw = raw.get("completed_dates") or []
+    if not isinstance(completed_raw, list):
+        return []
+    valid: set[str] = set()
+    for item in completed_raw:
+        parsed = parse_date_yyyy_mm_dd(str(item))
+        if parsed:
+            valid.add(parsed.isoformat())
+    return sorted(valid)
+
+
+def prune_completed_dates(
+    completed: list[str], planned: set[str] | list[str]
+) -> list[str]:
+    planned_set = planned if isinstance(planned, set) else set(planned)
+    return sorted(d for d in completed if d in planned_set)
+
+
 def normalize_override(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -87,6 +106,7 @@ def normalize_override(raw: Any) -> dict[str, Any] | None:
         "start_date": start_date.isoformat() if start_date else "",
         "time": format_time_hhmm(*parsed_time),
         "one_offs": one_offs,
+        "completed_dates": _normalize_completed_dates(raw),
     }
 
 

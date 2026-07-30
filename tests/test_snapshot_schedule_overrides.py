@@ -7,6 +7,7 @@ from launchpad.snapshot_schedule_overrides import (
     normalize_overrides_map,
     parse_date_yyyy_mm_dd,
     parse_time_hhmm,
+    prune_completed_dates,
 )
 
 
@@ -52,6 +53,24 @@ def test_parse_helpers():
     assert parse_time_hhmm("25:00") is None
     assert parse_date_yyyy_mm_dd("2026-07-20") == date(2026, 7, 20)
     assert parse_date_yyyy_mm_dd("2026-13-01") is None
+
+
+def test_normalize_override_completed_dates():
+    out = normalize_override(
+        {
+            "mode": "auto",
+            "held": False,
+            "completed_dates": ["2026-07-30", "bad", "2026-07-30", "2026-07-01"],
+        }
+    )
+    assert out["completed_dates"] == ["2026-07-01", "2026-07-30"]
+
+
+def test_prune_completed_dates_intersection():
+    assert prune_completed_dates(
+        ["2026-07-01", "2026-07-30"],
+        {"2026-07-30", "2026-08-06"},
+    ) == ["2026-07-30"]
 
 
 def test_format_one_offs_summary():
