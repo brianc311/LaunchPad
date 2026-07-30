@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from typing import Any
 
@@ -10,6 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 SUMMARY_HEADERS: tuple[str, ...] = (
+    "Site",
     "Name",
     "Status",
     "Flash time",
@@ -22,6 +24,7 @@ SUMMARY_HEADERS: tuple[str, ...] = (
 )
 
 SUMMARY_FIELDS: tuple[str, ...] = (
+    "site",
     "name",
     "status",
     "flash_time",
@@ -34,6 +37,35 @@ SUMMARY_FIELDS: tuple[str, ...] = (
 )
 
 _SHEET_NAME = "FC CG Summary"
+_EMPTY_MULTISITE_SHEET = "Summary"
+_INVALID_SHEET_CHARS = re.compile(r"[\\/*?:\[\]]")
+_MAX_SHEET_TITLE_LEN = 31
+
+
+def sanitize_excel_sheet_name(name: str, *, used: set[str]) -> str:
+    """Return a valid unique Excel worksheet title (max 31 chars)."""
+    cleaned = _INVALID_SHEET_CHARS.sub("_", str(name or "").strip())
+    cleaned = cleaned[:_MAX_SHEET_TITLE_LEN] or _EMPTY_MULTISITE_SHEET
+
+    candidate = cleaned
+    suffix = 2
+    while candidate in used:
+        suffix_text = f"_{suffix}"
+        base = cleaned[: _MAX_SHEET_TITLE_LEN - len(suffix_text)]
+        candidate = f"{base}{suffix_text}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _sanitize_sheet_title(site: str) -> str:
+    """Sanitize a site name for use as an Excel sheet title."""
+    return sanitize_excel_sheet_name(site, used=set())
+
+
+def _row_site(row: dict[str, Any]) -> str:
+    site = str(row.get("site") or row.get("card_name") or row.get("name") or "").strip()
+    return site or "Unknown"
 
 
 def _cell_value(item: dict[str, Any], field: str) -> Any:
@@ -89,6 +121,39 @@ def export_fc_cg_summary_xlsx(rows: list[dict]) -> bytes:
     sheet = workbook.active
     sheet.title = _SHEET_NAME
     _write_sheet(sheet, SUMMARY_HEADERS, _rows(rows, SUMMARY_FIELDS))
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def export_fc_cg_summary_multisite_xlsx(rows: list[dict]) -> bytes:
+    """Return a workbook with one sheet per site (sites sorted A-Z)."""
+    by_site: dict[str, list[dict]] = {}
+    for row in rows:
+        site = _row_site(row)
+        enriched = {**row, "site": row.get("site") or site}
+        by_site.setdefault(site, []).append(enriched)
+
+    workbook = Workbook()
+    used_titles: set[str] = set()
+
+    if not by_site:
+        sheet = workbook.active
+        sheet.title = _EMPTY_MULTISITE_SHEET
+        _write_sheet(sheet, SUMMARY_HEADERS, [])
+    else:
+        first = True
+        for site in sorted(by_site.keys(), key=str.casefold):
+            sheet_title = sanitize_excel_sheet_name(site, used=used_titles)
+            site_rows = by_site[site]
+            if first:
+                sheet = workbook.active
+                sheet.title = sheet_title
+                first = False
+            else:
+                sheet = workbook.create_sheet(sheet_title)
+            _write_sheet(sheet, SUMMARY_HEADERS, _rows(site_rows, SUMMARY_FIELDS))
 
     output = BytesIO()
     workbook.save(output)
