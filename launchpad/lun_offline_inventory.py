@@ -110,11 +110,17 @@ def record_snapshot_error(
     return out
 
 
-def _outputs_for(command_results: list[dict] | None, *needles: str) -> str:
+def _outputs_for(
+    command_results: list[dict] | None,
+    *needles: str,
+    exclude: tuple[str, ...] = (),
+) -> str:
     for item in command_results or []:
         if not isinstance(item, dict) or item.get("error"):
             continue
         blob = f"{item.get('label') or ''} {item.get('command') or ''}".lower()
+        if exclude and any(token in blob for token in exclude):
+            continue
         if any(n in blob for n in needles):
             return str(item.get("output") or "")
     return ""
@@ -148,7 +154,12 @@ def snapshot_from_command_results(
     command_results: list[dict] | None,
     updated_at: str | None = None,
 ) -> dict:
-    hosts_out = _outputs_for(command_results, "lshost", "fc - hosts")
+    hosts_out = _outputs_for(
+        command_results,
+        "lshost",
+        "fc - hosts",
+        exclude=("lshostvdiskmap", "lsvdiskhostmap", "host lun"),
+    )
     maps_out = _outputs_for(command_results, "lshostvdiskmap", "host lun")
     volumes_out = _outputs_for(command_results, "lsvdisk", "memory - volumes")
     fabric_out = _outputs_for(command_results, "lsfabric")

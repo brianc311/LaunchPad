@@ -19,6 +19,31 @@ def test_eligible_requires_monitor_and_svc_profile():
     )
 
 
+def test_snapshot_host_lookup_skips_lshostvdiskmap_before_lshost():
+    results = [
+        {
+            "label": "FC - Host LUN Maps",
+            "command": "svcinfo lshostvdiskmap -delim :",
+            "output": "host_name:vdisk_name:SCSI_id\nwronghost:vol1:3",
+        },
+        {
+            "label": "FC - Hosts",
+            "command": "svcinfo lshost -delim :",
+            "output": "id:name:port_count:iogrp_count:status:WWPN\n0:esx01:1:1:online:AABBCCDDEEFF0011",
+        },
+    ]
+    snap = snapshot_from_command_results(
+        card_id=8,
+        site_name="Test Site",
+        host="10.0.0.8",
+        device_profile="flashsystem_5200",
+        command_results=results,
+    )
+    lpar_names = [h.get("lpar_name") for h in snap["hosts"]]
+    assert "esx01" in lpar_names
+    assert "wronghost" not in lpar_names
+
+
 def test_snapshot_from_command_results_parses_hosts_and_volumes():
     results = [
         {
