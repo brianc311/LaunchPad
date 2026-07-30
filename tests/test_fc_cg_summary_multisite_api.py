@@ -246,6 +246,51 @@ def test_live_scan_reports_monitor_off_when_no_eligible(monkeypatch):
     assert result["skipped_monitor_off"] == ["Pendergrass, GA"]
 
 
+def test_live_scan_merges_per_card_until_reset(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    server._cards[1] = _svc_card(1, "Hartford", "10.0.0.1", category="General")
+    server._cards[2] = _svc_card(2, "Anderson", "10.0.0.2", category="General")
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    server.set_monitor_enabled(card_id=2, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    def fake_inventory(card_id: int, *, include_summaries: bool = True):
+        if card_id == 1:
+            return {"ok": True, "warnings": [], "summaries": [_summary("AWD1_FC")]}
+        if card_id == 2:
+            return {"ok": True, "warnings": [], "summaries": [_summary("AAN1_FC")]}
+        return {"ok": False, "warnings": ["missing"], "summaries": []}
+
+    monkeypatch.setattr(server, "fc_consistgrp_inventory", fake_inventory)
+
+    first = server.scan_fc_cg_summary_live(card_id=1, reset=True)
+    assert [row["row_key"] for row in first["rows"]] == ["1:AWD1_FC"]
+    second = server.scan_fc_cg_summary_live(card_id=2, reset=False)
+    keys = {row["row_key"] for row in second["rows"]}
+    assert keys == {"1:AWD1_FC", "2:AAN1_FC"}
+    assert second["eligible"] == 2
+    replaced = server.scan_fc_cg_summary_live(card_id=2, reset=True)
+    assert [row["row_key"] for row in replaced["rows"]] == ["2:AAN1_FC"]
+
+
+def test_api_fc_cg_summary_live_accepts_reset_query():
+    get_src = inspect.getsource(_HealthHandler.do_GET)
+    assert 'query.get("reset")' in get_src
+
+
+def test_capacity_report_alias_and_canonical_path():
+    get_src = inspect.getsource(_HealthHandler.do_GET)
+    assert 'path == "/capacity-report"' in get_src
+    from launchpad.host_volume_health_page import HOST_VOLUME_HEALTH_HTML
+    from launchpad.system_connectivity_page import SYSTEM_CONNECTIVITY_HTML
+
+    assert 'href="/capacity"' in HOST_VOLUME_HEALTH_HTML
+    assert 'href="/capacity-report"' not in HOST_VOLUME_HEALTH_HTML
+    assert 'href="/capacity"' in SYSTEM_CONNECTIVITY_HTML
+    assert 'href="/capacity-report"' not in SYSTEM_CONNECTIVITY_HTML
+
+
 def test_api_fc_cg_summary_multisite_routes_declared():
     get_src = inspect.getsource(_HealthHandler.do_GET)
     post_src = inspect.getsource(_HealthHandler.do_POST)

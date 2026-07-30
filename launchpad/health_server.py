@@ -1995,7 +1995,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == "/":
             self._send_html(DASHBOARD_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
-        if path == CAPACITY_REPORT_PATH:
+        if path == CAPACITY_REPORT_PATH or path == "/capacity-report":
             self._send_html(CAPACITY_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == SNAPSHOT_SCHEDULE_PATH:
@@ -2124,8 +2124,15 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     self._send_json({"error": "card_id must be an integer"}, status=400)
                     return
+            reset = (query.get("reset") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
             try:
-                payload = server.scan_fc_cg_summary_live(card_id=card_id)
+                payload = server.scan_fc_cg_summary_live(
+                    card_id=card_id, reset=reset
+                )
             except RuntimeError as exc:
                 self._send_json({"error": str(exc)}, status=403)
                 return
@@ -4494,7 +4501,7 @@ class HealthServer:
         )
 
     def scan_fc_cg_summary_live(
-        self, *, card_id: int | None = None
+        self, *, card_id: int | None = None, reset: bool = False
     ) -> dict[str, Any]:
         if not self.is_unlocked():
             raise RuntimeError(
@@ -4577,6 +4584,40 @@ class HealthServer:
                         "error": str(exc),
                     }
                 )
+        if card_id is not None and not reset:
+            with self._lock:
+                prior = self._fc_cg_summary_live_cache
+            if prior is not None:
+                prior_rows = [
+                    row
+                    for row in (prior.get("rows") or [])
+                    if int(row.get("card_id") or -1) != int(card_id)
+                ]
+                prior_errors = [
+                    err
+                    for err in (prior.get("errors") or [])
+                    if int(err.get("card_id") or -1) != int(card_id)
+                ]
+                prior_skipped = [
+                    name
+                    for name in (prior.get("skipped_monitor_off") or [])
+                    if name not in skipped_monitor_off
+                ]
+                rows = prior_rows + rows
+                errors = prior_errors + errors
+                skipped_monitor_off = prior_skipped + skipped_monitor_off
+                # eligible for this request is only the current card; expose
+                # total unique cards represented in merged rows/errors.
+                card_ids = {
+                    int(row.get("card_id"))
+                    for row in rows
+                    if row.get("card_id") is not None
+                } | {
+                    int(err.get("card_id"))
+                    for err in errors
+                    if err.get("card_id") is not None
+                }
+                eligible = len(card_ids)
         rows.sort(
             key=lambda row: (
                 str(row.get("site") or "").lower(),

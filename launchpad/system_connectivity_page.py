@@ -99,7 +99,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
         <button type="button" class="btn secondary" id="sc-export-xlsx-btn" disabled>Export Excel</button>
         <button type="button" class="btn secondary" id="sc-export-csv-btn" disabled>Export CSV</button>
         <a class="btn secondary" href="/">Health Dashboard</a>
-        <a class="btn secondary" href="/capacity-report">Capacity</a>
+        <a class="btn secondary" href="/capacity">Capacity</a>
         <a class="btn secondary" href="/host-volume-health">Hosts & Volumes</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
