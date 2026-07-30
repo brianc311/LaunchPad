@@ -12,6 +12,8 @@ from openpyxl.utils import get_column_letter
 SUMMARY_HEADERS: tuple[str, ...] = (
     "Name",
     "Status",
+    "Flash time",
+    "Progress",
     "Maps",
     "Host maps",
     "Size",
@@ -22,6 +24,8 @@ SUMMARY_HEADERS: tuple[str, ...] = (
 SUMMARY_FIELDS: tuple[str, ...] = (
     "name",
     "status",
+    "flash_time",
+    "progress_pct",
     "fc_map_count",
     "host_map_count",
     "total_size",
@@ -32,8 +36,17 @@ SUMMARY_FIELDS: tuple[str, ...] = (
 _SHEET_NAME = "FC CG Summary"
 
 
+def _cell_value(item: dict[str, Any], field: str) -> Any:
+    if field == "progress_pct":
+        pct = item.get("progress_pct")
+        if pct is None or pct == "":
+            return ""
+        return f"{pct}%"
+    return item.get(field, "")
+
+
 def _rows(items: list[dict[str, Any]], fields: tuple[str, ...]) -> list[tuple[Any, ...]]:
-    return [tuple(item.get(field, "") for field in fields) for item in items]
+    return [tuple(_cell_value(item, field) for field in fields) for item in items]
 
 
 def _write_sheet(

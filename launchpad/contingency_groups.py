@@ -127,10 +127,10 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Name</th><th>Status</th><th>Maps</th><th>Host maps</th><th>Size</th><th>Policy</th><th>Snaps/week</th>
+            <th>Name</th><th>Status</th><th>Flash time</th><th>Progress</th><th>Maps</th><th>Host maps</th><th>Size</th><th>Policy</th><th>Snaps/week</th>
           </tr></thead>
           <tbody id="fc-cg-summary-body">
-            <tr><td colspan="7" class="empty">Click Refresh CG summary (Unlock required).</td></tr>
+            <tr><td colspan="9" class="empty">Click Refresh CG summary (Unlock required).</td></tr>
           </tbody>
         </table>
       </div>
@@ -820,6 +820,10 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       const rows = Array.isArray(summaries) ? summaries : [];
       body.innerHTML = rows.length
         ? rows.map((row) => {
+            const flashTime = row.flash_time || "—";
+            const progress = row.progress_pct != null && row.progress_pct !== ""
+              ? `${row.progress_pct}%`
+              : "—";
             const maps = row.fc_map_count ?? "";
             const hostMaps = row.host_map_count ?? "";
             const size = row.total_size || "—";
@@ -828,6 +832,8 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
             return `<tr>
               <td>${escapeHtml(row.name || "")}</td>
               <td>${escapeHtml(row.status || "")}</td>
+              <td>${escapeHtml(String(flashTime))}</td>
+              <td>${escapeHtml(String(progress))}</td>
               <td>${escapeHtml(String(maps))}</td>
               <td>${escapeHtml(String(hostMaps))}</td>
               <td>${escapeHtml(String(size))}</td>
@@ -835,7 +841,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
               <td>${escapeHtml(String(snaps))}</td>
             </tr>`;
           }).join("")
-        : '<tr><td colspan="7" class="empty">No FlashCopy CGs found on the linked array.</td></tr>';
+        : '<tr><td colspan="9" class="empty">No FlashCopy CGs found on the linked array.</td></tr>';
     }
     async function refreshFcCgSummary() {
       const summaryStatus = document.getElementById("fc-cg-summary-status");

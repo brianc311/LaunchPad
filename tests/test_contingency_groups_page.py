@@ -323,16 +323,31 @@ def test_contingency_groups_exposes_fc_cg_summary_section():
         "FlashCopy CGs",
         "<th>Name</th>",
         "<th>Status</th>",
+        "<th>Flash time</th>",
+        "<th>Progress</th>",
         "<th>Maps</th>",
         "<th>Host maps</th>",
         "<th>Size</th>",
         "<th>Policy</th>",
         "<th>Snaps/week</th>",
+        'colspan="9"',
         'id="fc-cg-summary-body"',
         'id="fc-cg-summary-status"',
         "Click Refresh CG summary (Unlock required).",
     ):
         assert text in section
+    assert section.index("<th>Status</th>") < section.index("<th>Flash time</th>")
+    assert section.index("<th>Flash time</th>") < section.index("<th>Progress</th>")
+    assert section.index("<th>Progress</th>") < section.index("<th>Maps</th>")
+
+
+def test_contingency_groups_fc_cg_summary_render_uses_flash_time_and_progress():
+    render = CONTINGENCY_GROUPS_HTML.split("function renderFcCgSummaryRows(summaries) {", 1)[
+        1
+    ].split("\n    async function ", 1)[0]
+    assert "flash_time" in render
+    assert "progress_pct" in render
+    assert 'colspan="9"' in render
 
 
 def test_contingency_groups_fc_cg_summary_refresh_calls_api():
