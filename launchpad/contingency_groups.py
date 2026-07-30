@@ -121,7 +121,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
       <div class="section-head">
         <h2>Array FlashCopy CG summary</h2>
         <label>Site
-          <select id="fc-cg-summary-site" aria-label="CG summary site filter"><option value="">None</option></select>
+          <select id="fc-cg-summary-site" aria-label="CG summary site filter"><option value="">All sites</option></select>
         </label>
         <button type="button" id="fc-cg-summary-refresh" class="secondary">Refresh CG summary</button>
         <button type="button" id="fc-cg-summary-export" class="secondary">Export Excel</button>
@@ -892,7 +892,7 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         const data = await res.json();
         const cards = data.cards || [];
         const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-        siteSelect.innerHTML = '<option value="">None</option>' + sorted.map(
+        siteSelect.innerHTML = '<option value="">All sites</option>' + sorted.map(
           (card) => `<option value="${escapeAttr(card.id)}">${escapeHtml(card.name || card.id)}</option>`
         ).join("");
       } catch (_err) {
