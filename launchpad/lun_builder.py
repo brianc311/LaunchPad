@@ -128,6 +128,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .wizard-copy { min-height:72px; color:var(--text); line-height:1.5; }
     .wizard-actions { display:flex; justify-content:space-between; gap:10px; margin-top:20px; }
     .footer { margin-top:20px; font-size:.85rem; }
+    .view-mode { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+    .view-mode button { min-height:30px; padding:0 12px; font-size:.85rem; }
+    .view-mode button.active { background:var(--accent2); color:#111; }
+    .inventory-banner { margin:12px 0 0; padding:10px 12px; color:#bae6fd; background:#0c4a6e; border:1px solid #0369a1; border-radius:10px; }
+    .inventory-banner[hidden] { display:none; }
+    .read-only-cell { color:var(--text); }
     @media (max-width:720px) { .summary { grid-template-columns:1fr; } .notes { grid-column:auto; } .picker select { width:100%; } }
   </style>
 </head>
@@ -138,12 +144,17 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       <p class="lede">Plan hosts and repeatable LUN batches, preview sanitized CLI, and run supported storage creates after confirmation.</p>
       <div class="picker">
         <label for="build-picker">Build <select id="build-picker" aria-label="LUN build"></select></label>
+        <span class="view-mode" role="group" aria-label="View mode">
+          <button type="button" class="secondary active" id="view-mode-plan">Plan</button>
+          <button type="button" class="secondary" id="view-mode-inventory">Inventory</button>
+        </span>
         <button type="button" class="secondary" id="new-btn">New</button>
         <input type="search" id="lun-search" placeholder="Search volume, purpose, or host…" aria-label="Search LUN build">
         <button type="button" class="secondary" id="lun-search-btn">Find</button>
         <span class="status" id="status" aria-live="polite"></span>
       </div>
       <p class="template-banner" id="template-banner" hidden>Template — use Save as new to keep an editable copy.</p>
+      <p class="inventory-banner" id="inventory-banner" hidden>Offline copy · last updated</p>
       <div class="actions">
         <button type="button" id="save-btn">Save</button>
         <button type="button" class="secondary" id="save-new-btn">Save as new</button>
@@ -181,7 +192,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     <details class="section" id="section-luns" open>
       <summary class="section-head"><h2 id="luns-heading">LUN specs (0/0 done)</h2><button type="button" class="secondary" id="add-lun-btn">Add LUN spec</button></summary>
       <p class="hint">Each row expands into named volumes (shown in Volume names and LUN Plan). Edit Purpose/Count/Hosts here; names update automatically.</p>
-      <div class="table-wrap"><table class="lun-table"><thead><tr><th>Done</th><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
+      <div class="table-wrap"><table class="lun-table"><thead><tr id="luns-head-row"><th>Done</th><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th></tr></thead><tbody id="luns-body"></tbody></table></div>
     </details>
     <details class="section" id="section-plan" open>
       <summary class="section-head"><h2>LUN Plan</h2></summary>
@@ -263,6 +274,13 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     let previewRequestId = 0;
     let wizardStep = 0;
     let cliChecklistGroups = [];
+    let viewMode = "plan";
+    let offlineSnapshots = {};
+    let offlineSnapshotFull = {};
+    let healthCards = {};
+    const INVENTORY_BANNER_ONLINE = "Online · last updated";
+    const INVENTORY_BANNER_OFFLINE = "Offline copy · last updated";
+    const INVENTORY_BADGE_LABEL = "Inventory · Updated";
     window.__lastLunPreviewOk = false;
     window.__lastLunHasRunnableSteps = false;
 
@@ -549,6 +567,200 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         plan_done:{}, command_done:{},
       };
     }
+    function normalizeSiteName(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+    function buildSiteNames(build) {
+      return [build?.name, build?.default_card_hint, build?.location]
+        .map((value) => normalizeSiteName(value))
+        .filter(Boolean);
+    }
+    function snapshotMatchesBuild(snapshot, build) {
+      const site = normalizeSiteName(snapshot?.site_name);
+      if (!site) return false;
+      return buildSiteNames(build).includes(site);
+    }
+    function findSnapshotForBuild(build) {
+      for (const row of Object.values(offlineSnapshots)) {
+        if (snapshotMatchesBuild(row, build)) return row;
+      }
+      return null;
+    }
+    function findSnapshotForSelection() {
+      if (String(currentId || "").startsWith("inventory:")) {
+        const cardId = currentId.slice("inventory:".length);
+        return offlineSnapshots[cardId] || null;
+      }
+      return findSnapshotForBuild(activeBuild());
+    }
+    function isInventoryOnlySelection() {
+      return String(currentId || "").startsWith("inventory:");
+    }
+    function formatInventoryTimestamp(iso) {
+      if (!iso) return "unknown";
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return iso;
+      return date.toLocaleString();
+    }
+    function cardIsOffline(card) {
+      if (!card) return true;
+      if (card.error) return true;
+      const results = card.command_results;
+      return !Array.isArray(results) || !results.length;
+    }
+    async function ensureFullSnapshot(cardId) {
+      const key = String(cardId);
+      if (offlineSnapshotFull[key]) return offlineSnapshotFull[key];
+      try {
+        const response = await fetch(`/api/lun-offline-inventory?card_id=${encodeURIComponent(key)}`);
+        const data = await response.json().catch(() => ({}));
+        if (data.ok && data.snapshot) {
+          offlineSnapshotFull[key] = data.snapshot;
+          return data.snapshot;
+        }
+      } catch (_err) { /* keep summary-only view */ }
+      return null;
+    }
+    async function loadOfflineInventory() {
+      try {
+        const response = await fetch("/api/lun-offline-inventory");
+        const data = await response.json().catch(() => ({}));
+        offlineSnapshots = {};
+        for (const row of (data.snapshots || [])) {
+          offlineSnapshots[String(row.card_id)] = row;
+        }
+      } catch (_err) {
+        offlineSnapshots = {};
+      }
+    }
+    async function loadHealthCards() {
+      try {
+        const response = await fetch("/api/cards");
+        const cards = await response.json().catch(() => []);
+        healthCards = {};
+        for (const card of (Array.isArray(cards) ? cards : [])) {
+          healthCards[String(card.id)] = card;
+        }
+      } catch (_err) {
+        healthCards = {};
+      }
+    }
+    function inventoryBannerText(snapshot) {
+      if (!snapshot) return "";
+      const card = healthCards[String(snapshot.card_id)];
+      const prefix = cardIsOffline(card) ? INVENTORY_BANNER_OFFLINE : INVENTORY_BANNER_ONLINE;
+      return `${prefix} ${formatInventoryTimestamp(snapshot.updated_at)}`;
+    }
+    function updateInventoryBanner(snapshot) {
+      const banner = document.getElementById("inventory-banner");
+      if (!banner) return;
+      if (viewMode !== "inventory" || !snapshot) {
+        banner.hidden = true;
+        return;
+      }
+      banner.hidden = false;
+      banner.textContent = inventoryBannerText(snapshot);
+    }
+    function inventoryBadgeText(snapshot) {
+      if (!snapshot?.updated_at) return "";
+      return `${INVENTORY_BADGE_LABEL} ${formatInventoryTimestamp(snapshot.updated_at)}`;
+    }
+    function buildInventoryPickerOptions() {
+      const catalog = [...templates, ...builds];
+      const matchedSites = new Set();
+      for (const item of catalog) {
+        for (const name of buildSiteNames(item)) matchedSites.add(name);
+      }
+      const options = [];
+      for (const row of Object.values(offlineSnapshots)) {
+        const site = normalizeSiteName(row.site_name);
+        if (!site || matchedSites.has(site)) continue;
+        options.push({
+          id: `inventory:${row.card_id}`,
+          label: `${row.site_name} (inventory only)`,
+        });
+      }
+      return options.sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+      );
+    }
+    function planEditsBlocked() {
+      return viewMode === "inventory";
+    }
+    function updatePlanEditControls(inInventoryMode) {
+      const blocked = inInventoryMode;
+      [
+        "save-btn", "save-new-btn", "delete-btn", "export-excel-btn", "export-csv-btn",
+        "import-btn", "pull-fc-btn", "sync-inventory-btn", "preview-btn", "run-btn",
+        "add-host-btn", "add-lun-btn", "new-btn", "import-mode",
+      ].forEach((id) => {
+        const element = document.getElementById(id);
+        if (element) element.disabled = blocked;
+      });
+      ["build-name", "build-location", "build-notes", "default-storage-profile", "default-pool-or-cpg", "default-card-hint"].forEach((id) => {
+        const element = document.getElementById(id);
+        if (element) element.disabled = blocked;
+      });
+      document.getElementById("section-details").open = !blocked;
+    }
+    function renderInventoryTables(snapshot) {
+      const full = offlineSnapshotFull[String(snapshot?.card_id)] || snapshot || {};
+      const hosts = Array.isArray(full.hosts) ? full.hosts : [];
+      const volumes = Array.isArray(full.volumes) ? full.volumes : [];
+      hostsBody.innerHTML = hosts.length
+        ? hosts.map((host) => `<tr>
+            <td class="read-only-cell">—</td>
+            <td class="read-only-cell">${esc(host.lpar_name || "")}</td>
+            <td class="read-only-cell">${esc(host.slot || "")}</td>
+            <td class="read-only-cell">${esc(host.state || "")}</td>
+            <td class="read-only-cell">${host.required ? "Yes" : "No"}</td>
+            <td class="read-only-cell">${esc(host.type || "")}</td>
+            <td class="read-only-cell">${esc(host.wwpn1 || "")}</td>
+            <td class="read-only-cell">${esc(host.wwpn2 || "")}</td>
+            <td class="read-only-cell">${esc(host.notes || "")}</td>
+            <td></td>
+          </tr>`).join("")
+        : '<tr><td colspan="10" class="empty">No inventory hosts.</td></tr>';
+      const lunsHead = document.getElementById("luns-head-row");
+      if (lunsHead) {
+        lunsHead.innerHTML = "<th>Name</th><th>Pool / CPG</th><th>Capacity</th><th>Status</th>";
+      }
+      lunsBody.innerHTML = volumes.length
+        ? volumes.map((volume) => `<tr>
+            <td class="read-only-cell">${esc(volume.name || "")}</td>
+            <td class="read-only-cell">${esc(volume.pool || "")}</td>
+            <td class="read-only-cell">${esc(volume.capacity || "")}</td>
+            <td class="read-only-cell">${esc(volume.status || "")}</td>
+          </tr>`).join("")
+        : '<tr><td colspan="4" class="empty">No inventory volumes.</td></tr>';
+      const hostsHeading = document.getElementById("hosts-heading");
+      const lunsHeading = document.getElementById("luns-heading");
+      if (hostsHeading) hostsHeading.textContent = `Hosts (inventory ${hosts.length})`;
+      if (lunsHeading) lunsHeading.textContent = `Volumes (inventory ${volumes.length})`;
+      const planBody = document.getElementById("plan-body");
+      const planSummary = document.getElementById("plan-summary");
+      if (planBody) planBody.innerHTML = '<tr><td colspan="9" class="empty">Inventory view shows hosts and volumes only.</td></tr>';
+      if (planSummary) planSummary.textContent = "";
+    }
+    function restorePlanTableHeaders() {
+      const lunsHead = document.getElementById("luns-head-row");
+      if (lunsHead) {
+        lunsHead.innerHTML = "<th>Done</th><th>Purpose</th><th>Count</th><th>Volume names</th><th>Size</th><th>Shared</th><th>Storage profile</th><th>Pool / CPG</th><th>Host names</th><th>SCSI / LUN ID</th><th>Card hint</th><th>Cluster</th><th></th>";
+      }
+    }
+    async function refreshInventoryView() {
+      if (viewMode === "inventory") {
+        const snapshot = findSnapshotForSelection();
+        if (snapshot) await ensureFullSnapshot(snapshot.card_id);
+      }
+      render();
+    }
+    async function setViewMode(mode) {
+      viewMode = mode;
+      document.getElementById("view-mode-plan").classList.toggle("active", mode === "plan");
+      document.getElementById("view-mode-inventory").classList.toggle("active", mode === "inventory");
+      await refreshInventoryView();
+    }
     function activeBuild() {
       return builds.find((build) => String(build.id) === currentId)
         || templates.find((template) => String(template.id) === currentId)
@@ -590,13 +802,45 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     function input(key, value, index, kind, type="text") { return `<input type="${type}" data-kind="${kind}" data-index="${index}" data-key="${key}" value="${esc(value)}">`; }
     function render() {
       const build = activeBuild();
-      const templateOptions = templates.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`).join("");
+      const inventoryMode = viewMode === "inventory";
+      const snapshot = findSnapshotForSelection();
+      const templateOptions = templates.map((item) => {
+        const snap = findSnapshotForBuild(item);
+        const badge = snap ? ` — ${inventoryBadgeText(snap)}` : "";
+        return `<option value="${esc(item.id)}">${esc(item.name || item.id)}${esc(badge)}</option>`;
+      }).join("");
       const buildOptions = builds.length
-        ? builds.map((item) => `<option value="${esc(item.id)}">${esc(item.name || item.id)}</option>`).join("")
+        ? builds.map((item) => {
+            const snap = findSnapshotForBuild(item);
+            const badge = snap ? ` — ${inventoryBadgeText(snap)}` : "";
+            return `<option value="${esc(item.id)}">${esc(item.name || item.id)}${esc(badge)}</option>`;
+          }).join("")
         : '<option value="">New build</option>';
-      picker.innerHTML = `<optgroup label="Templates">${templateOptions}</optgroup><optgroup label="Saved builds">${buildOptions}</optgroup>`;
+      const inventoryOptions = buildInventoryPickerOptions()
+        .map((item) => `<option value="${esc(item.id)}">${esc(item.label)}</option>`)
+        .join("");
+      const inventoryGroup = inventoryOptions
+        ? `<optgroup label="Inventory only">${inventoryOptions}</optgroup>`
+        : "";
+      picker.innerHTML = `<optgroup label="Templates">${templateOptions}</optgroup><optgroup label="Saved builds">${buildOptions}</optgroup>${inventoryGroup}`;
       picker.value = currentId;
-      templateBanner.hidden = !build.is_template;
+      templateBanner.hidden = !build.is_template || inventoryMode;
+      updateInventoryBanner(snapshot);
+      updatePlanEditControls(inventoryMode);
+      document.getElementById("view-mode-plan").classList.toggle("active", viewMode === "plan");
+      document.getElementById("view-mode-inventory").classList.toggle("active", viewMode === "inventory");
+      if (inventoryMode) {
+        renderInventoryTables(snapshot);
+        document.getElementById("delete-btn").disabled = true;
+        document.getElementById("export-excel-btn").disabled = true;
+        document.getElementById("export-csv-btn").disabled = true;
+        document.getElementById("run-btn").disabled = true;
+        if (snapshot && !isInventoryOnlySelection() && statusEl.textContent && !statusEl.textContent.includes(INVENTORY_BADGE_LABEL)) {
+          statusEl.textContent = `${statusEl.textContent} ${inventoryBadgeText(snapshot)}`.trim();
+        }
+        return;
+      }
+      restorePlanTableHeaders();
       document.getElementById("build-name").value = build.name || "";
       document.getElementById("build-location").value = build.location || "";
       document.getElementById("build-notes").value = build.notes || "";
@@ -630,6 +874,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       document.getElementById("export-excel-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("export-csv-btn").disabled = !currentId || Boolean(build.is_template);
       document.getElementById("run-btn").disabled = !window.__lastLunPreviewOk || !window.__lastLunHasRunnableSteps;
+      if (snapshot && !inventoryMode) {
+        const badge = inventoryBadgeText(snapshot);
+        if (badge && statusEl.textContent && !statusEl.textContent.includes(INVENTORY_BADGE_LABEL)) {
+          statusEl.textContent = `${statusEl.textContent} ${badge}`.trim();
+        }
+      }
     }
     function readSummary(build) {
       build.name = document.getElementById("build-name").value.trim();
@@ -667,6 +917,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       return String(name || "").replace(" (Template)", "").trim();
     }
     function addRow(kind) {
+      if (planEditsBlocked()) return;
       const build = activeBuild();
       build[kind].push(kind === "hosts"
         ? { lpar_name:"", slot:"", state:"", required:false, type:"", wwpn1:"", wwpn2:"", notes:"", done:false }
@@ -682,6 +933,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       render();
     }
     function updateField(event) {
+      if (planEditsBlocked()) return;
       const target = event.target;
       const item = (activeBuild()[target.dataset.kind] || [])[Number(target.dataset.index)];
       if (!item || !target.dataset.key) return;
@@ -762,6 +1014,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       summaryEl.innerHTML = `<strong>${hostTotal}</strong> hosts &middot; <strong>${volumeTotal}</strong> LUNs &middot; <strong>${mappingTotal}</strong> mappings` + (breakdown ? `<br><span class="plan-breakdown">${breakdown}</span>` : "");
     }
     async function save(saveAsNew) {
+      if (planEditsBlocked()) return;
       let build = activeBuild();
       readSummary(build);
       if (!build.name) { statusEl.textContent = "Enter a build name before saving."; return; }
@@ -979,10 +1232,21 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         currentId = builds[0]?.id || templates[0]?.id || ""; saveLocal();
         statusEl.textContent = persisted ? "Loaded from LaunchPad." : "Browser-only until LaunchPad is unlocked.";
       } catch (_error) { persisted = false; statusEl.textContent = "Browser-only until LaunchPad is unlocked."; }
+      await Promise.all([loadOfflineInventory(), loadHealthCards()]);
       render();
     }
-    picker.addEventListener("change", () => { currentId = picker.value; invalidatePreview(); render(); });
-    document.getElementById("new-btn").addEventListener("click", () => { builds.push(emptyBuild()); currentId = ""; invalidatePreview(); render(); });
+    picker.addEventListener("change", async () => {
+      currentId = picker.value;
+      if (isInventoryOnlySelection()) viewMode = "inventory";
+      invalidatePreview();
+      await refreshInventoryView();
+    });
+    document.getElementById("new-btn").addEventListener("click", () => {
+      if (planEditsBlocked()) return;
+      builds.push(emptyBuild()); currentId = ""; invalidatePreview(); render();
+    });
+    document.getElementById("view-mode-plan").addEventListener("click", () => setViewMode("plan"));
+    document.getElementById("view-mode-inventory").addEventListener("click", () => setViewMode("inventory"));
     document.getElementById("lun-search-btn").addEventListener("click", runLunSearch);
     document.getElementById("lun-search").addEventListener("keydown", (event) => {
       if (event.key === "Enter") runLunSearch();

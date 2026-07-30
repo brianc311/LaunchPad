@@ -122,6 +122,15 @@ from launchpad.flashsystem_health import analyze_health, pool_capacity_from_comm
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
+from launchpad.lun_offline_inventory import (
+    LUN_OFFLINE_INVENTORY_SETTING,
+    is_lun_offline_inventory_eligible,
+    normalize_store,
+    record_snapshot_error,
+    snapshot_from_command_results,
+    summarize_snapshot,
+    upsert_snapshot,
+)
 from launchpad.volume_find_page import VOLUME_FIND_HTML, VOLUME_FIND_PATH
 from launchpad.lun_builder_data import (
     LUN_BUILDS_SETTING,
@@ -2252,6 +2261,32 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/api/lun-offline-inventory":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+                store = server.get_lun_offline_inventory()
+                snapshot = store.get(str(card_id))
+                if snapshot is None:
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "snapshot": None,
+                            "error": "Offline inventory snapshot not found.",
+                        }
+                    )
+                    return
+                self._send_json({"ok": True, "snapshot": snapshot})
+                return
+            store = server.get_lun_offline_inventory()
+            snapshots = [summarize_snapshot(item) for item in store.values()]
+            self._send_json({"ok": True, "snapshots": snapshots})
+            return
         if path == "/api/lun-builds-export":
             query = parse_qs(parsed.query)
             build_id = (query.get("id") or [""])[0].strip()
@@ -3376,6 +3411,75 @@ class HealthServer:
         ]
         setter(LUN_BUILDS_SETTING, json.dumps(cleaned))
         return cleaned
+
+    def get_lun_offline_inventory(self) -> dict[str, dict]:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return {}
+        raw = getter(LUN_OFFLINE_INVENTORY_SETTING, "{}") or "{}"
+        try:
+            return normalize_store(json.loads(raw))
+        except json.JSONDecodeError:
+            return {}
+
+    def set_lun_offline_inventory(self, store: dict[str, dict]) -> dict[str, dict]:
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError(
+                "LaunchPad must be unlocked to save LUN offline inventory."
+            )
+        cleaned = normalize_store(store)
+        setter(LUN_OFFLINE_INVENTORY_SETTING, json.dumps(cleaned))
+        return cleaned
+
+    def upsert_lun_offline_inventory_from_card(
+        self,
+        card: HealthCard,
+        *,
+        monitor_on: bool | None = None,
+        success: bool | None = None,
+    ) -> None:
+        if monitor_on is None:
+            monitor_on = self.is_monitor_enabled(card.card_id)
+        if not is_lun_offline_inventory_eligible(card, monitor_on=monitor_on):
+            return
+        with self._lock:
+            if self._set_setting is None:
+                return
+        if success is None:
+            results = card.command_results
+            success = (
+                isinstance(results, list)
+                and bool(results)
+                and any(
+                    isinstance(item, dict) and not item.get("error")
+                    for item in results
+                )
+            )
+        store = self.get_lun_offline_inventory()
+        if success:
+            snapshot = snapshot_from_command_results(
+                card_id=card.card_id,
+                site_name=card.name,
+                host=card.host,
+                device_profile=card.device_profile,
+                command_results=card.command_results,
+                updated_at=card.updated_at,
+            )
+            store = upsert_snapshot(store, snapshot)
+        else:
+            error = str(card.error or "").strip() or "Monitor refresh failed"
+            store = record_snapshot_error(
+                store,
+                card_id=card.card_id,
+                error=error,
+                site_name=card.name,
+                host=card.host,
+                device_profile=card.device_profile,
+            )
+        self.set_lun_offline_inventory(store)
 
     def upsert_lun_build(self, build: dict) -> list[dict]:
         cleaned = normalize_build(build)
@@ -5845,7 +5949,8 @@ class HealthServer:
             card.command_results = command_results
             card.error = error
             card.updated_at = _utc_now()
-            return card
+        self.upsert_lun_offline_inventory_from_card(card)
+        return card
 
     def update_card_live_data(
         self,
@@ -5869,7 +5974,11 @@ class HealthServer:
             elif command_results is not None or metrics is not None:
                 card.error = None
             card.updated_at = _utc_now()
-            return True
+            should_upsert = command_results is not None
+            target = card
+        if should_upsert:
+            self.upsert_lun_offline_inventory_from_card(target)
+        return True
 
     def list_cards(self, *, allow_sync: bool = True) -> list[dict[str, Any]]:
         if allow_sync:
