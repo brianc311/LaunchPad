@@ -120,17 +120,21 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     <section class="section" id="fc-cg-summary-section">
       <div class="section-head">
         <h2>Array FlashCopy CG summary</h2>
+        <label>Site
+          <select id="fc-cg-summary-site" aria-label="CG summary site filter"><option value="">All sites</option></select>
+        </label>
         <button type="button" id="fc-cg-summary-refresh" class="secondary">Refresh CG summary</button>
         <button type="button" id="fc-cg-summary-export" class="secondary">Export Excel</button>
       </div>
-      <p class="hint">Live FlashCopy Consistency Groups on the linked array (read-only). Manage membership on <a href="/fc-consistgrp">FlashCopy CGs</a>.</p>
+      <p class="hint">Live FlashCopy Consistency Groups across monitored sites (read-only). Manage membership on <a href="/fc-consistgrp">FlashCopy CGs</a>.</p>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Name</th><th>Status</th><th>Flash time</th><th>Progress</th><th>Maps</th><th>Host maps</th><th>Size</th><th>Policy</th><th>Snaps/week</th>
+            <th><input type="checkbox" id="fc-cg-summary-select-all" aria-label="Select all CGs"></th>
+            <th>Site</th><th>Name</th><th>Status</th><th>Flash time</th><th>Progress</th><th>Maps</th><th>Host maps</th><th>Size</th><th>Policy</th><th>Snaps/week</th>
           </tr></thead>
           <tbody id="fc-cg-summary-body">
-            <tr><td colspan="9" class="empty">Click Refresh CG summary (Unlock required).</td></tr>
+            <tr><td colspan="11" class="empty">Click Refresh CG summary (Unlock required).</td></tr>
           </tbody>
         </table>
       </div>
@@ -239,6 +243,8 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     let persisted = false;
     let wizardStep = 1;
     let advancedOpen = false;
+    let fcCgSummaryRows = [];
+    let fcCgSummaryLoaded = false;
     window.__lastSnapPreviewOk = false;
     const snapModalBackdrop = document.getElementById("snap-modal-backdrop");
     const snapModalTitle = document.getElementById("snap-modal-title");
@@ -815,56 +821,108 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
         statusEl.textContent = data.ok ? "Create completed; see the log for details." : "Create did not complete; see the log and warnings.";
       } catch (error) { statusEl.textContent = `Unable to run _snap create: ${error.message || error}`; }
     }
-    function renderFcCgSummaryRows(summaries) {
+    function renderFcCgSummaryRows(rows) {
       const body = document.getElementById("fc-cg-summary-body");
-      const rows = Array.isArray(summaries) ? summaries : [];
-      body.innerHTML = rows.length
-        ? rows.map((row) => {
-            const flashTime = row.flash_time || "—";
-            const progress = row.progress_pct != null && row.progress_pct !== ""
-              ? `${row.progress_pct}%`
-              : "—";
-            const maps = row.fc_map_count ?? "";
-            const hostMaps = row.host_map_count ?? "";
-            const size = row.total_size || "—";
-            const policy = row.policy || "—";
-            const snaps = row.snaps_per_week ?? "—";
-            return `<tr>
-              <td>${escapeHtml(row.name || "")}</td>
-              <td>${escapeHtml(row.status || "")}</td>
-              <td>${escapeHtml(String(flashTime))}</td>
-              <td>${escapeHtml(String(progress))}</td>
-              <td>${escapeHtml(String(maps))}</td>
-              <td>${escapeHtml(String(hostMaps))}</td>
-              <td>${escapeHtml(String(size))}</td>
-              <td>${escapeHtml(String(policy))}</td>
-              <td>${escapeHtml(String(snaps))}</td>
-            </tr>`;
-          }).join("")
-        : '<tr><td colspan="9" class="empty">No FlashCopy CGs found on the linked array.</td></tr>';
+      const selectAll = document.getElementById("fc-cg-summary-select-all");
+      const list = Array.isArray(rows) ? rows : [];
+      if (!list.length) {
+        body.innerHTML = '<tr><td colspan="11" class="empty">No FlashCopy CGs found for the selected site(s).</td></tr>';
+        if (selectAll) {
+          selectAll.checked = false;
+          selectAll.indeterminate = false;
+          selectAll.disabled = true;
+        }
+        return;
+      }
+      body.innerHTML = list.map((row) => {
+        const rowKey = row.row_key || "";
+        const flashTime = row.flash_time || "—";
+        const progress = row.progress_pct != null && row.progress_pct !== ""
+          ? `${row.progress_pct}%`
+          : "—";
+        const maps = row.fc_map_count ?? "";
+        const hostMaps = row.host_map_count ?? "";
+        const size = row.total_size || "—";
+        const policy = row.policy || "—";
+        const snaps = row.snaps_per_week ?? "—";
+        return `<tr>
+          <td><input type="checkbox" class="fc-cg-summary-row-cb" data-row-key="${escapeAttr(rowKey)}" aria-label="Select ${escapeAttr(row.name || "")}"></td>
+          <td>${escapeHtml(row.site || "")}</td>
+          <td>${escapeHtml(row.name || "")}</td>
+          <td>${escapeHtml(row.status || "")}</td>
+          <td>${escapeHtml(String(flashTime))}</td>
+          <td>${escapeHtml(String(progress))}</td>
+          <td>${escapeHtml(String(maps))}</td>
+          <td>${escapeHtml(String(hostMaps))}</td>
+          <td>${escapeHtml(String(size))}</td>
+          <td>${escapeHtml(String(policy))}</td>
+          <td>${escapeHtml(String(snaps))}</td>
+        </tr>`;
+      }).join("");
+      if (selectAll) {
+        selectAll.disabled = false;
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+      }
+    }
+    function syncFcCgSummarySelectAll() {
+      const selectAll = document.getElementById("fc-cg-summary-select-all");
+      const boxes = Array.from(document.querySelectorAll(".fc-cg-summary-row-cb"));
+      if (!selectAll || !boxes.length) {
+        if (selectAll) {
+          selectAll.checked = false;
+          selectAll.indeterminate = false;
+        }
+        return;
+      }
+      const checked = boxes.filter((box) => box.checked).length;
+      selectAll.checked = checked === boxes.length;
+      selectAll.indeterminate = checked > 0 && checked < boxes.length;
+    }
+    function selectedFcCgSummaryKeys() {
+      return Array.from(document.querySelectorAll(".fc-cg-summary-row-cb:checked"))
+        .map((box) => box.getAttribute("data-row-key") || "")
+        .filter(Boolean);
+    }
+    async function loadFcCgSummarySiteOptions() {
+      const siteSelect = document.getElementById("fc-cg-summary-site");
+      if (!siteSelect) return;
+      try {
+        const res = await fetch("/api/fc-consistgrp/cards");
+        const data = await res.json();
+        const cards = data.cards || [];
+        const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+        siteSelect.innerHTML = '<option value="">All sites</option>' + sorted.map(
+          (card) => `<option value="${escapeAttr(card.id)}">${escapeHtml(card.name || card.id)}</option>`
+        ).join("");
+      } catch (_err) {
+        /* ignore */
+      }
     }
     async function refreshFcCgSummary() {
       const summaryStatus = document.getElementById("fc-cg-summary-status");
-      if (!currentId) {
-        summaryStatus.textContent = "Select a group to refresh CG summary.";
-        return false;
-      }
+      const siteSelect = document.getElementById("fc-cg-summary-site");
       summaryStatus.textContent = "Loading FlashCopy CG summary…";
+      const cardId = siteSelect && siteSelect.value ? siteSelect.value : "";
+      const url = "/api/contingency-groups/fc-cg-summary/live"
+        + (cardId ? ("?card_id=" + encodeURIComponent(cardId)) : "");
       try {
-        const response = await fetch(
-          `/api/contingency-groups/fc-cg-summary?group_id=${encodeURIComponent(currentId)}`
-        );
-        const data = await response.json();
-        if (!response.ok || !data.ok) {
-          const warnings = (data.warnings || []).filter(Boolean).join("; ");
-          throw new Error(warnings || data.error || `HTTP ${response.status}`);
+        const response = await fetch(url);
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 403) {
+          summaryStatus.textContent = data.error || "Unlock LaunchPad to refresh CG summary.";
+          return false;
         }
-        renderFcCgSummaryRows(data.summaries);
-        const card = data.card || {};
-        const cardLabel = card.name || card.ip || "";
-        summaryStatus.textContent = cardLabel
-          ? `Loaded ${Array.isArray(data.summaries) ? data.summaries.length : 0} CG(s) from ${cardLabel}.`
-          : `Loaded ${Array.isArray(data.summaries) ? data.summaries.length : 0} CG(s).`;
+        if (!response.ok) {
+          summaryStatus.textContent = data.error || `CG summary failed (HTTP ${response.status})`;
+          return false;
+        }
+        fcCgSummaryRows = Array.isArray(data.rows) ? data.rows : [];
+        fcCgSummaryLoaded = true;
+        renderFcCgSummaryRows(fcCgSummaryRows);
+        const errCount = (data.errors || []).length;
+        summaryStatus.textContent = `Loaded ${fcCgSummaryRows.length} CG(s).`
+          + (errCount ? ` ${errCount} site error(s).` : "");
         return true;
       } catch (error) {
         summaryStatus.textContent = `CG summary failed: ${error.message || error}`;
@@ -873,15 +931,49 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     }
     async function exportFcCgSummary() {
       const summaryStatus = document.getElementById("fc-cg-summary-status");
-      if (!currentId) {
-        summaryStatus.textContent = "Select a group to export CG summary.";
+      const selected = selectedFcCgSummaryKeys();
+      if (!selected.length) {
+        summaryStatus.textContent = "Select at least one CG to export.";
         return;
       }
-      const ok = await refreshFcCgSummary();
-      if (!ok) return;
-      window.location.assign(
-        `/api/contingency-groups/fc-cg-summary/export?group_id=${encodeURIComponent(currentId)}&format=xlsx&open=1`
-      );
+      if (!fcCgSummaryLoaded) {
+        summaryStatus.textContent = "Refresh CG summary before exporting.";
+        return;
+      }
+      const exportBtn = document.getElementById("fc-cg-summary-export");
+      if (exportBtn) exportBtn.disabled = true;
+      summaryStatus.textContent = "Exporting Excel…";
+      try {
+        const response = await fetch("/api/contingency-groups/fc-cg-summary/export-selected", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ selected, open: true }),
+        });
+        if (response.status === 404) {
+          const data = await response.json().catch(() => ({}));
+          summaryStatus.textContent = data.error || "Refresh CG summary before exporting.";
+          return;
+        }
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          summaryStatus.textContent = data.error || `Export failed (HTTP ${response.status})`;
+          return;
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        const filename = match ? match[1] : "FC_CG_Summary_MultiSite.xlsx";
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        summaryStatus.textContent = "Export saved.";
+      } catch (error) {
+        summaryStatus.textContent = `Export failed: ${error.message || error}`;
+      } finally {
+        if (exportBtn) exportBtn.disabled = false;
+      }
     }
     async function syncFromArray() {
       if (!currentId) { statusEl.textContent = "Select a group to sync."; return; }
@@ -1030,6 +1122,25 @@ CONTINGENCY_GROUPS_HTML = """<!DOCTYPE html>
     document.getElementById("sync-array-btn").addEventListener("click", syncFromArray);
     document.getElementById("fc-cg-summary-refresh").addEventListener("click", refreshFcCgSummary);
     document.getElementById("fc-cg-summary-export").addEventListener("click", exportFcCgSummary);
+    document.getElementById("fc-cg-summary-select-all").addEventListener("change", (event) => {
+      const checked = Boolean(event.target.checked);
+      document.querySelectorAll(".fc-cg-summary-row-cb").forEach((box) => {
+        box.checked = checked;
+      });
+      syncFcCgSummarySelectAll();
+    });
+    document.getElementById("fc-cg-summary-body").addEventListener("change", (event) => {
+      if (!event.target.closest(".fc-cg-summary-row-cb")) return;
+      syncFcCgSummarySelectAll();
+    });
+    document.getElementById("fc-cg-summary-site").addEventListener("change", () => {
+      fcCgSummaryRows = [];
+      fcCgSummaryLoaded = false;
+      renderFcCgSummaryRows([]);
+      document.getElementById("fc-cg-summary-status").textContent =
+        "Site changed — click Refresh CG summary to scan again.";
+    });
+    loadFcCgSummarySiteOptions();
     loadGroups();
   </script>
 </body>

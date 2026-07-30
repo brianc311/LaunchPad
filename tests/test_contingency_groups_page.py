@@ -317,10 +317,13 @@ def test_contingency_groups_exposes_fc_cg_summary_section():
     )[0]
     for text in (
         "Array FlashCopy CG summary",
+        'id="fc-cg-summary-site"',
         'id="fc-cg-summary-refresh"',
         "Refresh CG summary",
         'href="/fc-consistgrp"',
         "FlashCopy CGs",
+        'id="fc-cg-summary-select-all"',
+        "<th>Site</th>",
         "<th>Name</th>",
         "<th>Status</th>",
         "<th>Flash time</th>",
@@ -330,33 +333,60 @@ def test_contingency_groups_exposes_fc_cg_summary_section():
         "<th>Size</th>",
         "<th>Policy</th>",
         "<th>Snaps/week</th>",
-        'colspan="9"',
+        'colspan="11"',
         'id="fc-cg-summary-body"',
         'id="fc-cg-summary-status"',
         "Click Refresh CG summary (Unlock required).",
     ):
         assert text in section
+    assert section.index("<th>Site</th>") < section.index("<th>Name</th>")
     assert section.index("<th>Status</th>") < section.index("<th>Flash time</th>")
     assert section.index("<th>Flash time</th>") < section.index("<th>Progress</th>")
     assert section.index("<th>Progress</th>") < section.index("<th>Maps</th>")
 
 
+def test_contingency_groups_fc_cg_summary_site_select_loads_cards():
+    html = CONTINGENCY_GROUPS_HTML
+    loader = html.split("async function loadFcCgSummarySiteOptions(", 1)[1].split(
+        "\n    async function ", 1
+    )[0]
+    assert "/api/fc-consistgrp/cards" in loader or "/api/cards" in loader
+    assert 'getElementById("fc-cg-summary-site")' in html
+    assert "loadFcCgSummarySiteOptions" in html
+
+
 def test_contingency_groups_fc_cg_summary_render_uses_flash_time_and_progress():
-    render = CONTINGENCY_GROUPS_HTML.split("function renderFcCgSummaryRows(summaries) {", 1)[
+    render = CONTINGENCY_GROUPS_HTML.split("function renderFcCgSummaryRows(rows) {", 1)[
         1
     ].split("\n    async function ", 1)[0]
     assert "flash_time" in render
     assert "progress_pct" in render
-    assert 'colspan="9"' in render
+    assert "row.site" in render or "row.site ||" in render
+    assert "data-row-key" in render
+    assert "row_key" in render
+    assert 'colspan="11"' in render
 
 
-def test_contingency_groups_fc_cg_summary_refresh_calls_api():
+def test_contingency_groups_fc_cg_summary_select_all_checkbox():
+    html = CONTINGENCY_GROUPS_HTML
+    assert 'id="fc-cg-summary-select-all"' in html
+    assert "fc-cg-summary-select-all" in html
+    sync = html.split("function syncFcCgSummarySelectAll(", 1)[1].split(
+        "\n    async function ", 1
+    )[0]
+    assert "fc-cg-summary-row-cb" in sync or "data-row-key" in sync
+
+
+def test_contingency_groups_fc_cg_summary_refresh_calls_live_api():
     html = CONTINGENCY_GROUPS_HTML
     assert "async function refreshFcCgSummary(" in html
     body = html.split("async function refreshFcCgSummary(", 1)[1].split(
         "async function syncFromArray()", 1
     )[0]
-    assert "/api/contingency-groups/fc-cg-summary?group_id=" in body
+    assert "/api/contingency-groups/fc-cg-summary/live" in body
+    assert "/api/contingency-groups/fc-cg-summary?group_id=" not in body
+    assert "currentId" not in body
+    assert "fc-cg-summary-site" in body
     assert "sourceVolumeEntries" not in body
     assert "At least one source volume" not in body
     assert 'getElementById("fc-cg-summary-refresh")' in html
@@ -376,8 +406,17 @@ def test_contingency_groups_fc_cg_summary_export_control():
     assert section.index('id="fc-cg-summary-refresh"') < section.index(
         'id="fc-cg-summary-export"'
     )
-    assert "/api/contingency-groups/fc-cg-summary/export" in html
-    assert "format=xlsx" in html
+    export_fn = html.split("async function exportFcCgSummary(", 1)[1].split(
+        "\n    async function ", 1
+    )[0]
+    keys_fn = html.split("function selectedFcCgSummaryKeys(", 1)[1].split(
+        "\n    async function ", 1
+    )[0]
+    assert "/api/contingency-groups/fc-cg-summary/export-selected" in export_fn
+    assert '"selected"' in export_fn or "'selected'" in export_fn or "{ selected" in export_fn
+    assert "data-row-key" in keys_fn
+    assert "Select at least one" in export_fn or "at least one" in export_fn.lower()
+    assert "response.blob()" in export_fn or "res.blob()" in export_fn
     assert "function exportFcCgSummary" in html or "exportFcCgSummary(" in html
 
 
