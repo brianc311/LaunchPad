@@ -51,6 +51,7 @@ from launchpad.fc_consistgrp_ops import (
     partition_maps,
     preview_ok as fc_consistgrp_preview_ok,
 )
+from launchpad.fc_cg_summary_export import export_fc_cg_summary_xlsx
 from launchpad.fc_consistgrp_status_export import (
     export_fc_consistgrp_status_xlsx,
     filter_status_rows,
@@ -2117,6 +2118,54 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             result = server.contingency_fc_cg_summary(group_id)
             self._send_json(result, status=200 if result.get("ok") else 400)
+            return
+        if path == "/api/contingency-groups/fc-cg-summary/export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            export_format = (query.get("format") or [""])[0].strip().lower()
+            if export_format != "xlsx":
+                self._send_json(
+                    {"error": "Export format must be xlsx."},
+                    status=400,
+                )
+                return
+            group_id = (query.get("group_id") or [""])[0].strip()
+            if not group_id:
+                self._send_json({"error": "group_id is required"}, status=400)
+                return
+            open_after = (query.get("open") or ["1"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                body, filename, content_type = server.export_fc_cg_summary_bytes(
+                    group_id=group_id,
+                )
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"FlashCopy CG summary export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "FlashCopy CG summary export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
             return
         if path == "/api/cards":
             self._send_json(server.list_cards())
@@ -4362,6 +4411,24 @@ class HealthServer:
         return (
             body,
             f"FC_CG_Status_{stamp}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    def export_fc_cg_summary_bytes(
+        self, *, group_id: str
+    ) -> tuple[bytes, str, str]:
+        result = self.contingency_fc_cg_summary(group_id)
+        if not result.get("ok"):
+            warnings = [str(w) for w in (result.get("warnings") or []) if w]
+            raise LookupError("; ".join(warnings) or "FlashCopy CG summary failed.")
+        card = result.get("card") or {}
+        card_name = str(card.get("name") or "").strip() or "group"
+        safe_card = re.sub(r"[^\w\-]+", "_", card_name).strip("_") or "group"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        body = export_fc_cg_summary_xlsx(list(result.get("summaries") or []))
+        return (
+            body,
+            f"FC_CG_Summary_{safe_card}_{stamp}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
