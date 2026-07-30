@@ -77,7 +77,7 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <div class="hero">
       <h1>Snapcopy Summary</h1>
-      <p>Live FlashCopy Consistency Groups across monitored sites (read-only). Unlock LaunchPad, pick a site (or All sites), then Refresh.</p>
+      <p>Live FlashCopy Consistency Groups across monitored sites (read-only). Unlock LaunchPad, turn on Monitor for sites in Health Dashboard, pick a site (or All sites), then Refresh. Select rows with checkboxes before Export Excel.</p>
       <div class="hero-actions">
         <label>Site <select id="snapcopy-site" aria-label="Snapcopy summary site filter"><option value="">All sites</option></select></label>
         <button type="button" class="btn" id="snapcopy-refresh">Refresh</button>
@@ -86,7 +86,7 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
       </div>
-      <div class="status" id="snapcopy-status">Load cards, then Refresh.</div>
+      <div class="status" id="snapcopy-status">Load cards, then Refresh. Export requires at least one checked CG.</div>
     </div>
 
     <div class="section">
@@ -204,11 +204,16 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
       try {
         const res = await fetch("/api/fc-consistgrp/cards");
         const data = await res.json();
-        const cards = data.cards || [];
+        const cards = (data.cards || []).filter((card) => {
+          const typeOk = String(card.card_type || "ssh").toLowerCase() === "ssh";
+          return typeOk;
+        });
         const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-        siteSelectEl.innerHTML = '<option value="">All sites</option>' + sorted.map(
-          (card) => '<option value="' + escapeAttr(card.id) + '">' + escapeHtml(card.name || card.id) + "</option>"
-        ).join("");
+        siteSelectEl.innerHTML = '<option value="">All sites</option>' + sorted.map((card) => {
+          const monitorOn = !!card.monitor_on;
+          const label = (card.name || card.id) + (monitorOn ? "" : " (monitor off)");
+          return '<option value="' + escapeAttr(card.id) + '">' + escapeHtml(label) + "</option>";
+        }).join("");
       } catch (_err) {
         /* ignore */
       }
@@ -234,8 +239,20 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
         snapcopyLoaded = true;
         renderRows(snapcopyRows);
         const errCount = (data.errors || []).length;
+        const skipped = Array.isArray(data.skipped_monitor_off) ? data.skipped_monitor_off : [];
+        const eligible = data.eligible != null ? Number(data.eligible) : null;
+        if (!snapcopyRows.length && eligible === 0 && skipped.length) {
+          statusEl.textContent = "No monitored sites to scan. Turn on Monitor in Health Dashboard for: "
+            + skipped.join(", ") + ", then Refresh.";
+          return true;
+        }
+        if (!snapcopyRows.length && eligible === 0) {
+          statusEl.textContent = "No monitored FlashSystem/SVC sites. Turn on Monitor in Health Dashboard, then Refresh.";
+          return true;
+        }
         statusEl.textContent = "Loaded " + snapcopyRows.length + " CG(s)."
-          + (errCount ? (" " + errCount + " site error(s).") : "");
+          + (errCount ? (" " + errCount + " site error(s).") : "")
+          + (snapcopyRows.length ? " Select rows, then Export Excel." : "");
         return true;
       } catch (error) {
         statusEl.textContent = "CG summary failed: " + (error.message || error);
