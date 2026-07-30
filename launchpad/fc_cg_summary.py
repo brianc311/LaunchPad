@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from launchpad.fc_consistgrp_ops import format_cg_total_size, sum_source_size_bytes
+from launchpad.fc_consistgrp_ops import (
+    format_cg_total_size,
+    format_flash_time_display,
+    sum_source_size_bytes,
+)
 
 _POLICY_KEYS = (
     "copy_rate",
@@ -206,7 +210,9 @@ def build_cg_summaries(
             {
                 "name": name,
                 "status": status,
-                "flash_time": str(group.get("flash_time") or ""),
+                "flash_time": format_flash_time_display(
+                    str(group.get("flash_time") or "")
+                ),
                 "progress_pct": min_map_progress_pct(members, status=status),
                 "policy": compose_cg_policy_display(
                     array_policy=group.get("policy") or "",
