@@ -52,18 +52,20 @@ The Array FlashCopy CG summary on Consistency Groups makes that page too busy. O
 
 ### Snapcopy Summary page
 
-- Path e.g. `/snapcopy-summary`.
+- Path: `/snapcopy-summary`.
 - Controls: Site `<select>` (All sites + eligible cards by **card name**), **Refresh**, **Export Excel**, select-all + row checkboxes.
-- Back / Consistency Groups link for navigation.
+- Link back to Consistency Groups (`/contingency-groups` or current Contingency path).
 - Unlock required for live scan (same as today).
 - Eligibility: `is_fc_consistgrp_status_eligible` (monitor on + SSH + SVC/FlashSystem).
 
 ### Table columns
 
-Checkbox | Site | Name | Status | Flash time | Progress | Maps | Host maps | Size | Policy | Snaps/week
+Checkbox | Site | Host | Name | Status | Flash time | Progress | Maps | Host maps | Size | Policy | Snaps/week
 
-- **Site** cell: card name; adjacent or linked host IP via `https://{host}` (`target=_blank`, `rel=noopener`).
+- **Site**: card name text.
+- **Host**: `https://{host}` link (`target=_blank`, `rel=noopener`) to the array GUI.
 - Row key unchanged: `{card_id}:{cg_name}`.
+- Excel includes Site and Host (Host as plain URL or IP string).
 
 ### Policy string
 
