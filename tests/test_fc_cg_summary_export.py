@@ -11,9 +11,12 @@ from launchpad.fc_cg_summary_export import (
 )
 
 
-def test_summary_headers_include_site_and_flash_time_and_progress():
+def test_summary_headers_include_site_host_and_flash_time_and_progress():
+    assert SUMMARY_HEADERS[0] == "Site"
+    assert SUMMARY_HEADERS[1] == "Host"
     assert SUMMARY_HEADERS == (
         "Site",
+        "Host",
         "Name",
         "Status",
         "Flash time",
@@ -26,6 +29,7 @@ def test_summary_headers_include_site_and_flash_time_and_progress():
     )
     assert SUMMARY_FIELDS == (
         "site",
+        "host",
         "name",
         "status",
         "flash_time",
@@ -42,6 +46,7 @@ def test_export_fc_cg_summary_xlsx_sheet_headers_and_rows():
     rows = [
         {
             "site": "Anderson",
+            "host": "10.0.0.1",
             "name": "AAN1_FC",
             "status": "idle_or_copied",
             "flash_time": "2026-07-30 10:00:00",
@@ -54,6 +59,7 @@ def test_export_fc_cg_summary_xlsx_sheet_headers_and_rows():
         },
         {
             "site": "Jupiter",
+            "host": "10.0.0.2",
             "name": "COPYING_CG",
             "status": "copying",
             "flash_time": "",
@@ -71,30 +77,51 @@ def test_export_fc_cg_summary_xlsx_sheet_headers_and_rows():
     ws = wb["FC CG Summary"]
     assert [cell.value for cell in ws[1]] == list(SUMMARY_HEADERS)
     assert ws["A2"].value == "Anderson"
-    assert ws["B2"].value == "AAN1_FC"
-    assert ws["D2"].value == "2026-07-30 10:00:00"
-    assert ws["E2"].value in ("", None)
-    assert ws["F2"].value == 84
-    assert ws["H2"].value == "5.8 TB"
-    assert ws["J2"].value == 0.44
-    assert ws["D3"].value in ("", None)
-    assert ws["E3"].value == "40%"
+    assert ws["B2"].value == "10.0.0.1"
+    assert ws["C2"].value == "AAN1_FC"
+    assert ws["E2"].value == "2026-07-30 10:00:00"
+    assert ws["F2"].value in ("", None)
+    assert ws["G2"].value == 84
+    assert ws["I2"].value == "5.8 TB"
+    assert ws["K2"].value == 0.44
+    assert ws["E3"].value in ("", None)
+    assert ws["F3"].value == "40%"
 
 
 def test_export_multisite_one_sheet_per_site():
     rows = [
-        {"site": "Anderson", "name": "CG1", "status": "idle_or_copied", "progress_pct": 100},
-        {"site": "Jupiter", "name": "CG2", "status": "copying", "progress_pct": 75},
-        {"site": "Anderson", "name": "CG3", "status": "stopped", "progress_pct": 50},
+        {
+            "site": "Anderson",
+            "host": "10.0.0.1",
+            "name": "CG1",
+            "status": "idle_or_copied",
+            "progress_pct": 100,
+        },
+        {
+            "site": "Jupiter",
+            "host": "10.0.0.2",
+            "name": "CG2",
+            "status": "copying",
+            "progress_pct": 75,
+        },
+        {
+            "site": "Anderson",
+            "host": "10.0.0.1",
+            "name": "CG3",
+            "status": "stopped",
+            "progress_pct": 50,
+        },
     ]
     body = export_fc_cg_summary_multisite_xlsx(rows)
     wb = load_workbook(BytesIO(body))
     assert wb.sheetnames == ["Anderson", "Jupiter"]
     assert wb["Anderson"]["A2"].value == "Anderson"
-    assert wb["Anderson"]["B2"].value == "CG1"
-    assert wb["Anderson"]["B3"].value == "CG3"
+    assert wb["Anderson"]["B2"].value == "10.0.0.1"
+    assert wb["Anderson"]["C2"].value == "CG1"
+    assert wb["Anderson"]["C3"].value == "CG3"
     assert wb["Jupiter"]["A2"].value == "Jupiter"
-    assert wb["Jupiter"]["B2"].value == "CG2"
+    assert wb["Jupiter"]["B2"].value == "10.0.0.2"
+    assert wb["Jupiter"]["C2"].value == "CG2"
 
 
 def test_export_multisite_empty_rows_creates_header_only_sheet():

@@ -4507,7 +4507,7 @@ class HealthServer:
             card = self._cards.get(int(current_id))
             if card is None:
                 continue
-            site = str(card.category or "").strip() or card.name
+            site = str(card.name or "").strip() or "Unknown"
             try:
                 inventory = self.fc_consistgrp_inventory(int(current_id))
                 if not inventory.get("ok"):

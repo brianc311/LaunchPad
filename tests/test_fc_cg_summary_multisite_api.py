@@ -59,8 +59,8 @@ def test_live_scan_requires_unlock(monkeypatch):
 def test_live_scan_happy_path_mocked_inventory(monkeypatch):
     server = HealthServer()
     _unlock(server)
-    server._cards[1] = _svc_card(1, "Hartford", "10.0.0.1", category="Hartford Site")
-    server._cards[2] = _svc_card(2, "Anderson", "10.0.0.2", category="Anderson Site")
+    server._cards[1] = _svc_card(1, "Hartford", "10.0.0.1", category="General")
+    server._cards[2] = _svc_card(2, "Anderson", "10.0.0.2", category="General")
     server.set_monitor_enabled(card_id=1, enabled=True)
     server.set_monitor_enabled(card_id=2, enabled=True)
     monkeypatch.setattr(server, "sync_from_app", lambda: 0)
@@ -91,7 +91,8 @@ def test_live_scan_happy_path_mocked_inventory(monkeypatch):
     assert len(result["rows"]) == 3
     by_key = {row["row_key"]: row for row in result["rows"]}
     hartford = by_key["1:AWD1_FC"]
-    assert hartford["site"] == "Hartford Site"
+    assert hartford["site"] == "Hartford"
+    assert hartford["site"] != "General"
     assert hartford["card_name"] == "Hartford"
     assert hartford["host"] == "10.0.0.1"
     assert hartford["card_id"] == 1
@@ -103,7 +104,9 @@ def test_live_scan_happy_path_mocked_inventory(monkeypatch):
     assert hartford["total_size"] == "10.0 GB"
     assert hartford["snaps_per_week"] == 3
     assert by_key["1:STOPPED_CG"]["progress_pct"] == 50
-    assert by_key["2:AAN1_FC"]["site"] == "Anderson Site"
+    anderson = by_key["2:AAN1_FC"]
+    assert anderson["site"] == "Anderson"
+    assert anderson["site"] != "General"
     cached = server.get_fc_cg_summary_live_cache()
     assert cached is not None
     assert len(cached["rows"]) == 3
@@ -162,7 +165,7 @@ def test_export_selected_only_from_cache():
     workbook = load_workbook(BytesIO(body))
     assert set(workbook.sheetnames) == {"Hartford"}
     sheet = workbook["Hartford"]
-    assert sheet["B2"].value == "AWD1_FC"
+    assert sheet["C2"].value == "AWD1_FC"
 
 
 def test_export_selected_requires_cache():
