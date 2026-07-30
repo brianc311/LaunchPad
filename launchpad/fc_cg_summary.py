@@ -114,18 +114,31 @@ def _parse_map_progress(raw: object) -> float | int | None:
     return value
 
 
-def min_map_progress_pct(maps: list[dict], *, status: str) -> float | int | None:
-    """Return minimum parseable member progress while status is copying."""
-    if str(status or "").strip().lower() != "copying":
-        return None
+def _member_progress_values(maps: list[dict]) -> list[float | int]:
     values: list[float | int] = []
     for mapping in maps:
         parsed = _parse_map_progress(mapping.get("progress"))
         if parsed is not None:
             values.append(parsed)
-    if not values:
-        return None
-    return min(values)
+    return values
+
+
+def min_map_progress_pct(maps: list[dict], *, status: str) -> float | int | None:
+    """Resolve CG progress for the summary row.
+
+    - idle_or_copied / idle_copied → 100 (background copy finished)
+    - copying → minimum parseable member map progress
+    - stopped / stopping / suspended → minimum when maps report progress, else None
+    """
+    normalized = str(status or "").strip().lower().replace(" ", "_")
+    if normalized in {"idle_or_copied", "idle_copied"}:
+        return 100
+    values = _member_progress_values(maps)
+    if normalized == "copying":
+        return min(values) if values else None
+    if normalized in {"stopped", "stopping", "suspended"}:
+        return min(values) if values else None
+    return None
 
 
 def _target_volumes(maps: list[dict]) -> set[str]:

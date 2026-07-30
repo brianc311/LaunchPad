@@ -74,11 +74,21 @@ def test_build_cg_summaries_flash_time_and_min_progress_while_copying():
     assert rows[0]["progress_pct"] == 40
 
 
-def test_build_cg_summaries_progress_none_when_not_copying():
+def test_build_cg_summaries_progress_100_when_idle_or_copied():
     groups = [{"name": "CG1", "status": "idle_or_copied", "flash_time": "x"}]
-    maps = [{"name": "m1", "consistgrp": "CG1", "progress": "90", "source": "s", "target": "t"}]
+    maps = [{"name": "m1", "consistgrp": "CG1", "progress": "", "source": "s", "target": "t"}]
     rows = build_cg_summaries(groups=groups, maps=maps, host_maps=[], schedule=None)
-    assert rows[0]["progress_pct"] is None
+    assert rows[0]["progress_pct"] == 100
+
+
+def test_build_cg_summaries_progress_min_when_stopped():
+    groups = [{"name": "CG1", "status": "stopped", "flash_time": "x"}]
+    maps = [
+        {"name": "m1", "consistgrp": "CG1", "progress": "75", "source": "s", "target": "t"},
+        {"name": "m2", "consistgrp": "CG1", "progress": "90", "source": "s2", "target": "t2"},
+    ]
+    rows = build_cg_summaries(groups=groups, maps=maps, host_maps=[], schedule=None)
+    assert rows[0]["progress_pct"] == 75
 
 
 def test_min_map_progress_pct_ignores_non_numeric():

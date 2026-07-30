@@ -6,7 +6,11 @@ from collections.abc import Callable
 
 from launchpad.contingency_snap_create import SnapStep, cli_token
 from launchpad.flashsystem_fc import _get, _table_records, parse_lsvdisk_volumes
-from launchpad.flashsystem_parse import _format_bytes, _parse_size_bytes
+from launchpad.flashsystem_parse import (
+    _format_bytes,
+    _parse_key_values,
+    _parse_size_bytes,
+)
 from launchpad.storage_presets import is_svc_fc_profile
 
 ACTIONS = frozenset(
@@ -121,6 +125,13 @@ def parse_lsfcmap_rows(output: str) -> list[dict]:
                 ),
                 "status": _get(record, "status", "state"),
                 "progress": _get(record, "progress"),
+                "start_time": _get(
+                    record,
+                    "start_time",
+                    "Start_time",
+                    "flash_time",
+                    "Flash_time",
+                ),
                 "consistgrp": _get(
                     record,
                     "group_name",
@@ -226,6 +237,60 @@ def format_cg_total_size(maps: list[dict]) -> str:
     return ""
 
 
+def _flash_time_from_detail(output: str) -> str:
+    """Extract flash/start time from detailed lsfcconsistgrp key:value output."""
+    fields = _parse_key_values(output or "")
+    return (
+        str(fields.get("flash_time") or "").strip()
+        or str(fields.get("Flash_time") or "").strip()
+        or str(fields.get("start_time") or "").strip()
+        or str(fields.get("Start_time") or "").strip()
+    )
+
+
+def _earliest_map_start_time(maps: list[dict], group_name: str) -> str:
+    times: list[str] = []
+    for mapping in maps:
+        if str(mapping.get("consistgrp") or "").strip() != group_name:
+            continue
+        start = str(mapping.get("start_time") or "").strip()
+        if start:
+            times.append(start)
+    if not times:
+        return ""
+    return min(times)
+
+
+def enrich_groups_flash_time(
+    groups: list[dict],
+    maps: list[dict],
+    run_cmd: Callable[[str], str] | None = None,
+) -> list[dict]:
+    """Fill blank flash_time from detailed CG view and/or member map start_time."""
+    for group in groups:
+        if str(group.get("flash_time") or "").strip():
+            continue
+        name = str(group.get("name") or "").strip()
+        if not name:
+            continue
+        if run_cmd is not None:
+            try:
+                detail = run_cmd(f"svcinfo lsfcconsistgrp -delim : {cli_token(name)}")
+                flash = _flash_time_from_detail(detail)
+                if not flash:
+                    detail = run_cmd(f"svcinfo lsfcconsistgrp {cli_token(name)}")
+                    flash = _flash_time_from_detail(detail)
+                if flash:
+                    group["flash_time"] = flash
+                    continue
+            except Exception:
+                pass
+        earliest = _earliest_map_start_time(maps, name)
+        if earliest:
+            group["flash_time"] = earliest
+    return groups
+
+
 def collect_fc_consistgrp_inventory(
     run_cmd: Callable[[str], str],
 ) -> tuple[list[dict], list[dict]]:
@@ -240,6 +305,7 @@ def collect_fc_consistgrp_inventory(
     groups = parse_lsfcconsistgrp(groups_output)
     maps = parse_lsfcmap_rows(maps_output)
     groups = enrich_group_map_counts(groups, maps)
+    groups = enrich_groups_flash_time(groups, maps, run_cmd)
 
     index: dict = {}
     try:

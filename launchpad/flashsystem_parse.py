@@ -170,17 +170,17 @@ def _parse_key_values(output: str) -> dict[str, str]:
     for line in lines:
         if _looks_like_df_header(line):
             continue
-        if line.count(":") == 1:
+        if ":" in line:
+            # First colon only so values like times with ":" still parse.
             key, _, value = line.partition(":")
             key = key.strip()
             value = value.strip()
             if key and value:
                 values[key] = value
             continue
-        if ":" not in line:
-            parts = line.split(None, 1)
-            if len(parts) == 2:
-                values[parts[0]] = parts[1]
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            values[parts[0]] = parts[1]
     return values
 
 

@@ -80,7 +80,9 @@ def test_collect_fc_consistgrp_inventory_parses_delimited_tables():
 
     def run_cmd(cmd: str) -> str:
         calls.append(cmd)
-        return responses.get(cmd, "")
+        if cmd in responses:
+            return responses[cmd]
+        return ""
 
     groups, maps = collect_fc_consistgrp_inventory(run_cmd)
 
@@ -90,12 +92,11 @@ def test_collect_fc_consistgrp_inventory_parses_delimited_tables():
     by_name = {m["name"]: m for m in maps}
     assert by_name["fcmap0"]["source_size"] == "100.00GB"
     assert by_name["fcmap0"]["source_size_bytes"] == int(100 * (1024**3))
-    assert calls == [
-        "svcinfo lsfcconsistgrp -delim :",
-        "svcinfo lsfcmap -delim :",
-        "svcinfo lsvdisk -delim :",
-    ]
-
+    assert calls[0] == "svcinfo lsfcconsistgrp -delim :"
+    assert "svcinfo lsfcmap -delim :" in calls
+    assert "svcinfo lsvdisk -delim :" in calls
+    assert any("AWD1_AS400_CG" in cmd for cmd in calls)
+    assert any("empty_cg" in cmd for cmd in calls)
 
 def test_collect_fc_consistgrp_inventory_falls_back_when_delimited_empty():
     responses = {
@@ -110,7 +111,9 @@ def test_collect_fc_consistgrp_inventory_falls_back_when_delimited_empty():
 
     def run_cmd(cmd: str) -> str:
         calls.append(cmd)
-        return responses.get(cmd, "")
+        if cmd in responses:
+            return responses[cmd]
+        return ""
 
     groups, maps = collect_fc_consistgrp_inventory(run_cmd)
 
@@ -118,15 +121,15 @@ def test_collect_fc_consistgrp_inventory_falls_back_when_delimited_empty():
     assert len(maps) == 3
     by_name = {m["name"]: m for m in maps}
     assert by_name["fcmap1"]["source_size"] == "200.00GB"
-    assert calls == [
+    assert calls[0:4] == [
         "svcinfo lsfcconsistgrp -delim :",
         "svcinfo lsfcconsistgrp",
         "svcinfo lsfcmap -delim :",
         "svcinfo lsfcmap",
-        "svcinfo lsvdisk -delim :",
-        "svcinfo lsvdisk",
     ]
-
+    assert "svcinfo lsvdisk -delim :" in calls
+    assert "svcinfo lsvdisk" in calls
+    assert any("AWD1_AS400_CG" in cmd for cmd in calls)
 
 def test_collect_inventory_lsvdisk_failure_still_returns_maps():
     def run_cmd(cmd: str) -> str:
@@ -301,3 +304,38 @@ def test_parse_lsfcconsistgrp_flash_time_when_present():
 def test_parse_lsfcconsistgrp_flash_time_blank_when_absent():
     groups = parse_lsfcconsistgrp(CG_SAMPLE)
     assert groups[0]["flash_time"] == ""
+
+
+def test_enrich_groups_flash_time_from_detailed_view():
+    from launchpad.fc_consistgrp_ops import enrich_groups_flash_time
+
+    groups = [{"name": "CG1", "status": "idle_or_copied", "flash_time": ""}]
+    maps: list[dict] = []
+
+    def run_cmd(command: str) -> str:
+        if "lsfcconsistgrp -delim : CG1" in command or command.endswith(" CG1"):
+            return "id:1\nname:CG1\nstatus:idle_or_copied\nstart_time:210730:12:00:00\n"
+        return ""
+
+    enrich_groups_flash_time(groups, maps, run_cmd)
+    assert groups[0]["flash_time"] == "210730:12:00:00"
+
+
+def test_enrich_groups_flash_time_from_map_start_time():
+    from launchpad.fc_consistgrp_ops import enrich_groups_flash_time
+
+    groups = [{"name": "CG1", "status": "copying", "flash_time": ""}]
+    maps = [
+        {"consistgrp": "CG1", "start_time": "210731120000"},
+        {"consistgrp": "CG1", "start_time": "210730120000"},
+    ]
+    enrich_groups_flash_time(groups, maps, run_cmd=None)
+    assert groups[0]["flash_time"] == "210730120000"
+
+
+def test_parse_lsfcmap_rows_includes_start_time():
+    sample = """id:name:source_vdisk_name:target_vdisk_name:status:progress:group_name:start_time
+0:m1:src:tgt:copying:50:CG1:210730120000
+"""
+    maps = parse_lsfcmap_rows(sample)
+    assert maps[0]["start_time"] == "210730120000"
