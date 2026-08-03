@@ -580,6 +580,8 @@ class DashboardView(ctk.CTkFrame):
                 text_color=self.theme["muted"],
                 font=ctk.CTkFont(size=14),
             ).grid(row=0, column=0, columnspan=cols, padx=12, pady=24, sticky="w")
+            self._refresh_capacity_alerts()
+            self._schedule_capacity_alert_poll()
             return
 
         self._load_monitor_states()
