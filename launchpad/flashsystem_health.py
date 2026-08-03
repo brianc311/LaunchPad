@@ -114,6 +114,39 @@ def _find_pool_capacity_result(
     return None
 
 
+def capacity_summary_from_pools(
+    pools: list[dict[str, Any]] | None,
+    *,
+    name: str = "All CPGs",
+) -> dict[str, Any] | None:
+    """Roll CPG/pool rows into one system capacity summary for Excel/UI."""
+    if not pools:
+        return None
+    total = 0.0
+    used = 0.0
+    free = 0.0
+    for pool in pools:
+        pool_name = str(pool.get("name") or "").strip().lower()
+        if pool_name in {"total", "totals", "sum"}:
+            continue
+        total += float(pool.get("total_bytes") or 0)
+        used += float(pool.get("used_bytes") or 0)
+        free += float(pool.get("free_bytes") or 0)
+    if total <= 0:
+        return None
+    if free <= 0 and used <= total:
+        free = max(0.0, total - used)
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": {},
+    }
+
+
 def pool_capacity_from_commands(
     command_results: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
@@ -996,6 +1029,8 @@ def analyze_health(
                 "used_pct": float(capacity.get("used_pct") or 0),
             }
         ]
+    if not capacity and pools:
+        capacity = capacity_summary_from_pools(pools)
 
     return {
         "health_issues": issues,

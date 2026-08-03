@@ -18,7 +18,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from launchpad.database import Card, Database
-from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.flashsystem_health import (
+    analyze_health,
+    capacity_summary_from_pools,
+    pool_capacity_from_commands,
+)
 from launchpad.flashsystem_parse import _format_bytes
 from launchpad.monitor import HealthDashboardEntry, build_health_dashboard_entries
 
@@ -149,12 +153,16 @@ def format_capacity_text(
     capacity_summary: dict[str, Any] | None,
     *,
     error: str | None = None,
+    pools: list[dict[str, Any]] | None = None,
 ) -> str:
-    if capacity_summary:
-        pct = float(capacity_summary.get("used_pct") or 0)
-        used = int(capacity_summary.get("used_bytes") or 0)
-        total = int(capacity_summary.get("total_bytes") or 0)
-        label = capacity_summary.get("name") or "System"
+    summary = capacity_summary
+    if (not summary or not int(summary.get("total_bytes") or 0)) and pools:
+        summary = capacity_summary_from_pools(pools) or summary
+    if summary:
+        pct = float(summary.get("used_pct") or 0)
+        used = int(summary.get("used_bytes") or 0)
+        total = int(summary.get("total_bytes") or 0)
+        label = summary.get("name") or "System"
         if total > 0:
             return (
                 f"{label}: {pct:.1f}% used "
@@ -491,10 +499,10 @@ def export_storage_capacity_excel(
             progress(entry.name, index, total)
         try:
             summary, pools, error = _refresh_entry_capacity(entry)
-            text = format_capacity_text(summary, error=error)
+            text = format_capacity_text(summary, error=error, pools=pools)
             capacity_by_card_id[entry.card_id] = text
             pools_by_card_id[entry.card_id] = pools
-            if error and not summary:
+            if error and not summary and not pools:
                 error_count += 1
         except Exception as exc:
             capacity_by_card_id[entry.card_id] = format_capacity_text(None, error=str(exc))
@@ -606,10 +614,14 @@ def export_storage_capacity_excel_from_sites(
     error_count = 0
 
     for card_id, site in sites_by_id.items():
-        text = format_capacity_text(site.capacity_summary, error=site.error)
+        text = format_capacity_text(
+            site.capacity_summary,
+            error=site.error,
+            pools=site.pools,
+        )
         capacity_by_card_id[card_id] = text
         pools_by_card_id[card_id] = site.pools
-        if site.error and not site.capacity_summary:
+        if site.error and not site.capacity_summary and not site.pools:
             error_count += 1
 
     matched_card_ids: set[int] = set()
