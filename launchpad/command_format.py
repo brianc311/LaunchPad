@@ -43,6 +43,32 @@ def resolve_card_commands(
     return apply_command_placeholders(commands, instance_id=instance_id)
 
 
+def filter_capacity_focus_commands(
+    commands: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Keep only capacity-oriented CLI commands for faster Capacity Report refresh."""
+    kept: list[tuple[str, str]] = []
+    for label, command in commands:
+        haystack = f"{label} {command}".lower()
+        if "capacity" in haystack:
+            kept.append((label, command))
+            continue
+        if any(
+            token in haystack
+            for token in (
+                "showsys",
+                "showcpg",
+                "showspace",
+                "lssystem",
+                "lsmdiskgrp",
+                "lsextpool",
+                "df -h",
+            )
+        ):
+            kept.append((label, command))
+    return kept or list(commands)
+
+
 def apply_command_placeholders(
     commands: list[tuple[str, str]],
     *,

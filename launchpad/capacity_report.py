@@ -949,7 +949,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
       if (section) section.classList.add("loading");
       try {
-        const res = await fetch(`/api/refresh/${cardId}`, { method: "POST" });
+        const res = await fetch(`/api/refresh/${cardId}?focus=capacity`, { method: "POST" });
         const card = await res.json();
         if (!res.ok) throw new Error(card.error || "Refresh failed");
         return card;

@@ -1,5 +1,5 @@
 from launchpad.config import APP_VERSION
 
 
-def test_app_version_1698():
-    assert APP_VERSION == "1.6.98"
+def test_app_version_1699():
+    assert APP_VERSION == "1.6.99"

@@ -226,8 +226,9 @@ def run_ssh_commands(
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9?]*[ -/]*[@-~]")
-# Real 3PAR/Primera prompts look like ``cli%`` or ``user@host%`` — not ``98.5%``.
+# Bare ``cli%`` / ``user%``. Real arrays often show ``HOSTNAME cli%``.
 _HPE_PROMPT_RE = re.compile(r"^(?:cli|[A-Za-z0-9][\w.@\\-]*)\s*%\s*$")
+_HPE_HOST_CLI_PROMPT_RE = re.compile(r"(?:^|\s)cli\s*%\s*$", re.IGNORECASE)
 
 
 def _clean_shell_text(raw: str) -> str:
@@ -255,15 +256,19 @@ def _recv_shell(channel, *, timeout: float, idle_seconds: float = 0.35) -> str:
 
 
 def _looks_like_hpe_prompt(line: str) -> bool:
-    """True for CLI prompts like ``cli%`` — false for capacity percents like ``98.5%``."""
+    """True for ``cli%`` / ``HOST cli%`` — false for capacity percents like ``98.5%``."""
     stripped = (line or "").strip()
     if not stripped:
         return False
+    # Reject numeric percents: "98.5%", "50%", "Used 12.0%"
     if re.search(r"[\d.]\s*%\s*$", stripped):
         return False
     lowered = stripped.lower()
     if lowered in {"warn%", "used%", "use%", "%"}:
         return False
+    # Most common production prompt: "ARRAYNAME cli%"
+    if _HPE_HOST_CLI_PROMPT_RE.search(stripped):
+        return True
     if _HPE_PROMPT_RE.match(stripped):
         return True
     if stripped == ">":
@@ -294,6 +299,9 @@ def _recv_until_hpe_prompt(channel, *, timeout: float, idle_seconds: float = 0.5
             text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
             lines = [line for line in text.split("\n") if line.strip()]
             if lines and _looks_like_hpe_prompt(lines[-1]):
+                break
+            # Login banners can end without a matched prompt — stop on long idle.
+            if (time.monotonic() - last_data) >= max(idle_seconds, 2.0):
                 break
         if channel.exit_status_ready() and not channel.recv_ready():
             break
@@ -333,8 +341,11 @@ def _recv_hpe_command_output(
         if chunks and (time.monotonic() - last_data) >= idle_seconds:
             text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
             lines = [line for line in text.split("\n") if line.strip()]
-            # Do not finish on idle alone — checkhealth pauses between lines.
             if saw_echo and lines and _looks_like_hpe_prompt(lines[-1]):
+                break
+            # Safety: after echo + sustained idle, accept output even if prompt
+            # matching fails (some builds use unusual prompt text).
+            if saw_echo and (time.monotonic() - last_data) >= max(idle_seconds, 2.5):
                 break
             continue
         if channel.exit_status_ready() and not channel.recv_ready():

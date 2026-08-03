@@ -3312,14 +3312,17 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if not path.startswith("/api/refresh/"):
             self.send_error(404)
             return
-        suffix = path.removeprefix("/api/refresh/")
+        parsed = urlparse(self.path)
+        suffix = parsed.path.removeprefix("/api/refresh/")
+        query = parse_qs(parsed.query)
+        focus = (query.get("focus") or [""])[0].strip().lower()
         try:
             card_id = int(suffix)
         except ValueError:
             self.send_error(400)
             return
         try:
-            card = server.refresh_card(card_id)
+            card = server.refresh_card(card_id, focus=focus)
             self._send_json(card.to_api())
         except KeyError:
             self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
@@ -5931,7 +5934,7 @@ class HealthServer:
                 updated_at=existing.updated_at if existing else None,
             )
 
-    def refresh_card(self, card_id: int) -> HealthCard:
+    def refresh_card(self, card_id: int, *, focus: str = "") -> HealthCard:
         with self._lock:
             if card_id not in self._cards:
                 raise KeyError(card_id)
@@ -5945,12 +5948,17 @@ class HealthServer:
             device_profile = card.device_profile
             custom_commands = card.custom_commands
             serial_number = card.serial_number
+            prior_results = list(card.command_results or [])
+
+        from launchpad.command_format import filter_capacity_focus_commands
 
         commands = resolve_card_commands(
             device_profile,
             custom_commands,
             instance_id=serial_number,
         )
+        if (focus or "").strip().lower() == "capacity":
+            commands = filter_capacity_focus_commands(commands)
         if commands:
             command_results = run_remote_command_suite(
                 host,
@@ -5962,6 +5970,15 @@ class HealthServer:
                 password,
                 device_profile=device_profile,
             )
+            if (focus or "").strip().lower() == "capacity" and prior_results:
+                # Preserve non-capacity health outputs from the last full refresh.
+                by_key = {
+                    f"{item.get('label')}|{item.get('command')}": item
+                    for item in prior_results
+                }
+                for item in command_results:
+                    by_key[f"{item.get('label')}|{item.get('command')}"] = item
+                command_results = list(by_key.values())
             failures = [item for item in command_results if item.get("error")]
             if failures and len(failures) == len(command_results):
                 error = failures[0]["error"]
