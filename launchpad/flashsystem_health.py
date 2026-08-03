@@ -62,21 +62,18 @@ def _result_output(item: dict[str, Any] | None) -> str:
     return (item.get("output") or "").strip()
 
 
-def pool_capacity_from_commands(
+def _find_pool_capacity_result(
     command_results: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """Parsed pool rows from SSH command output (lsmdiskgrp, capacity - pools, etc.)."""
-    pools_output = _result_output(
-        _find_result(
-            command_results,
-            "lsmdiskgrp",
-            "capacity - pools",
-            "showcpg",
-            "showspace",
-            "capacity - cpg",
-            "lsextpool",
-            "pool_list",
-            "capacity - ext pools",
+) -> dict[str, Any] | None:
+    """Prefer CPG/pool commands over generic showspace system estimates."""
+    if not command_results:
+        return None
+    for needles in (
+        ("showcpg",),
+        ("showspace -cpg", "capacity - cpg"),
+        ("lsmdiskgrp", "capacity - pools"),
+        ("lsextpool", "pool_list", "capacity - ext pools"),
+        (
             "storage aggregate",
             "isi storagepool",
             "storage_container",
@@ -85,8 +82,20 @@ def pool_capacity_from_commands(
             "symcfg list -pool",
             "capacity - usage",
             "ud-ssd-space",
-        )
-    )
+        ),
+        ("showspace",),
+    ):
+        item = _find_result(command_results, *needles)
+        if _result_output(item):
+            return item
+    return None
+
+
+def pool_capacity_from_commands(
+    command_results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Parsed pool rows from SSH command output (lsmdiskgrp, capacity - pools, etc.)."""
+    pools_output = _result_output(_find_pool_capacity_result(command_results))
     return parse_pool_capacity_rows(pools_output)
 
 
@@ -773,25 +782,7 @@ def analyze_health(
                     }
                 )
 
-        pools_item = _find_result(
-            command_results,
-            "lsmdiskgrp",
-            "capacity - pools",
-            "showcpg",
-            "showspace",
-            "capacity - cpg",
-            "lsextpool",
-            "pool_list",
-            "capacity - ext pools",
-            "storage aggregate",
-            "isi storagepool",
-            "storage_container",
-            "stor/prov/pool",
-            "storagepool -list",
-            "symcfg list -pool",
-            "capacity - usage",
-            "ud-ssd-space",
-        )
+        pools_item = _find_pool_capacity_result(command_results)
         pools_output = _result_output(pools_item)
         if pools_output:
             headers, rows = _table_rows(pools_output)

@@ -38,7 +38,7 @@ def test_parse_pool_capacity_rows_hpe_showcpg_space_table():
 
 def test_summarize_showcpg_csv_not_empty_cpg_rows():
     summary = summarize_command_output(
-        "Capacity - CPG %", "showcpg -sdg", SAMPLE_SHOWCPG_CSV
+        "Capacity - CPG %", "showcpg", SAMPLE_SHOWCPG_CSV
     )
     assert "no CPG" not in summary.lower()
     assert "SSD_r5" in summary or "%" in summary
@@ -54,7 +54,7 @@ def test_analyze_health_builds_capacity_popup_from_showcpg():
         },
         {
             "label": "Capacity - CPG %",
-            "command": "showcpg -sdg",
+            "command": "showcpg",
             "output": SAMPLE_SHOWCPG_CSV,
             "error": None,
         },

@@ -252,6 +252,59 @@ def _recv_shell(channel, *, timeout: float, idle_seconds: float = 0.35) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+def _looks_like_hpe_prompt(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped in {"%", ">"}:
+        return True
+    return stripped.endswith("%") or stripped.endswith(">")
+
+
+def _recv_hpe_command_output(
+    channel,
+    command: str,
+    *,
+    timeout: float,
+    idle_seconds: float = 0.45,
+) -> str:
+    """Read until the CLI prompt returns after ``command`` (avoids checkhealth bleed)."""
+    channel.send(f"{command}\r\n")
+    deadline = time.monotonic() + timeout
+    chunks: list[bytes] = []
+    last_data = time.monotonic()
+    cmd = command.strip()
+    saw_echo = False
+    while time.monotonic() < deadline:
+        if channel.recv_ready():
+            chunk = channel.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            last_data = time.monotonic()
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            if cmd and cmd in text:
+                saw_echo = True
+            lines = [line for line in text.split("\n") if line.strip()]
+            if saw_echo and lines and _looks_like_hpe_prompt(lines[-1]):
+                # Brief settle so trailing bytes after the prompt are included.
+                if (time.monotonic() - last_data) >= 0.12:
+                    break
+            continue
+        if chunks and (time.monotonic() - last_data) >= idle_seconds:
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            if saw_echo or (cmd and cmd in text) or _looks_like_hpe_prompt(
+                text.splitlines()[-1] if text.splitlines() else ""
+            ):
+                break
+            # Leftover from a prior command — keep waiting for this command's echo.
+            continue
+        if channel.exit_status_ready() and not channel.recv_ready():
+            break
+        time.sleep(0.02)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
 def _extract_hpe_command_output(raw: str, command: str) -> str:
     lines = _clean_shell_text(raw).split("\n")
     cmd = command.strip()
@@ -266,7 +319,12 @@ def _extract_hpe_command_output(raw: str, command: str) -> str:
                 start = idx + 1
                 break
     if start is None:
-        start = min(5, max(0, len(lines) - 2))
+        # Prefer content after the last checkhealth-style noise when echo was missed.
+        start = 0
+        for idx, line in enumerate(lines):
+            lowered = line.strip().lower()
+            if lowered.startswith("checking ") or lowered in {"ok", "passed"}:
+                start = idx + 1
 
     end = len(lines)
     for idx in range(len(lines) - 1, start - 1, -1):
@@ -274,7 +332,7 @@ def _extract_hpe_command_output(raw: str, command: str) -> str:
         if not stripped:
             end = idx
             continue
-        if stripped == "exit" or stripped.endswith("%") or stripped.endswith(">"):
+        if stripped == "exit" or _looks_like_hpe_prompt(stripped):
             end = idx
             continue
         break
@@ -312,11 +370,14 @@ def run_ssh_auth_hpe_commands(
             try:
                 _recv_shell(channel, timeout=8)
                 channel.send("setclienv csvtable 1\r\n")
-                _recv_shell(channel, timeout=8)
+                _recv_shell(channel, timeout=8, idle_seconds=0.5)
 
                 for command in commands:
-                    channel.send(f"{command}\r\n")
-                    raw = _recv_shell(channel, timeout=float(timeout))
+                    raw = _recv_hpe_command_output(
+                        channel,
+                        command,
+                        timeout=float(timeout),
+                    )
                     outputs.append(_extract_hpe_command_output(raw, command))
 
                 channel.send("exit\r\n")

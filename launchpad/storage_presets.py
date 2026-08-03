@@ -26,11 +26,13 @@ SVC_COMMANDS: list[tuple[str, str]] = [
 ]
 
 # HPE 3PAR (8200 / 8400 / 8450 share the same CLI)
+# Capacity: showsys -d (MB totals) + showcpg (Usr_* used/total). Do not use
+# showcpg -sdg here — that option only shows snapshot-data autogrow settings.
 HP_3PAR_COMMANDS: list[tuple[str, str]] = [
     ("Health - Overall", "checkhealth"),
     ("Health - Alerts", "showalert"),
     ("Capacity - System", "showsys -d"),
-    ("Capacity - CPG %", "showcpg -sdg"),
+    ("Capacity - CPG %", "showcpg"),
     ("Volumes - VV list", "showvv"),
     ("Hosts - host list", "showhost"),
     ("CPU - Load", "statcpu"),
@@ -39,13 +41,14 @@ HP_3PAR_COMMANDS: list[tuple[str, str]] = [
     ("Health - Battery", "showbattery"),
 ]
 
-# HPE Primera 600
+# HPE Primera 600 (same CLI family as 3PAR for capacity)
+# showspace -cpg requires a CPG name/pattern; use showcpg for CPG capacity.
 HPE_PRIMERA_COMMANDS: list[tuple[str, str]] = [
     ("Health - Nodes", "shownode -status"),
     ("Health - Alerts", "showalert"),
     ("Health - Disks", "showpd -status"),
-    ("Capacity - System %", "showspace"),
-    ("Capacity - CPG %", "showspace -cpg"),
+    ("Capacity - System", "showsys -d"),
+    ("Capacity - CPG %", "showcpg"),
     ("Volumes - VV list", "showvv"),
     ("Hosts - host list", "showhost"),
     ("CPU - All Nodes %", "statcpu -iter 1"),
@@ -457,6 +460,44 @@ def ensure_svc_fc_commands(
     if not has_command("lsfabric", "fc - fabric"):
         merged.append(SVC_FC_COMMANDS[3])
     return merged
+
+
+def ensure_hpe_capacity_commands(
+    profile: str,
+    commands: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Rewrite outdated HPE capacity CLI and ensure showsys/showcpg are present.
+
+    Older cards used ``showcpg -sdg`` (autogrow settings only) and bare
+    ``showspace -cpg`` (requires a CPG name and fails with Missing -cpg argument).
+    """
+    if profile not in HPE_SHELL_PROFILES and not uses_hpe_shell_cli(profile, commands):
+        return list(commands)
+
+    rewritten: list[tuple[str, str]] = []
+    for label, command in commands:
+        cmd = command.strip()
+        lower = cmd.lower()
+        if lower == "showcpg -sdg" or lower.startswith("showcpg -sdg "):
+            rewritten.append((label, "showcpg"))
+            continue
+        if lower == "showspace -cpg":
+            rewritten.append((label, "showcpg"))
+            continue
+        rewritten.append((label, command))
+
+    def has_command(*needles: str) -> bool:
+        for label, command in rewritten:
+            haystack = f"{label} {command}".lower()
+            if any(needle in haystack for needle in needles):
+                return True
+        return False
+
+    if not has_command("showsys"):
+        rewritten.append(("Capacity - System", "showsys -d"))
+    if not has_command("showcpg"):
+        rewritten.append(("Capacity - CPG %", "showcpg"))
+    return rewritten
 
 
 def preset_command_text(profile: str) -> str:
