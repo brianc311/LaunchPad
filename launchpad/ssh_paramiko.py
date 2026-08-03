@@ -226,6 +226,8 @@ def run_ssh_commands(
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9?]*[ -/]*[@-~]")
+# Real 3PAR/Primera prompts look like ``cli%`` or ``user@host%`` — not ``98.5%``.
+_HPE_PROMPT_RE = re.compile(r"^(?:cli|[A-Za-z0-9][\w.@\\-]*)\s*%\s*$")
 
 
 def _clean_shell_text(raw: str) -> str:
@@ -253,12 +255,50 @@ def _recv_shell(channel, *, timeout: float, idle_seconds: float = 0.35) -> str:
 
 
 def _looks_like_hpe_prompt(line: str) -> bool:
-    stripped = line.strip()
+    """True for CLI prompts like ``cli%`` — false for capacity percents like ``98.5%``."""
+    stripped = (line or "").strip()
     if not stripped:
         return False
-    if stripped in {"%", ">"}:
+    if re.search(r"[\d.]\s*%\s*$", stripped):
+        return False
+    lowered = stripped.lower()
+    if lowered in {"warn%", "used%", "use%", "%"}:
+        return False
+    if _HPE_PROMPT_RE.match(stripped):
         return True
-    return stripped.endswith("%") or stripped.endswith(">")
+    if stripped == ">":
+        return True
+    return bool(re.match(r"^[\w.@\\-]+>\s*$", stripped)) and len(stripped) < 40
+
+
+def _recv_until_hpe_prompt(channel, *, timeout: float, idle_seconds: float = 0.5) -> str:
+    """Drain shell output until a real CLI prompt (used after login / setclienv)."""
+    deadline = time.monotonic() + timeout
+    chunks: list[bytes] = []
+    last_data = time.monotonic()
+    while time.monotonic() < deadline:
+        if channel.recv_ready():
+            chunk = channel.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            last_data = time.monotonic()
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            lines = [line for line in text.split("\n") if line.strip()]
+            if lines and _looks_like_hpe_prompt(lines[-1]) and (
+                time.monotonic() - last_data
+            ) >= 0.12:
+                break
+            continue
+        if chunks and (time.monotonic() - last_data) >= idle_seconds:
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            lines = [line for line in text.split("\n") if line.strip()]
+            if lines and _looks_like_hpe_prompt(lines[-1]):
+                break
+        if channel.exit_status_ready() and not channel.recv_ready():
+            break
+        time.sleep(0.02)
+    return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 def _recv_hpe_command_output(
@@ -266,9 +306,9 @@ def _recv_hpe_command_output(
     command: str,
     *,
     timeout: float,
-    idle_seconds: float = 0.45,
+    idle_seconds: float = 0.6,
 ) -> str:
-    """Read until the CLI prompt returns after ``command`` (avoids checkhealth bleed)."""
+    """Read until the CLI prompt returns after ``command``."""
     channel.send(f"{command}\r\n")
     deadline = time.monotonic() + timeout
     chunks: list[bytes] = []
@@ -287,17 +327,15 @@ def _recv_hpe_command_output(
                 saw_echo = True
             lines = [line for line in text.split("\n") if line.strip()]
             if saw_echo and lines and _looks_like_hpe_prompt(lines[-1]):
-                # Brief settle so trailing bytes after the prompt are included.
-                if (time.monotonic() - last_data) >= 0.12:
+                if (time.monotonic() - last_data) >= 0.15:
                     break
             continue
         if chunks and (time.monotonic() - last_data) >= idle_seconds:
             text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
-            if saw_echo or (cmd and cmd in text) or _looks_like_hpe_prompt(
-                text.splitlines()[-1] if text.splitlines() else ""
-            ):
+            lines = [line for line in text.split("\n") if line.strip()]
+            # Do not finish on idle alone — checkhealth pauses between lines.
+            if saw_echo and lines and _looks_like_hpe_prompt(lines[-1]):
                 break
-            # Leftover from a prior command — keep waiting for this command's echo.
             continue
         if channel.exit_status_ready() and not channel.recv_ready():
             break
@@ -319,7 +357,6 @@ def _extract_hpe_command_output(raw: str, command: str) -> str:
                 start = idx + 1
                 break
     if start is None:
-        # Prefer content after the last checkhealth-style noise when echo was missed.
         start = 0
         for idx, line in enumerate(lines):
             lowered = line.strip().lower()
@@ -352,10 +389,12 @@ def run_ssh_auth_hpe_commands(
     key_passphrase: str = "",
     timeout: int = COMMAND_TIMEOUT,
 ) -> list[str]:
-    """Run HPE CLI commands via one SSH exec each (isolated; no interactive shell bleed)."""
+    """Run HPE CLI over an interactive shell (3PAR/Primera reject bare SSH exec)."""
     if not commands:
         return []
 
+    # checkhealth and large show* tables often exceed the default exec timeout.
+    shell_timeout = max(float(timeout), 90.0)
     outputs: list[str] = []
     with _acquire_hpe_cli_lock(host, port):
         with ssh_auth_client(
@@ -366,10 +405,26 @@ def run_ssh_auth_hpe_commands(
             key_path=key_path,
             key_passphrase=key_passphrase,
         ) as client:
-            for command in commands:
-                _, stdout, stderr = client.exec_command(command, timeout=timeout)
-                exit_status = stdout.channel.recv_exit_status()
-                outputs.append(
-                    _read_command_output(stdout, stderr, exit_status=exit_status)
-                )
+            channel = client.invoke_shell(term="vt100", width=220, height=48)
+            channel.settimeout(0.1)
+            try:
+                _recv_until_hpe_prompt(channel, timeout=20)
+                channel.send("setclienv csvtable 1\r\n")
+                _recv_until_hpe_prompt(channel, timeout=15)
+
+                for command in commands:
+                    cmd_timeout = shell_timeout
+                    if "checkhealth" in command.lower():
+                        cmd_timeout = max(shell_timeout, 120.0)
+                    raw = _recv_hpe_command_output(
+                        channel,
+                        command,
+                        timeout=cmd_timeout,
+                    )
+                    outputs.append(_extract_hpe_command_output(raw, command))
+
+                channel.send("exit\r\n")
+            finally:
+                channel.close()
+
     return outputs
