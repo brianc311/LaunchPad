@@ -10,6 +10,16 @@ from launchpad.capacity_email_send import send_capacity_email
 from launchpad.capacity_email_settings import load_capacity_email_settings
 from launchpad.command_format import resolve_card_commands
 from launchpad.crypto import decrypt_text
+from launchpad.dashboard_array_rail import (
+    SETTING_ARRAY_RAIL_COLLAPSED,
+    can_open_rail_gui,
+    collapsed_from_setting,
+    filter_dashboard_cards,
+    open_rail_gui,
+    rail_row_subtitle,
+    rail_row_title,
+    setting_from_collapsed,
+)
 from launchpad.database import Card
 from launchpad.health_format import card_stats_columns, command_results_columns
 from launchpad.health_metrics import run_remote_metrics
@@ -74,11 +84,52 @@ class DashboardView(ctk.CTkFrame):
 
         self._build_header()
         self._build_filters()
-        self.cards_frame = ctk.CTkScrollableFrame(self, fg_color=self.theme["surface"])
-        self.cards_frame.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
+
+        self.array_rail_collapsed = collapsed_from_setting(
+            self.db.get_setting(SETTING_ARRAY_RAIL_COLLAPSED, "false")
+        )
+
+        self.body_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.body_frame.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
+        self.body_frame.grid_columnconfigure(1, weight=1)
+        self.body_frame.grid_rowconfigure(0, weight=1)
+
+        self.rail_frame = ctk.CTkFrame(self.body_frame, fg_color=self.theme["surface"], width=220)
+        self.rail_frame.grid(row=0, column=0, sticky="nsw", padx=(0, 12))
+        self.rail_frame.grid_propagate(False)
+
+        rail_header = ctk.CTkFrame(self.rail_frame, fg_color="transparent")
+        rail_header.pack(fill="x", padx=8, pady=(8, 4))
+
+        self.array_rail_title = ctk.CTkLabel(
+            rail_header,
+            text="Arrays",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=self.theme["text"],
+        )
+        self.array_rail_title.pack(side="left")
+
+        self.array_rail_toggle = ctk.CTkButton(
+            rail_header,
+            text="«",
+            width=28,
+            height=28,
+            fg_color=self.theme["surface_alt"],
+            hover_color=self.theme["border"],
+            command=self._toggle_array_rail,
+        )
+        self.array_rail_toggle.pack(side="right")
+
+        self.array_rail_list = ctk.CTkScrollableFrame(self.rail_frame, fg_color="transparent")
+        self.array_rail_list.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+
+        self.cards_frame = ctk.CTkScrollableFrame(self.body_frame, fg_color=self.theme["surface"])
+        self.cards_frame.grid(row=0, column=1, sticky="nsew")
         self._card_columns = 4
         for col in range(self._card_columns):
             self.cards_frame.grid_columnconfigure(col, weight=1)
+
+        self._apply_array_rail_collapsed()
 
         self.status_row = ctk.CTkFrame(self, fg_color="transparent")
         self.status_row.grid(row=3, column=0, sticky="ew", padx=28, pady=(0, 12))
@@ -395,6 +446,15 @@ class DashboardView(ctk.CTkFrame):
         if isinstance(self.master, ctk.CTk):
             self.master.configure(fg_color=self.theme["bg"])
         self.cards_frame.configure(fg_color=self.theme["surface"])
+        if hasattr(self, "rail_frame"):
+            self.rail_frame.configure(fg_color=self.theme["surface"])
+        if hasattr(self, "array_rail_title"):
+            self.array_rail_title.configure(text_color=self.theme["text"])
+        if hasattr(self, "array_rail_toggle"):
+            self.array_rail_toggle.configure(
+                fg_color=self.theme["surface_alt"],
+                hover_color=self.theme["border"],
+            )
         self.theme_switch.configure(text="Light mode" if theme_name == "dark" else "Dark mode")
         if hasattr(self, "export_excel_btn"):
             self.export_excel_btn.configure(
@@ -460,21 +520,14 @@ class DashboardView(ctk.CTkFrame):
         for col in range(cols):
             self.cards_frame.grid_columnconfigure(col, weight=1)
 
-        query = self.search_entry.get().strip().lower() if hasattr(self, "search_entry") else ""
+        query = self.search_entry.get() if hasattr(self, "search_entry") else ""
         category = self.category_var.get() if hasattr(self, "category_var") else "All"
         cards = self.db.list_cards(None if category == "All" else category)
 
-        filtered = [
-            card
-            for card in cards
-            if not query
-            or query in card.name.lower()
-            or query in card.host.lower()
-            or query in card.category.lower()
-            or query in (getattr(card, "serial_number", "") or "").lower()
-        ]
+        filtered = filter_dashboard_cards(cards, query=query)
+        self._rebuild_array_rail(filtered)
 
-        can_reorder = category == "All" and not query
+        can_reorder = category == "All" and not query.strip()
         self.hint_label.configure(
             text=(
                 "SSH monitoring is off by default — check cards and click Monitor Checked, "
@@ -552,6 +605,76 @@ class DashboardView(ctk.CTkFrame):
         self._probe_monitored_ssh_status()
 
         # SSH stats run only when Monitor is on and you click Refresh Stats.
+
+    def _apply_array_rail_collapsed(self) -> None:
+        if self.array_rail_collapsed:
+            self.rail_frame.configure(width=44)
+            self.array_rail_title.pack_forget()
+            self.array_rail_list.pack_forget()
+            self.array_rail_toggle.configure(text="»")
+        else:
+            self.rail_frame.configure(width=220)
+            self.array_rail_title.pack(side="left")
+            self.array_rail_list.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+            self.array_rail_toggle.configure(text="«")
+
+    def _toggle_array_rail(self) -> None:
+        self.array_rail_collapsed = not self.array_rail_collapsed
+        self.db.set_setting(
+            SETTING_ARRAY_RAIL_COLLAPSED,
+            setting_from_collapsed(self.array_rail_collapsed),
+        )
+        self._apply_array_rail_collapsed()
+        if not self.array_rail_collapsed:
+            query = self.search_entry.get() if hasattr(self, "search_entry") else ""
+            category = self.category_var.get() if hasattr(self, "category_var") else "All"
+            cards = self.db.list_cards(None if category == "All" else category)
+            filtered = filter_dashboard_cards(cards, query=query)
+            self._rebuild_array_rail(filtered)
+
+    def _rebuild_array_rail(self, filtered: list[Card]) -> None:
+        for widget in self.array_rail_list.winfo_children():
+            widget.destroy()
+
+        if self.array_rail_collapsed:
+            self.array_rail_toggle.configure(text="»")
+            return
+
+        self.array_rail_toggle.configure(text="«")
+
+        if not filtered:
+            ctk.CTkLabel(
+                self.array_rail_list,
+                text="No arrays match.",
+                text_color=self.theme["muted"],
+                font=ctk.CTkFont(size=12),
+                wraplength=180,
+                justify="left",
+            ).pack(fill="x", padx=4, pady=8)
+            return
+
+        for card in filtered:
+            title = rail_row_title(card)
+            subtitle = rail_row_subtitle(card)
+            enabled = can_open_rail_gui(card)
+            btn = ctk.CTkButton(
+                self.array_rail_list,
+                text=f"{title}\n{subtitle}",
+                anchor="w",
+                fg_color=self.theme["surface_alt"] if enabled else "transparent",
+                hover_color=self.theme["border"] if enabled else "transparent",
+                text_color=self.theme["text"] if enabled else self.theme["muted"],
+                command=(lambda c=card: self._open_array_gui(c)) if enabled else None,
+                state="normal" if enabled else "disabled",
+            )
+            btn.pack(fill="x", padx=4, pady=2)
+
+    def _open_array_gui(self, card: Card) -> None:
+        try:
+            message = open_rail_gui(card)
+            self._set_status(f"{card.name}: {message}")
+        except ValueError as exc:
+            self._set_status(str(exc))
 
     def _schedule_ssh_status_checks(self) -> None:
         if self._ssh_status_timer:
