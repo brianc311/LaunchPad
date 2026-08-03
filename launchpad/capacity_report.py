@@ -260,6 +260,71 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       font-size: 0.9rem;
       white-space: pre-wrap;
     }
+    .fleet-capacity-alert {
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 20px;
+      border: 2px solid rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+    }
+    .fleet-capacity-alert.warn {
+      border-color: rgba(245, 158, 11, 0.55);
+      background: rgba(245, 158, 11, 0.14);
+      color: #fde68a;
+    }
+    .fleet-capacity-alert .alert-title {
+      margin: 0 0 8px;
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .fleet-capacity-alert ul {
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+    .fleet-capacity-alert li { margin: 4px 0; }
+    .capacity-alert {
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 0 0 16px;
+      border: 2px solid rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.14);
+      color: #fecaca;
+    }
+    .capacity-alert.warn {
+      border-color: rgba(245, 158, 11, 0.55);
+      background: rgba(245, 158, 11, 0.12);
+      color: #fde68a;
+    }
+    .capacity-alert-label {
+      display: inline-block;
+      margin: 0 0 8px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      background: rgba(239, 68, 68, 0.35);
+      color: #fff;
+    }
+    .capacity-alert.warn .capacity-alert-label {
+      background: rgba(245, 158, 11, 0.4);
+      color: #111;
+    }
+    .capacity-alert ul {
+      margin: 0;
+      padding-left: 1.15rem;
+    }
+    .capacity-alert li { margin: 3px 0; font-size: 0.92rem; }
+    .site-block.capacity-critical {
+      border-color: rgba(239, 68, 68, 0.65);
+      box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+    }
+    .site-block.capacity-warn {
+      border-color: rgba(245, 158, 11, 0.55);
+    }
     .empty { color: var(--muted); padding: 32px; text-align: center; }
     .footer { margin-top: 8px; color: var(--muted); font-size: 0.85rem; }
     .toggle-row {
@@ -424,6 +489,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       </div>
       <p id="print-meta" class="print-meta"></p>
     </section>
+    <div id="fleet-alerts"></div>
     <div id="sites"></div>
     <p class="footer no-print">
       LaunchPad Capacity v{{APP_VERSION}} · Keep LaunchPad running and unlocked while refreshing.
@@ -432,6 +498,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
   </div>
   <script>
     const sitesEl = document.getElementById("sites");
+    const fleetAlertsEl = document.getElementById("fleet-alerts");
     const refreshStatusEl = document.getElementById("refresh-status");
     const refreshAllBtn = document.getElementById("refresh-all-btn");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
@@ -808,24 +875,95 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       });
     }
 
+    function capacityIssues(card) {
+      if (!isMonitorOn(card.id)) return [];
+      return (card.health_issues || []).filter((issue) => {
+        const cat = String(issue.category || "").toLowerCase();
+        if (cat === "capacity") return true;
+        const msg = String(issue.message || "");
+        return /%\\s*(full|capacity)/i.test(msg) || /running at\\s+\\d/i.test(msg);
+      });
+    }
+
+    function capacityAlertBanner(card) {
+      const issues = capacityIssues(card);
+      if (!issues.length) return "";
+      const hasCritical = issues.some((issue) => issue.severity === "critical");
+      const sev = hasCritical ? "critical" : "warn";
+      const label = hasCritical ? "CRITICAL" : "WARNING";
+      const items = issues
+        .map((issue) => `<li>${escapeHtml(issue.message || "")}</li>`)
+        .join("");
+      return `
+        <div class="capacity-alert ${sev}" role="alert">
+          <div class="capacity-alert-label">${label}</div>
+          <ul>${items}</ul>
+        </div>`;
+    }
+
+    function renderFleetCapacityAlerts(cards) {
+      if (!fleetAlertsEl) return;
+      const rows = [];
+      cards.forEach((card) => {
+        const issues = capacityIssues(card);
+        if (!issues.length) return;
+        const hasCritical = issues.some((issue) => issue.severity === "critical");
+        const top = issues[0];
+        rows.push({
+          name: siteDisplayName(card),
+          severity: hasCritical ? "critical" : "warn",
+          message: top.message || "",
+          count: issues.length,
+        });
+      });
+      if (!rows.length) {
+        fleetAlertsEl.innerHTML = "";
+        return;
+      }
+      const hasCritical = rows.some((row) => row.severity === "critical");
+      const sev = hasCritical ? "critical" : "warn";
+      const title = hasCritical
+        ? `Critical capacity on ${rows.filter((r) => r.severity === "critical").length} site(s)`
+        : `Capacity warning on ${rows.length} site(s)`;
+      const items = rows
+        .map((row) => {
+          const extra = row.count > 1 ? ` (+${row.count - 1} more)` : "";
+          return `<li><strong>${escapeHtml(row.name)}</strong> — ${escapeHtml(row.message)}${extra}</li>`;
+        })
+        .join("");
+      fleetAlertsEl.innerHTML = `
+        <div class="fleet-capacity-alert ${sev}" role="alert">
+          <p class="alert-title">${escapeHtml(title)}</p>
+          <ul>${items}</ul>
+        </div>`;
+    }
+
     function renderSite(card) {
       const updated = card.updated_at
         ? `Last updated: ${card.updated_at}`
         : "Not refreshed yet";
       const monitorOn = isMonitorOn(card.id);
       const offClass = monitorOn ? "" : " monitor-off";
+      const issues = capacityIssues(card);
+      const hasCritical = issues.some((issue) => issue.severity === "critical");
+      const alertClass = !issues.length
+        ? ""
+        : hasCritical
+          ? " capacity-critical"
+          : " capacity-warn";
       let body = "";
       if (card.error && !card.capacity_popup_html) {
         body = `<div class="error">${escapeHtml(card.error)}</div>`;
       } else if (card.capacity_popup_html) {
-        body = card.capacity_popup_html;
+        body = capacityAlertBanner(card) + card.capacity_popup_html;
       } else {
         body =
+          capacityAlertBanner(card) +
           '<div class="error">No capacity data for this site. ' +
           "Turn on Monitor and refresh, or check SSH credentials in Admin.</div>";
       }
       return `
-        <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}" data-id="${card.id}">
+        <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}${alertClass}" data-id="${card.id}">
           <div class="site-head">
             <input
               type="text"
@@ -855,6 +993,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
 
     function renderAll(cards) {
       if (!cards.length) {
+        if (fleetAlertsEl) fleetAlertsEl.innerHTML = "";
         sitesEl.innerHTML =
           '<div class="empty">No servers yet. Keep LaunchPad running and unlocked, then use ' +
           "<strong>Capacity Report</strong> or <strong>Health Dashboard</strong> in LaunchPad.</div>";
@@ -866,6 +1005,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
       const visible = visibleCards(cards);
       if (!visible.length) {
+        if (fleetAlertsEl) fleetAlertsEl.innerHTML = "";
         sitesEl.innerHTML =
           '<div class="empty">All sites have Monitor off. Check ' +
           '<strong>Include monitoring-off sites</strong> to view them.</div>';
@@ -879,6 +1019,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       const sorted = [...visible].sort((a, b) =>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
+      renderFleetCapacityAlerts(sorted);
       sitesEl.innerHTML = sorted.map(renderSite).join("");
       wireSiteNameInputs();
       document.querySelectorAll(".monitor-switch").forEach((input) => {

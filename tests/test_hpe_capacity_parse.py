@@ -72,3 +72,55 @@ def test_format_capacity_report_html_from_pools_output():
     html = format_capacity_report_html(None, SAMPLE_SHOWCPG_CSV)
     assert html
     assert "SSD_r5" in html or "capacity-pool" in html
+
+
+SAMPLE_SHOWCPG_NEAR_FULL = """Id,Name,Warn%,VVs,TPVVs,TDVVs,Usr,Snp,Base,Free,Total
+3,CPG_DATA01,-,7,7,0,7,7,13680640,162000,13842640
+"""
+
+SAMPLE_SHOWCPG_WARN_BAND = """Id,Name,Warn%,VVs,TPVVs,TDVVs,Usr_RawRsvd_MB,Usr_Rsvd_MB,Usr_Used_MB,Usr_Total_MB,Usr_Used_Perc
+0,CPG_DATA01,-,4,4,0,0,1000000,820000,1000000,82.0
+"""
+
+
+def test_analyze_health_raises_critical_for_near_full_hpe_pool():
+    results = [
+        {
+            "label": "Capacity - CPG %",
+            "command": "showcpg",
+            "output": SAMPLE_SHOWCPG_NEAR_FULL,
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE-WAG", results, None)
+    issues = analysis["health_issues"]
+    capacity_issues = [i for i in issues if i.get("category") == "capacity"]
+    assert capacity_issues
+    assert any(i["severity"] == "critical" for i in capacity_issues)
+    assert any("CPG_DATA01" in i["message"] or "Running at" in i["message"] for i in capacity_issues)
+
+
+def test_analyze_health_raises_warn_between_80_and_90():
+    results = [
+        {
+            "label": "Capacity - CPG %",
+            "command": "showcpg",
+            "output": SAMPLE_SHOWCPG_WARN_BAND,
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE-WAG", results, None)
+    capacity_issues = [
+        i for i in analysis["health_issues"] if i.get("category") == "capacity"
+    ]
+    assert capacity_issues
+    assert any(i["severity"] == "warn" for i in capacity_issues)
+    assert not any(
+        i["severity"] == "critical" and "Pool" in i["message"] for i in capacity_issues
+    )
+
+
+def test_capacity_detail_hides_empty_warn_percent():
+    html = format_capacity_report_html(None, SAMPLE_SHOWCPG_NEAR_FULL)
+    assert html
+    assert "Warn%" not in html or "Warn%</th><td>-</td>" not in html

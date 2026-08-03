@@ -20,3 +20,11 @@ def test_capacity_excel_export_passes_card_id():
     html = CAPACITY_REPORT_HTML
     assert "card_id" in html
     assert "capacity-site-select" in html
+
+
+def test_capacity_report_has_critical_alert_banner():
+    html = CAPACITY_REPORT_HTML
+    assert 'id="fleet-alerts"' in html
+    assert "capacity-alert" in html
+    assert "CRITICAL" in html
+    assert "capacityIssues" in html

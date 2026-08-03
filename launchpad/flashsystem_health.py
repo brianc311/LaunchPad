@@ -193,7 +193,10 @@ def _capacity_detail_rows(raw: dict[str, str]) -> str:
     return "".join(
         f"<tr><th>{html.escape(key)}</th><td>{html.escape(str(value))}</td></tr>"
         for key, value in raw.items()
-        if str(value).strip() and key.lower() not in skip
+        if str(value).strip()
+        and key.lower() not in skip
+        # HPE Warn% of "-" means no array-side threshold is configured.
+        and not (key.lower() in {"warn%", "warn"} and str(value).strip() in {"-", "--", ""})
     )
 
 
@@ -842,31 +845,24 @@ def analyze_health(
 
         pools_item = _find_pool_capacity_result(command_results)
         pools_output = _capacity_result_output(pools_item)
-        if pools_output:
-            headers, rows = _table_rows(pools_output)
-            for row in rows:
-                record = _row_map(headers, row)
-                pool_name = record.get("name") or record.get("CPG") or record.get("PoolName") or "pool"
-                cap = _parse_size_bytes(record.get("capacity", "") or record.get("Total", ""))
-                free = _parse_size_bytes(record.get("free_capacity", "") or record.get("Free", ""))
-                used_pct_raw = record.get("UsedPct") or record.get("Used%") or record.get("used_pct", "")
-                used_pct: float | None = None
-                if used_pct_raw:
-                    try:
-                        used_pct = float(str(used_pct_raw).replace("%", "").strip())
-                    except ValueError:
-                        used_pct = None
-                if used_pct is None and cap and free is not None:
-                    used_pct = (cap - free) / cap * 100.0
-                if used_pct is not None and used_pct >= 80:
-                    issues.append(
-                        {
-                            "severity": "critical" if used_pct >= 90 else "warn",
-                            "category": "capacity",
-                            "message": f"Pool {pool_name} is {used_pct:.1f}% full",
-                            "server": server_name,
-                        }
-                    )
+        pools_for_issues = parse_pool_capacity_rows(pools_output) if pools_output else []
+        for pool in pools_for_issues:
+            used_pct = float(pool.get("used_pct") or 0.0)
+            if used_pct < 80:
+                continue
+            pool_name = str(pool.get("name") or "pool")
+            issues.append(
+                {
+                    "severity": "critical" if used_pct >= 90 else "warn",
+                    "category": "capacity",
+                    "message": (
+                        f"Pool {pool_name} is {used_pct:.1f}% full "
+                        f"({_format_bytes(float(pool.get('used_bytes') or 0))} / "
+                        f"{_format_bytes(float(pool.get('total_bytes') or 0))})"
+                    ),
+                    "server": server_name,
+                }
+            )
 
         node_output = _result_output(_find_result(command_results, "lsnode", "health - nodes", "shownode"))
         _analyze_status_table(
@@ -991,9 +987,6 @@ def analyze_health(
                     }
                 )
 
-    severity_rank = {"critical": 0, "warn": 1}
-    issues.sort(key=lambda item: (severity_rank.get(item["severity"], 9), item["server"], item["category"]))
-
     popup_html = format_capacity_report_html(capacity, pools_output)
     if not popup_html:
         popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
@@ -1031,6 +1024,32 @@ def analyze_health(
         ]
     if not capacity and pools:
         capacity = capacity_summary_from_pools(pools)
+
+    # Raise issues from final capacity/pools so HPE CSV rollups are included.
+    if capacity and float(capacity.get("used_pct") or 0) >= 80:
+        already = any(
+            issue.get("category") == "capacity"
+            and "Running at" in str(issue.get("message") or "")
+            for issue in issues
+        )
+        if not already:
+            used_pct = float(capacity["used_pct"])
+            issues.append(
+                {
+                    "severity": "critical" if used_pct >= 90 else "warn",
+                    "category": "capacity",
+                    "message": (
+                        f"Running at {used_pct:.1f}% capacity "
+                        f"({_format_bytes(float(capacity.get('used_bytes') or 0))} used / "
+                        f"{_format_bytes(float(capacity.get('total_bytes') or 0))})"
+                    ),
+                    "server": server_name,
+                }
+            )
+    severity_rank = {"critical": 0, "warn": 1}
+    issues.sort(
+        key=lambda item: (severity_rank.get(item["severity"], 9), item["server"], item["category"])
+    )
 
     return {
         "health_issues": issues,
