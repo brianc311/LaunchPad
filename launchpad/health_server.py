@@ -810,6 +810,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <input type="checkbox" id="monitor-all-toggle">
           All monitoring on
         </label>
+        <label class="toggle-row" for="include-off-toggle" title="When unchecked, only Monitor-on sites are shown. Check to show monitoring-off sites again.">
+          <input type="checkbox" id="include-off-toggle">
+          Include monitoring-off sites
+        </label>
         <label class="toggle-row" for="show-alerts-toggle">
           <input type="checkbox" id="show-alerts-toggle" checked>
           Show alerts
@@ -859,6 +863,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalCloseEl = document.getElementById("modal-close");
     const showAlertsToggle = document.getElementById("show-alerts-toggle");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
+    const includeOffToggle = document.getElementById("include-off-toggle");
     const healthSiteSelectEl = document.getElementById("health-site-select");
     const healthSearchEl = document.getElementById("health-search");
     const selectVisibleBtn = document.getElementById("select-visible-btn");
@@ -955,6 +960,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           delete autoTimers[cardId];
         }
         updateMasterMonitorToggle();
+        renderAll(cardsCache);
       });
     }
 
@@ -983,6 +989,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       });
       updateMasterMonitorToggle();
+      renderAll(cardsCache);
       if (!on) {
         if (refreshStatusEl) refreshStatusEl.textContent = "All monitoring off.";
         return;
@@ -1776,6 +1783,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function visibleCards(cards) {
+      if (includeOffToggle && includeOffToggle.checked) {
+        return cards;
+      }
+      return cards.filter((card) => isMonitorOn(card.id));
+    }
+
     function renderAll(cards) {
       document.body.classList.remove("print-export");
       if (!cards.length) {
@@ -1785,7 +1799,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         renderIssues([]);
         return;
       }
-      const sorted = [...cards].sort((a, b) => a.id - b.id);
+      const visible = visibleCards(cards);
+      if (!visible.length) {
+        serversEl.innerHTML =
+          '<div class="empty">All sites have Monitor off. Check <strong>Include monitoring-off sites</strong> to view them, or turn on Monitor.</div>';
+        updateSummary(cards);
+        renderIssues(cards);
+        updateMasterMonitorToggle();
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `0 of ${cards.length} monitored site(s) shown`;
+        }
+        return;
+      }
+      const sorted = [...visible].sort((a, b) => a.id - b.id);
       const seen = new Set(sorted.map((card) => card.id));
 
       try {
@@ -1826,8 +1852,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
       sorted.forEach((card) => applyMonitorVisual(card.id));
       updateMasterMonitorToggle();
-      updateSummary(sorted);
-      renderIssues(sorted);
+      updateSummary(cards);
+      renderIssues(cards);
       wireInteractiveButtons();
       wirePrintCheckboxes();
       populateHealthSiteSelect(sorted);
@@ -1835,6 +1861,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       applyHealthSearch();
       syncPrintSelectionClasses();
       updateSelectionCount();
+      if (refreshStatusEl && !refreshAllRunning) {
+        const includeOff = includeOffToggle && includeOffToggle.checked;
+        refreshStatusEl.textContent = includeOff
+          ? `${sorted.length} of ${cards.length} site(s) shown`
+          : `${sorted.length} monitored site(s) shown (${cards.length} total)`;
+      }
     }
 
     function wireInteractiveButtons() {
@@ -1926,6 +1958,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (monitorAllToggle) {
       monitorAllToggle.addEventListener("change", () => {
         setAllMonitoring(monitorAllToggle.checked);
+      });
+    }
+    if (includeOffToggle) {
+      const savedIncludeOff = localStorage.getItem("launchpad.healthDashboard.includeOff");
+      if (savedIncludeOff === "1") includeOffToggle.checked = true;
+      includeOffToggle.addEventListener("change", () => {
+        localStorage.setItem(
+          "launchpad.healthDashboard.includeOff",
+          includeOffToggle.checked ? "1" : "0"
+        );
+        renderAll(cardsCache);
       });
     }
     if (healthSiteSelectEl) {

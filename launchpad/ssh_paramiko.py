@@ -352,6 +352,7 @@ def run_ssh_auth_hpe_commands(
     key_passphrase: str = "",
     timeout: int = COMMAND_TIMEOUT,
 ) -> list[str]:
+    """Run HPE CLI commands via one SSH exec each (isolated; no interactive shell bleed)."""
     if not commands:
         return []
 
@@ -365,23 +366,10 @@ def run_ssh_auth_hpe_commands(
             key_path=key_path,
             key_passphrase=key_passphrase,
         ) as client:
-            channel = client.invoke_shell(term="vt100", width=220, height=48)
-            channel.settimeout(0.1)
-            try:
-                _recv_shell(channel, timeout=8)
-                channel.send("setclienv csvtable 1\r\n")
-                _recv_shell(channel, timeout=8, idle_seconds=0.5)
-
-                for command in commands:
-                    raw = _recv_hpe_command_output(
-                        channel,
-                        command,
-                        timeout=float(timeout),
-                    )
-                    outputs.append(_extract_hpe_command_output(raw, command))
-
-                channel.send("exit\r\n")
-            finally:
-                channel.close()
-
+            for command in commands:
+                _, stdout, stderr = client.exec_command(command, timeout=timeout)
+                exit_status = stdout.channel.recv_exit_status()
+                outputs.append(
+                    _read_command_output(stdout, stderr, exit_status=exit_status)
+                )
     return outputs
