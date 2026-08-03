@@ -69,6 +69,7 @@ class DashboardView(ctk.CTkFrame):
         self._stats_in_flight: set[int] = set()
         self._ssh_status_in_flight: set[int] = set()
         self._ssh_status_timer: str | None = None
+        self._capacity_alert_timer: str | None = None
         self._capacity_email_timer: str | None = None
         self._capacity_email_send_in_flight = False
         self._visible_cards: dict[int, Card] = {}
@@ -286,6 +287,34 @@ class DashboardView(ctk.CTkFrame):
             btn.grid(row=row, column=col, padx=6, pady=(0, 6), sticky="w")
             if text.startswith("Export Excel"):
                 self.export_excel_btn = btn
+
+        self.capacity_alert_strip = ctk.CTkFrame(
+            header,
+            fg_color="#7f1d1d",
+            corner_radius=10,
+            border_width=1,
+            border_color="#ef4444",
+        )
+        self.capacity_alert_strip.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.capacity_alert_strip.grid_columnconfigure(0, weight=1)
+        self.capacity_alert_label = ctk.CTkLabel(
+            self.capacity_alert_strip,
+            text="",
+            text_color="#fecaca",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+        )
+        self.capacity_alert_label.grid(row=0, column=0, padx=12, pady=8, sticky="ew")
+        self.capacity_alert_btn = ctk.CTkButton(
+            self.capacity_alert_strip,
+            text="Open Capacity Report",
+            width=170,
+            fg_color="#ef4444",
+            hover_color="#dc2626",
+            command=self._open_capacity_report_all,
+        )
+        self.capacity_alert_btn.grid(row=0, column=1, padx=12, pady=8)
+        self.capacity_alert_strip.grid_remove()
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -508,6 +537,9 @@ class DashboardView(ctk.CTkFrame):
         if self._ssh_status_timer:
             self.after_cancel(self._ssh_status_timer)
             self._ssh_status_timer = None
+        if self._capacity_alert_timer:
+            self.after_cancel(self._capacity_alert_timer)
+            self._capacity_alert_timer = None
 
         for widget in self.cards_frame.winfo_children():
             widget.destroy()
@@ -603,8 +635,75 @@ class DashboardView(ctk.CTkFrame):
         self._update_selection_status()
         self._sync_master_monitor_switch()
         self._probe_monitored_ssh_status()
+        self._refresh_capacity_alerts()
+        self._schedule_capacity_alert_poll()
 
         # SSH stats run only when Monitor is on and you click Refresh Stats.
+
+    def _schedule_capacity_alert_poll(self) -> None:
+        if self._capacity_alert_timer:
+            self.after_cancel(self._capacity_alert_timer)
+        from launchpad.dashboard_capacity_alerts import CAPACITY_ALERT_POLL_MS
+        self._capacity_alert_timer = self.after(
+            CAPACITY_ALERT_POLL_MS, self._on_capacity_alert_timer
+        )
+
+    def _on_capacity_alert_timer(self) -> None:
+        self._capacity_alert_timer = None
+        self._refresh_capacity_alerts()
+        self._schedule_capacity_alert_poll()
+
+    def _refresh_capacity_alerts(self) -> None:
+        from launchpad.dashboard_capacity_alerts import (
+            card_capacity_severity,
+            filter_capacity_issues,
+            fleet_capacity_alert_summary,
+        )
+        from launchpad.health_server import get_health_server
+
+        try:
+            server = get_health_server()
+            cards = server.list_cards(allow_sync=False)
+        except Exception:
+            cards = []
+        monitor_states = dict(self._monitor_states)
+        summary = fleet_capacity_alert_summary(cards, monitor_states)
+        by_id = {int(c.get("id")): c for c in cards if c.get("id") is not None}
+
+        if summary["has_alert"]:
+            critical = summary["critical_sites"] > 0
+            self.capacity_alert_strip.configure(
+                fg_color="#7f1d1d" if critical else "#78350f",
+                border_color="#ef4444" if critical else "#f59e0b",
+            )
+            self.capacity_alert_label.configure(
+                text=summary["label"],
+                text_color="#fecaca" if critical else "#fde68a",
+            )
+            self.capacity_alert_btn.configure(
+                fg_color="#ef4444" if critical else "#f59e0b",
+                hover_color="#dc2626" if critical else "#d97706",
+                text_color="#ffffff" if critical else "#111111",
+            )
+            self.capacity_alert_strip.grid()
+        else:
+            self.capacity_alert_strip.grid_remove()
+
+        for widget in self.card_widgets:
+            payload = by_id.get(widget.card_id)
+            if not payload:
+                widget.set_capacity_alert(None)
+                continue
+            severity = card_capacity_severity(
+                payload.get("health_issues"),
+                monitor_on=self._is_monitor_on(widget.card_id),
+                updated_at=payload.get("updated_at"),
+            )
+            messages = [
+                str(i.get("message") or "")
+                for i in filter_capacity_issues(payload.get("health_issues"))
+            ]
+            widget.set_capacity_alert(severity, messages)
 
     def _apply_array_rail_collapsed(self) -> None:
         if self.array_rail_collapsed:
@@ -842,6 +941,7 @@ class DashboardView(ctk.CTkFrame):
         if widget:
             widget.set_monitor_enabled(enabled)
         self._sync_master_monitor_switch()
+        self._refresh_capacity_alerts()
         if enabled:
             self.status_label.configure(text=f"Monitoring on for {card.name} — refreshing stats...")
             self._probe_card_ssh_status(card.id)
@@ -865,6 +965,7 @@ class DashboardView(ctk.CTkFrame):
             self._sync_master_monitor_switch()
             return
 
+        self._refresh_capacity_alerts()
         if enabled:
             self.status_label.configure(text="All monitoring on — refreshing stats for SSH cards...")
             self._fetch_all_ssh_stats()
@@ -1156,6 +1257,7 @@ class DashboardView(ctk.CTkFrame):
                 else:
                     self._set_card_ssh_monitor_off(card.id)
             self._sync_master_monitor_switch()
+            self._refresh_capacity_alerts()
             action = "Monitoring on" if enabled else "Monitoring off"
             self.status_label.configure(
                 text=f"{action} for {len(ssh_widgets)} checked SSH card(s)."
@@ -1400,6 +1502,7 @@ class DashboardView(ctk.CTkFrame):
                 )
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+                self.after(0, self._refresh_capacity_alerts)
             except Exception as exc:
                 _log(f"Health dashboard failed: {exc}")
                 self.after(
@@ -1454,6 +1557,7 @@ class DashboardView(ctk.CTkFrame):
                 )
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+                self.after(0, self._refresh_capacity_alerts)
             except Exception as exc:
                 _log(f"Capacity report failed: {exc}")
                 self.after(
