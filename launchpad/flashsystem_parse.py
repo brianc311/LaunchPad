@@ -146,6 +146,31 @@ def _parse_colon_table(output: str) -> tuple[list[str], list[list[str]]]:
     return [], []
 
 
+def _parse_csv_table(output: str) -> tuple[list[str], list[list[str]]]:
+    """Parse simple CSV tables (e.g. HPE ``setclienv csvtable 1`` output)."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return [], []
+    if "," not in lines[0] or lines[0].count(",") < 2:
+        return [], []
+    headers = [part.strip() for part in lines[0].split(",")]
+    if len(headers) < 2:
+        return [], []
+    rows: list[list[str]] = []
+    for line in lines[1:]:
+        if "," not in line:
+            continue
+        cells = [part.strip() for part in line.split(",")]
+        if len(cells) < 2:
+            continue
+        if len(cells) < len(headers):
+            cells = cells + [""] * (len(headers) - len(cells))
+        elif len(cells) > len(headers):
+            cells = cells[: len(headers)]
+        rows.append(cells)
+    return headers, rows
+
+
 def _parse_space_table(output: str) -> tuple[list[str], list[list[str]]]:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if len(lines) < 2:
@@ -153,6 +178,53 @@ def _parse_space_table(output: str) -> tuple[list[str], list[list[str]]]:
     headers = lines[0].split()
     rows = [line.split() for line in lines[1:] if line.split()]
     return headers, rows
+
+
+def _parse_any_table(output: str) -> tuple[list[str], list[list[str]]]:
+    headers, rows = _parse_csv_table(output)
+    if rows:
+        return headers, rows
+    headers, rows = _parse_colon_table(output)
+    if rows:
+        return headers, rows
+    return _parse_space_table(output)
+
+
+def _record_get(record: dict[str, str], *keys: str) -> str:
+    lowered = {key.lower(): value for key, value in record.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _record_find_header(record: dict[str, str], *keys: str) -> str | None:
+    lowered = {key.lower(): key for key in record}
+    for key in keys:
+        header = lowered.get(key.lower())
+        if header is not None:
+            return header
+    return None
+
+
+def _parse_sized_field(record: dict[str, str], *keys: str) -> float | None:
+    """Parse a size cell; headers ending in ``_MB`` are treated as megabytes."""
+    for key in keys:
+        header = _record_find_header(record, key)
+        if header is None:
+            continue
+        value = str(record.get(header, "")).strip()
+        if not value:
+            continue
+        header_lower = header.lower()
+        if header_lower.endswith("_mb") or header_lower.endswith("(mb)"):
+            parsed = _parse_size_bytes(f"{value}MB")
+        else:
+            parsed = _parse_size_bytes(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _parse_key_values(output: str) -> dict[str, str]:
@@ -224,6 +296,9 @@ def _summarize_showspace(output: str) -> str:
             f"{name}: {_format_bytes(used)} used / {_format_bytes(total)} "
             f"({pct:.1f}% used, {_format_bytes(capacity['free_bytes'])} free)"
         )
+    pool_summary = _summarize_mdisk_pools(output)
+    if pool_summary and not pool_summary.lower().startswith("no "):
+        return pool_summary
     return _summarize_table("Capacity", output, "CPG(s)")
 
 
@@ -492,10 +567,8 @@ def _pool_capacity_lines(headers: list[str], rows: list[list[str]]) -> list[str]
 
 
 def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
-    """Parse lsmdiskgrp / pool table output into capacity dicts like parse_capacity_summary."""
-    headers, rows = _parse_colon_table(output)
-    if not rows:
-        headers, rows = _parse_space_table(output)
+    """Parse lsmdiskgrp / pool / HPE CPG table output into capacity dicts."""
+    headers, rows = _parse_any_table(output)
     if not headers or not rows:
         return []
 
@@ -505,10 +578,32 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
         for index, header in enumerate(headers):
             record[header] = row[index] if index < len(row) else ""
 
-        name = record.get("name") or record.get("CPG") or record.get("PoolName") or "Pool"
-        cap_bytes = _parse_size_bytes(record.get("capacity", "") or record.get("Total", ""))
-        free_bytes = _parse_size_bytes(record.get("free_capacity", "") or record.get("Free", ""))
-        used_bytes = _parse_size_bytes(record.get("used_capacity", ""))
+        name = (
+            _record_get(record, "name", "CPG", "PoolName", "Name")
+            or "Pool"
+        )
+        cap_bytes = _parse_sized_field(
+            record,
+            "capacity",
+            "Total",
+            "Usr_Total_MB",
+            "total_mb",
+            "Size",
+        )
+        free_bytes = _parse_sized_field(
+            record,
+            "free_capacity",
+            "Free",
+            "Usr_Free_MB",
+            "free_mb",
+        )
+        used_bytes = _parse_sized_field(
+            record,
+            "used_capacity",
+            "Usr_Used_MB",
+            "used_mb",
+            "Used",
+        )
 
         if cap_bytes and free_bytes is not None:
             used_bytes = used_bytes if used_bytes is not None else max(0.0, cap_bytes - free_bytes)
@@ -521,6 +616,12 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
             continue
 
         used_pct = (used_bytes / cap_bytes * 100.0) if cap_bytes else 0.0
+        pct_raw = _record_get(record, "Usr_Used_Perc", "Used%", "use%", "used_pct")
+        if pct_raw:
+            try:
+                used_pct = float(pct_raw.replace("%", "").strip())
+            except ValueError:
+                pass
         pools.append(
             {
                 "name": name,
@@ -646,9 +747,7 @@ def _summarize_alerts(output: str) -> str:
 
 
 def _summarize_table(label: str, output: str, item_name: str) -> str:
-    headers, rows = _parse_colon_table(output)
-    if not rows:
-        headers, rows = _parse_space_table(output)
+    headers, rows = _parse_any_table(output)
     if rows:
         return f"{len(rows)} {item_name}, {_count_status(rows, headers)}"
     first = output.splitlines()[0].strip() if output else ""
@@ -736,7 +835,7 @@ def summarize_command_output(label: str, command: str, output: str) -> str:
     if "showspace" in command_lower or "showsys" in command_lower:
         return _summarize_showspace(text)
     if "showcpg" in command_lower or "capacity - cpg" in label_lower:
-        return _summarize_showspace(text)
+        return _summarize_mdisk_pools(text)
     if "lsnode" in command_lower and (
         "health - nodes" in label_lower
         or "health - controllers" in label_lower

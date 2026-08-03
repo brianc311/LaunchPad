@@ -846,6 +846,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         </section>`;
     }
 
+    function visibleCards(cards) {
+      if (includeOffToggle && includeOffToggle.checked) {
+        return cards;
+      }
+      return cards.filter((c) => isMonitorOn(c.id));
+    }
+
     function renderAll(cards) {
       if (!cards.length) {
         sitesEl.innerHTML =
@@ -857,17 +864,16 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         }
         return;
       }
-      const visible = includeOffToggle && includeOffToggle.checked
-        ? cards
-        : cards.filter((c) => isMonitorOn(c.id));
+      const visible = visibleCards(cards);
       if (!visible.length) {
         sitesEl.innerHTML =
           '<div class="empty">All sites have Monitor off. Check ' +
           '<strong>Include monitoring-off sites</strong> to view them.</div>';
         updateMasterMonitorToggle();
         if (refreshStatusEl) {
-          refreshStatusEl.textContent = `0 of ${cards.length} site(s) shown`;
+          refreshStatusEl.textContent = `0 of ${cards.length} monitored site(s) shown`;
         }
+        updatePrintMeta(cards);
         return;
       }
       const sorted = [...visible].sort((a, b) =>
@@ -888,8 +894,12 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         const shownCount = siteId == null
           ? visible.length
           : visible.filter((card) => card.id === siteId).length;
-        refreshStatusEl.textContent = `${shownCount} of ${cards.length} site(s) shown`;
+        const includeOff = includeOffToggle && includeOffToggle.checked;
+        refreshStatusEl.textContent = includeOff
+          ? `${shownCount} of ${cards.length} site(s) shown`
+          : `${shownCount} monitored site(s) shown (${cards.length} total)`;
       }
+      updatePrintMeta(cards);
     }
 
     async function downloadExcel() {
@@ -994,9 +1004,17 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
 
     function updatePrintMeta(cards) {
       const stamp = new Date().toLocaleString();
-      const withCapacity = cards.filter((c) => c.capacity_popup_html).length;
-      printMetaEl.textContent =
-        `Report generated ${stamp} — ${withCapacity} of ${cards.length} site(s) with capacity data.`;
+      const visible = visibleCards(cards);
+      const withCapacity = visible.filter((c) => c.capacity_popup_html).length;
+      const includeOff = includeOffToggle && includeOffToggle.checked;
+      if (includeOff) {
+        printMetaEl.textContent =
+          `Report generated ${stamp} — ${withCapacity} of ${visible.length} site(s) with capacity data.`;
+      } else {
+        printMetaEl.textContent =
+          `Report generated ${stamp} — ${withCapacity} of ${visible.length} monitored site(s) with capacity data` +
+          (cards.length !== visible.length ? ` (${cards.length} total in LaunchPad).` : ".");
+      }
     }
 
     async function loadCards() {
