@@ -56,10 +56,33 @@ def _find_result(
     return None
 
 
+def _looks_like_hpe_checkhealth(output: str) -> bool:
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    checking = sum(1 for line in lines if line.lower().startswith("checking "))
+    if checking == 0:
+        return False
+    if any(
+        token in (output or "").lower()
+        for token in ("total capacity", "usr_total", ",name,", "free capacity")
+    ):
+        return False
+    return checking >= 1 and len(lines) <= 12
+
+
 def _result_output(item: dict[str, Any] | None) -> str:
     if not item or item.get("error"):
         return ""
     return (item.get("output") or "").strip()
+
+
+def _capacity_result_output(item: dict[str, Any] | None) -> str:
+    """Like ``_result_output`` but drops checkhealth bleed mistaken for capacity."""
+    text = _result_output(item)
+    if text and _looks_like_hpe_checkhealth(text):
+        return ""
+    return text
 
 
 def _find_pool_capacity_result(
@@ -95,7 +118,7 @@ def pool_capacity_from_commands(
     command_results: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     """Parsed pool rows from SSH command output (lsmdiskgrp, capacity - pools, etc.)."""
-    pools_output = _result_output(_find_pool_capacity_result(command_results))
+    pools_output = _capacity_result_output(_find_pool_capacity_result(command_results))
     return parse_pool_capacity_rows(pools_output)
 
 
@@ -485,6 +508,8 @@ def format_preset_capacity_fallback_html(
         output = (item.get("output") or "").strip()
         if not output:
             continue
+        if _looks_like_hpe_checkhealth(output):
+            continue
         body = item.get("output_html") or format_command_output_html(
             item.get("label", ""),
             item.get("command", ""),
@@ -763,7 +788,7 @@ def analyze_health(
             ("space_show", "capacity - system"),
         ):
             system_item = _find_result(command_results, *needles)
-            system_output = _result_output(system_item)
+            system_output = _capacity_result_output(system_item)
             if system_output:
                 break
         if system_output:
@@ -783,7 +808,7 @@ def analyze_health(
                 )
 
         pools_item = _find_pool_capacity_result(command_results)
-        pools_output = _result_output(pools_item)
+        pools_output = _capacity_result_output(pools_item)
         if pools_output:
             headers, rows = _table_rows(pools_output)
             for row in rows:

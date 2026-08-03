@@ -26,13 +26,14 @@ SVC_COMMANDS: list[tuple[str, str]] = [
 ]
 
 # HPE 3PAR (8200 / 8400 / 8450 share the same CLI)
-# Capacity: showsys -d (MB totals) + showcpg (Usr_* used/total). Do not use
-# showcpg -sdg here — that option only shows snapshot-data autogrow settings.
+# Capacity first so checkhealth cannot starve/bleed into capacity SSH reads.
+# Capacity: showsys -d (MB totals) + showcpg (Usr/Free/Total). Do not use
+# showcpg -sdg — that option only shows snapshot-data autogrow settings.
 HP_3PAR_COMMANDS: list[tuple[str, str]] = [
-    ("Health - Overall", "checkhealth"),
-    ("Health - Alerts", "showalert"),
     ("Capacity - System", "showsys -d"),
     ("Capacity - CPG %", "showcpg"),
+    ("Health - Overall", "checkhealth"),
+    ("Health - Alerts", "showalert"),
     ("Volumes - VV list", "showvv"),
     ("Hosts - host list", "showhost"),
     ("CPU - Load", "statcpu"),
@@ -44,11 +45,11 @@ HP_3PAR_COMMANDS: list[tuple[str, str]] = [
 # HPE Primera 600 (same CLI family as 3PAR for capacity)
 # showspace -cpg requires a CPG name/pattern; use showcpg for CPG capacity.
 HPE_PRIMERA_COMMANDS: list[tuple[str, str]] = [
+    ("Capacity - System", "showsys -d"),
+    ("Capacity - CPG %", "showcpg"),
     ("Health - Nodes", "shownode -status"),
     ("Health - Alerts", "showalert"),
     ("Health - Disks", "showpd -status"),
-    ("Capacity - System", "showsys -d"),
-    ("Capacity - CPG %", "showcpg"),
     ("Volumes - VV list", "showvv"),
     ("Hosts - host list", "showhost"),
     ("CPU - All Nodes %", "statcpu -iter 1"),
@@ -478,11 +479,16 @@ def ensure_hpe_capacity_commands(
     for label, command in commands:
         cmd = command.strip()
         lower = cmd.lower()
+        label_lower = (label or "").lower()
         if lower == "showcpg -sdg" or lower.startswith("showcpg -sdg "):
             rewritten.append((label, "showcpg"))
             continue
         if lower == "showspace -cpg":
             rewritten.append((label, "showcpg"))
+            continue
+        # Bare showspace is a free-space estimate (often 0,0), not system capacity.
+        if lower == "showspace" and "capacity" in label_lower:
+            rewritten.append((label, "showsys -d"))
             continue
         rewritten.append((label, command))
 
@@ -493,10 +499,26 @@ def ensure_hpe_capacity_commands(
                 return True
         return False
 
+    # Prefer capacity commands before slow checkhealth on custom lists.
+    capacity: list[tuple[str, str]] = []
+    rest: list[tuple[str, str]] = []
+    for item in rewritten:
+        label, command = item
+        haystack = f"{label} {command}".lower()
+        if "showsys" in haystack or "showcpg" in haystack or (
+            "capacity" in haystack and "checkhealth" not in haystack
+        ):
+            capacity.append(item)
+        else:
+            rest.append(item)
+    rewritten = capacity + rest
+
     if not has_command("showsys"):
-        rewritten.append(("Capacity - System", "showsys -d"))
+        rewritten.insert(0, ("Capacity - System", "showsys -d"))
     if not has_command("showcpg"):
-        rewritten.append(("Capacity - CPG %", "showcpg"))
+        # After showsys if present.
+        insert_at = 1 if rewritten and "showsys" in rewritten[0][1].lower() else 0
+        rewritten.insert(insert_at, ("Capacity - CPG %", "showcpg"))
     return rewritten
 
 

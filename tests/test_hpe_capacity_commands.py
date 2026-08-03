@@ -1,6 +1,10 @@
 """HPE capacity CLI commands, MB parsing, and shell output extraction."""
 
-from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.flashsystem_health import (
+    analyze_health,
+    format_capacity_report_html,
+    pool_capacity_from_commands,
+)
 from launchpad.flashsystem_parse import parse_capacity_summary, parse_pool_capacity_rows
 from launchpad.ssh_paramiko import _extract_hpe_command_output
 from launchpad.storage_presets import HP_3PAR_COMMANDS, HPE_PRIMERA_COMMANDS
@@ -29,6 +33,8 @@ def test_hpe_presets_use_showcpg_not_sdg_or_bare_showspace_cpg():
     assert ("Capacity - CPG %", "showspace -cpg") not in HPE_PRIMERA_COMMANDS
     assert ("Capacity - System", "showsys -d") in HP_3PAR_COMMANDS
     assert ("Capacity - System", "showsys -d") in HPE_PRIMERA_COMMANDS
+    assert HP_3PAR_COMMANDS[0][1] == "showsys -d"
+    assert HP_3PAR_COMMANDS[1][1] == "showcpg"
 
 
 def test_ensure_hpe_capacity_rewrites_legacy_custom_commands():
@@ -37,16 +43,18 @@ def test_ensure_hpe_capacity_rewrites_legacy_custom_commands():
     custom = "\n".join(
         [
             "Health - Overall|checkhealth",
-            "Capacity - System|showsys -d",
+            "Capacity - System|showspace",
             "Capacity - CPG %|showcpg -sdg",
             "Capacity - Free|showspace -cpg",
         ]
     )
     commands = resolve_card_commands("hpe_3par_8450", custom)
+    assert commands[0][1] == "showsys -d"
     assert ("Capacity - CPG %", "showcpg") in commands
     assert ("Capacity - Free", "showcpg") in commands
     assert not any(cmd == "showcpg -sdg" for _, cmd in commands)
     assert not any(cmd == "showspace -cpg" for _, cmd in commands)
+    assert not any(cmd == "showspace" for _, cmd in commands)
 
 
 def test_parse_showsys_d_treats_bare_numbers_as_mb():
@@ -120,3 +128,44 @@ def test_parse_showcpg_default_csv_has_usr_mb_columns():
     pools = parse_pool_capacity_rows(SAMPLE_SHOWCPG)
     assert len(pools) == 2
     assert pools[0]["total_bytes"] == 204800 * 1024**2
+
+
+def test_parse_showcpg_mib_preamble_free_total_columns():
+    cpg = """---------------(MiB)---------------
+Id,Name,Warn%,VVs,TPVVs,TDVVs,Usr,Snp,Base,Free,Total
+0,SSD_r6,-,237,237,0,237,0,237,981632,30387200
+1,NL_r5,-,10,10,0,10,0,10,5000,100000
+2,total,-,247,247,0,247,0,247,986632,30487200
+"""
+    pools = parse_pool_capacity_rows(cpg)
+    assert len(pools) == 2
+    by_name = {p["name"]: p for p in pools}
+    assert "total" not in by_name
+    ssd = by_name["SSD_r6"]
+    assert ssd["total_bytes"] == 30387200 * 1024**2
+    assert ssd["free_bytes"] == 981632 * 1024**2
+    assert ssd["used_pct"] == round((30387200 - 981632) / 30387200 * 100, 1)
+    html = format_capacity_report_html(None, cpg)
+    assert html
+    assert "SSD_r6" in html
+
+
+def test_analyze_health_ignores_checkhealth_bleed_for_capacity():
+    results = [
+        {
+            "label": "Capacity - System",
+            "command": "showsys -d",
+            "output": "Checking date\nOK",
+            "error": None,
+        },
+        {
+            "label": "Capacity - CPG %",
+            "command": "showcpg",
+            "output": SAMPLE_SHOWCPG,
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE-WAG", results, None)
+    assert analysis["pools"]
+    assert analysis["capacity_popup_html"]
+    assert "Checking" not in analysis["capacity_popup_html"]

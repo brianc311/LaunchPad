@@ -147,17 +147,43 @@ def _parse_colon_table(output: str) -> tuple[list[str], list[list[str]]]:
 
 
 def _parse_csv_table(output: str) -> tuple[list[str], list[list[str]]]:
-    """Parse simple CSV tables (e.g. HPE ``setclienv csvtable 1`` output)."""
+    """Parse simple CSV tables (e.g. HPE ``setclienv csvtable 1`` output).
+
+    Skips preamble lines such as ``---------------(MiB)---------------``.
+    """
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if len(lines) < 2:
         return [], []
-    if "," not in lines[0] or lines[0].count(",") < 2:
+
+    header_idx = None
+    for idx, line in enumerate(lines):
+        if line.count(",") < 2:
+            continue
+        cells = [part.strip() for part in line.split(",")]
+        if len(cells) < 3:
+            continue
+        lowered = [cell.lower() for cell in cells]
+        # Prefer a real header row over a data row that also has commas.
+        if any(token in lowered for token in ("name", "id", "warn%", "rawfree", "usablefree")):
+            header_idx = idx
+            break
+        if header_idx is None and not cells[0].isdigit():
+            header_idx = idx
+    if header_idx is None:
         return [], []
-    headers = [part.strip() for part in lines[0].split(",")]
-    if len(headers) < 2:
-        return [], []
+
+    raw_headers = [part.strip() for part in lines[header_idx].split(",")]
+    # Deduplicate blank/duplicate headers (HPE sometimes repeats Snp).
+    headers: list[str] = []
+    seen: dict[str, int] = {}
+    for header in raw_headers:
+        key = header or "field"
+        count = seen.get(key.lower(), 0)
+        seen[key.lower()] = count + 1
+        headers.append(key if count == 0 else f"{key}_{count + 1}")
+
     rows: list[list[str]] = []
-    for line in lines[1:]:
+    for line in lines[header_idx + 1 :]:
         if "," not in line:
             continue
         cells = [part.strip() for part in line.split(",")]
@@ -190,6 +216,16 @@ def _parse_any_table(output: str) -> tuple[list[str], list[list[str]]]:
     return _parse_space_table(output)
 
 
+def _output_size_unit_hint(output: str) -> str:
+    """Return MB when CLI text indicates megabyte/mebibyte columns."""
+    lowered = (output or "").lower()
+    if "(mib)" in lowered or "(mb)" in lowered or "estimated(mib)" in lowered:
+        return "MB"
+    if "usr_total_mb" in lowered or "usr_used_mb" in lowered:
+        return "MB"
+    return ""
+
+
 def _record_get(record: dict[str, str], *keys: str) -> str:
     lowered = {key.lower(): value for key, value in record.items()}
     for key in keys:
@@ -208,18 +244,31 @@ def _record_find_header(record: dict[str, str], *keys: str) -> str | None:
     return None
 
 
-def _parse_sized_field(record: dict[str, str], *keys: str) -> float | None:
-    """Parse a size cell; headers ending in ``_MB`` are treated as megabytes."""
+def _parse_sized_field(
+    record: dict[str, str],
+    *keys: str,
+    default_unit: str = "",
+) -> float | None:
+    """Parse a size cell; ``_MB`` headers and ``default_unit`` treat bare ints as MB."""
+    mb_headers = {"free", "total", "base", "rawfree", "usablefree"}
     for key in keys:
         header = _record_find_header(record, key)
         if header is None:
             continue
         value = str(record.get(header, "")).strip()
-        if not value:
+        if not value or value in {"-", "--"}:
             continue
         header_lower = header.lower()
+        unit_hint = default_unit
         if header_lower.endswith("_mb") or header_lower.endswith("(mb)"):
-            parsed = _parse_size_bytes(f"{value}MB")
+            unit_hint = "MB"
+        elif header_lower in mb_headers and default_unit:
+            unit_hint = default_unit
+        elif header_lower in mb_headers and not re.search(r"[A-Za-z]", value):
+            # HPE showcpg CSV uses Free/Total in MiB without a unit suffix.
+            unit_hint = "MB"
+        if unit_hint and not re.search(r"[A-Za-z]", value):
+            parsed = _parse_size_bytes(f"{value}{unit_hint}")
         else:
             parsed = _parse_size_bytes(value)
         if parsed is not None:
@@ -620,6 +669,7 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
     if not headers or not rows:
         return []
 
+    unit_hint = _output_size_unit_hint(output)
     pools: list[dict[str, Any]] = []
     for row in rows:
         record: dict[str, str] = {}
@@ -630,6 +680,8 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
             _record_get(record, "name", "CPG", "PoolName", "Name")
             or "Pool"
         )
+        if name.strip().lower() in {"total", "totals", "sum"}:
+            continue
         cap_bytes = _parse_sized_field(
             record,
             "capacity",
@@ -637,6 +689,7 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
             "Usr_Total_MB",
             "total_mb",
             "Size",
+            default_unit=unit_hint,
         )
         free_bytes = _parse_sized_field(
             record,
@@ -644,13 +697,16 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
             "Free",
             "Usr_Free_MB",
             "free_mb",
+            default_unit=unit_hint,
         )
+        # Do not use bare "Usr" — on showcpg it is often a VV count, not capacity.
         used_bytes = _parse_sized_field(
             record,
             "used_capacity",
             "Usr_Used_MB",
             "used_mb",
             "Used",
+            default_unit=unit_hint,
         )
 
         if cap_bytes and free_bytes is not None:
@@ -1099,9 +1155,16 @@ def format_command_output_html(label: str, command: str, output: str) -> str:
             normalized_rows.append(row)
         return summary_html + _html_table(headers, normalized_rows, family)
 
-    headers, rows = _parse_space_table(text)
+    headers, rows = _parse_any_table(text)
     if headers and rows:
-        return summary_html + _html_table(headers, rows, family)
+        normalized_rows = []
+        for row in rows:
+            if len(row) < len(headers):
+                row = row + [""] * (len(headers) - len(row))
+            elif len(row) > len(headers):
+                row = row[: len(headers)]
+            normalized_rows.append(row)
+        return summary_html + _html_table(headers, normalized_rows, family)
 
     if kv:
         return summary_html + _html_key_value_table(kv, family)
