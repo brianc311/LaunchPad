@@ -79,7 +79,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         </label>
         <button type="button" class="secondary" id="refresh-btn">Refresh</button>
         <button type="button" class="secondary" id="connect-btn" disabled>Connect</button>
-        <button type="button" class="secondary" id="open-gui-btn" disabled title="No GUI URL on this card — set URL in Admin.">Open GUI</button>
+        <button type="button" class="secondary" id="open-gui-btn" disabled title="No host or GUI URL on this card — set Host or URL in Admin.">Open GUI</button>
         <span class="status" id="status" aria-live="polite"></span>
       </div>
       <div class="actions">
@@ -418,17 +418,19 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     function updateActionState() {
       const hasCard = currentCardId() !== null;
       const card = selectedCard();
-      const hasUrl = Boolean(card && String(card.url || "").trim());
+      const hasGuiTarget = Boolean(
+        card && (String(card.url || "").trim() || String(card.host || "").trim())
+      );
       createGroupBtn.disabled = !hasCard;
       assignMapsBtn.disabled = !hasCard || !selectedGroupName || selectedStandAloneMaps.size === 0;
       removeMapsBtn.disabled = !hasCard || selectedMemberMaps.size === 0;
       startGroupBtn.disabled = !hasCard || !selectedGroupName;
       deleteGroupBtn.disabled = !hasCard || !selectedGroupName;
       connectBtn.disabled = !hasCard;
-      openGuiBtn.disabled = !hasCard || !hasUrl;
-      openGuiBtn.title = hasUrl
-        ? "Open array GUI in your default browser"
-        : "No GUI URL on this card — set URL in Admin.";
+      openGuiBtn.disabled = !hasCard || !hasGuiTarget;
+      openGuiBtn.title = hasGuiTarget
+        ? "Open array GUI in your default browser (URL, or https://host)"
+        : "No host or GUI URL on this card — set Host or URL in Admin.";
     }
 
     function render() {

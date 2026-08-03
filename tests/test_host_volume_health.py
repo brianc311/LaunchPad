@@ -2,6 +2,7 @@ from launchpad.host_volume_health import (
     filter_problem_hosts,
     filter_problem_volumes,
     normalize_gui_url,
+    resolve_gui_url,
     status_is_offline_or_degraded,
 )
 
@@ -19,6 +20,12 @@ def test_normalize_gui_url():
     assert normalize_gui_url("10.1.2.3") == "https://10.1.2.3"
     assert normalize_gui_url("https://x") == "https://x"
     assert normalize_gui_url("  ") == ""
+
+
+def test_resolve_gui_url_prefers_url_then_host():
+    assert resolve_gui_url("https://gui.example", "10.1.2.3") == "https://gui.example"
+    assert resolve_gui_url("", "10.245.16.56") == "https://10.245.16.56"
+    assert resolve_gui_url("  ", "  ") == ""
 
 
 def test_filter_problem_hosts_offline_degraded_only():
