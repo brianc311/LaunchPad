@@ -4,7 +4,7 @@ import webbrowser
 from launchpad.branding import window_title
 from launchpad.crypto import decrypt_text
 from launchpad.database import Database
-from launchpad.host_volume_health import normalize_gui_url
+from launchpad.host_volume_health import resolve_gui_url
 from launchpad.launchers import launch_card
 from launchpad.mouse_jiggler import (
     SETTING_MOUSE_JIGGLER,
@@ -137,9 +137,11 @@ class LaunchPadApp(ctk.CTk):
             card = db.get_card(card_id)
             if card is None:
                 raise ValueError(f"Unknown card id {card_id}")
-            url = normalize_gui_url(card.url)
+            url = resolve_gui_url(card.url, card.host)
             if not url:
-                raise ValueError("No GUI URL on this card — set URL in Admin.")
+                raise ValueError(
+                    "No GUI URL or host on this card — set URL or Host in Admin."
+                )
             webbrowser.open(url)
             return "Opened GUI"
 

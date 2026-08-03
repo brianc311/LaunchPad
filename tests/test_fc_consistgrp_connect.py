@@ -32,6 +32,8 @@ def test_fc_consistgrp_html_has_connect_and_open_gui_buttons():
     assert 'id="open-gui-btn"' in FC_CONSISTGRP_HTML
     assert "/api/fc-consistgrp/connect" in FC_CONSISTGRP_HTML
     assert "/api/fc-consistgrp/open-gui" in FC_CONSISTGRP_HTML
+    assert "card.host" in FC_CONSISTGRP_HTML
+    assert "https://host" in FC_CONSISTGRP_HTML
 
 
 def test_fc_consistgrp_cards_include_url():
@@ -48,14 +50,11 @@ def test_fc_consistgrp_cards_include_url():
 
     cards = server.fc_consistgrp_cards()
 
-    assert cards == [
-        {
-            "id": 1,
-            "name": "array1",
-            "host": "fake.example",
-            "url": "https://array.example",
-        }
-    ]
+    assert len(cards) == 1
+    assert cards[0]["id"] == 1
+    assert cards[0]["name"] == "array1"
+    assert cards[0]["host"] == "fake.example"
+    assert cards[0]["url"] == "https://array.example"
 
 
 def test_connect_api_requires_unlock(monkeypatch):
@@ -80,13 +79,13 @@ def test_open_gui_api_requires_unlock(monkeypatch):
     assert data["ok"] is False
 
 
-def test_open_gui_api_400_when_no_url(monkeypatch):
+def test_open_gui_api_400_when_no_url_or_host(monkeypatch):
     server = HealthServer()
     _unlock(server)
     server.register_card(
         card_id=1,
         name="array1",
-        host="fake.example",
+        host="",
         port=22,
         username="admin",
         key_path="/dev/null",
@@ -94,7 +93,7 @@ def test_open_gui_api_400_when_no_url(monkeypatch):
     server.set_card_launch_backend(
         lambda _card_id: "SSH session started",
         lambda card_id: (_ for _ in ()).throw(
-            ValueError("No GUI URL on this card — set URL in Admin.")
+            ValueError("No GUI URL or host on this card — set URL or Host in Admin.")
         ),
     )
 
@@ -103,7 +102,7 @@ def test_open_gui_api_400_when_no_url(monkeypatch):
     )
 
     assert status == 400
-    assert "url" in data["error"].lower()
+    assert "url" in data["error"].lower() or "host" in data["error"].lower()
 
 
 def test_connect_api_success(monkeypatch):

@@ -17,6 +17,7 @@ __all__ = [
     "filter_problem_volumes",
     "is_volume_find_eligible",
     "normalize_gui_url",
+    "resolve_gui_url",
     "parse_fc_hosts",
     "parse_lsvdisk_volumes",
     "parse_showhost_hosts",
@@ -38,6 +39,11 @@ def normalize_gui_url(url: str) -> str:
     if "://" not in stripped:
         return f"https://{stripped}"
     return stripped
+
+
+def resolve_gui_url(url: str = "", host: str = "") -> str:
+    """Prefer Admin GUI URL; fall back to management host as https://host."""
+    return normalize_gui_url(url) or normalize_gui_url(host)
 
 
 def _row_status(row: dict[str, str]) -> str:
