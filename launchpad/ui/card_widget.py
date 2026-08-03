@@ -118,6 +118,23 @@ class GlowCard(ctk.CTkFrame):
         )
         self.expand_btn.grid(row=0, column=3, sticky="e", padx=(4, 4))
 
+        self._capacity_alert_severity: str | None = None
+        self._capacity_alert_tip = ""
+        self.capacity_alert_badge = ctk.CTkLabel(
+            top_row,
+            text="",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#111111",
+            fg_color=theme["surface"],
+            corner_radius=8,
+            width=44,
+            height=20,
+        )
+        self.capacity_alert_badge.grid(row=0, column=4, sticky="e", padx=(4, 4))
+        self.capacity_alert_badge.grid_remove()
+        self.capacity_alert_badge.bind("<Enter>", self._on_capacity_alert_enter)
+        self.capacity_alert_badge.bind("<Leave>", self._hide_capacity_alert_tip)
+
         self.type_badge = ctk.CTkLabel(
             top_row,
             text=card_type.upper(),
@@ -128,7 +145,7 @@ class GlowCard(ctk.CTkFrame):
             width=48,
             height=20,
         )
-        self.type_badge.grid(row=0, column=4, sticky="e")
+        self.type_badge.grid(row=0, column=5, sticky="e")
 
         if draggable:
             self.drag_handle = ctk.CTkLabel(
@@ -139,7 +156,7 @@ class GlowCard(ctk.CTkFrame):
                 width=20,
                 cursor="hand2",
             )
-            self.drag_handle.grid(row=0, column=5, sticky="e", padx=(6, 0))
+            self.drag_handle.grid(row=0, column=6, sticky="e", padx=(6, 0))
             self.drag_handle.bind("<Button-1>", self._start_drag)
             self.drag_handle.bind("<B1-Motion>", self._on_drag)
             self.drag_handle.bind("<ButtonRelease-1>", self._end_drag)
@@ -365,11 +382,16 @@ class GlowCard(ctk.CTkFrame):
         self.name_label.grid(row=0, column=2, sticky="ew", padx=(6, 6))
         self.name_label.configure(wraplength=0)
         self.expand_btn.grid(row=0, column=3, sticky="e", padx=(4, 4))
-        self.type_badge.grid(row=0, column=4, sticky="e")
+        if self._capacity_alert_severity:
+            self.capacity_alert_badge.grid(row=0, column=4, sticky="e", padx=(4, 4))
+        else:
+            self.capacity_alert_badge.grid_remove()
+        self.type_badge.grid(row=0, column=5, sticky="e")
         if hasattr(self, "drag_handle"):
-            self.drag_handle.grid(row=0, column=5, sticky="e", padx=(6, 0))
+            self.drag_handle.grid(row=0, column=6, sticky="e", padx=(6, 0))
 
     def _layout_compact_header(self) -> None:
+        self.capacity_alert_badge.grid_remove()
         self.type_badge.grid_remove()
         if hasattr(self, "drag_handle"):
             self.drag_handle.grid_remove()
@@ -613,6 +635,75 @@ class GlowCard(ctk.CTkFrame):
             self._status_tip.destroy()
             self._status_tip = None
 
+    def set_capacity_alert(
+        self,
+        severity: str | None,
+        messages: list[str] | None = None,
+    ) -> None:
+        if not hasattr(self, "capacity_alert_badge") or self.capacity_alert_badge is None:
+            return
+        if severity not in {"critical", "warn"}:
+            self._capacity_alert_severity = None
+            self.capacity_alert_badge.grid_remove()
+            self.capacity_alert_badge.configure(text="")
+            return
+        self._capacity_alert_severity = severity
+        is_critical = severity == "critical"
+        self.capacity_alert_badge.configure(
+            text="CRIT" if is_critical else "WARN",
+            fg_color="#ef4444" if is_critical else "#f59e0b",
+            text_color="#ffffff" if is_critical else "#111111",
+        )
+        self.capacity_alert_badge.grid()
+        tip = "\n".join(m for m in (messages or []) if m).strip()
+        if tip:
+            self._capacity_alert_tip = tip
+        else:
+            self._capacity_alert_tip = (
+                "Critical capacity on this site" if is_critical else "Capacity warning on this site"
+            )
+
+    def _on_capacity_alert_enter(self, _event=None) -> None:
+        tip = getattr(self, "_capacity_alert_tip", "")
+        if tip:
+            self._show_capacity_alert_tip(tip)
+
+    def _show_capacity_alert_tip(self, text: str) -> None:
+        if not text or not self.capacity_alert_badge or not self.capacity_alert_badge.winfo_exists():
+            return
+        self._hide_capacity_alert_tip()
+        self._capacity_alert_tip_window = ctk.CTkToplevel(self)
+        self._capacity_alert_tip_window.wm_overrideredirect(True)
+        self._capacity_alert_tip_window.attributes("-topmost", True)
+        x = self.capacity_alert_badge.winfo_rootx()
+        y = self.capacity_alert_badge.winfo_rooty() + self.capacity_alert_badge.winfo_height() + 4
+        self._capacity_alert_tip_window.geometry(f"+{x}+{y}")
+        ctk.CTkLabel(
+            self._capacity_alert_tip_window,
+            text=text,
+            font=ctk.CTkFont(size=11),
+            text_color=self.theme["text"],
+            fg_color=self.theme["surface"],
+            corner_radius=6,
+            padx=8,
+            pady=4,
+        ).pack()
+        self._capacity_alert_tip_window.bind("<Leave>", lambda _e: self._hide_capacity_alert_tip())
+        self._capacity_alert_tip_window.bind("<Button-1>", lambda _e: self._hide_capacity_alert_tip())
+        self._capacity_alert_tip_after = self.after(5000, self._hide_capacity_alert_tip)
+
+    def _hide_capacity_alert_tip(self) -> None:
+        if getattr(self, "_capacity_alert_tip_after", None):
+            try:
+                self.after_cancel(self._capacity_alert_tip_after)
+            except Exception:
+                pass
+            self._capacity_alert_tip_after = None
+        tip_window = getattr(self, "_capacity_alert_tip_window", None)
+        if tip_window and tip_window.winfo_exists():
+            tip_window.destroy()
+            self._capacity_alert_tip_window = None
+
     def apply_theme(self, theme: dict) -> None:
         self.theme = theme
         self.configure(fg_color=theme["surface_alt"], border_color=theme["border"])
@@ -629,3 +720,10 @@ class GlowCard(ctk.CTkFrame):
             self.stats_frame.configure(fg_color=theme["surface"])
         if self.status_led and self._ssh_status:
             self.set_ssh_status(self._ssh_status)
+        if self._capacity_alert_severity:
+            is_critical = self._capacity_alert_severity == "critical"
+            self.capacity_alert_badge.configure(
+                text="CRIT" if is_critical else "WARN",
+                fg_color="#ef4444" if is_critical else "#f59e0b",
+                text_color="#ffffff" if is_critical else "#111111",
+            )
