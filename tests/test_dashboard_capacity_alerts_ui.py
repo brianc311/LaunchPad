@@ -14,11 +14,13 @@ def test_capacity_badge_visible_in_compact_layout():
     """Spec option C: per-card CRIT/WARN stays visible when cards_compact is default."""
     assert "capacity_alert_badge_compact" in CARD
     assert "def _place_capacity_alert_badges(" in CARD
-    assert 'bind("<Destroy>"' in CARD
-    assert "_hide_capacity_alert_tip" in CARD
     # Compact badge lives in bottom_left (beside status LED), not only expanded header
-    assert "self.capacity_alert_badge_compact = ctk.CTkLabel(" in CARD
-    assert "self.bottom_left," in CARD
+    assert "self.capacity_alert_badge_compact = ctk.CTkLabel(\n            self.bottom_left," in CARD
+    # Collapsed path grids compact badge; expanded still uses header badge
+    assert 'compact.grid(row=0, column=1, padx=(0, 6), sticky="w")' in CARD
+    assert 'header.grid(row=0, column=4, sticky="e", padx=(4, 4))' in CARD
+    # Destroy cleanup mirrors status LED tip (card-level bind)
+    assert 'bind("<Destroy>", lambda _e: self._hide_capacity_alert_tip(), add="+")' in CARD
 
 
 def test_dashboard_wires_capacity_alert_strip():
