@@ -646,6 +646,7 @@ class GlowCard(ctk.CTkFrame):
             self._capacity_alert_severity = None
             self.capacity_alert_badge.grid_remove()
             self.capacity_alert_badge.configure(text="")
+            self._hide_capacity_alert_tip()
             return
         self._capacity_alert_severity = severity
         is_critical = severity == "critical"
@@ -654,7 +655,8 @@ class GlowCard(ctk.CTkFrame):
             fg_color="#ef4444" if is_critical else "#f59e0b",
             text_color="#ffffff" if is_critical else "#111111",
         )
-        self.capacity_alert_badge.grid()
+        if not self._collapsed:
+            self.capacity_alert_badge.grid(row=0, column=4, sticky="e", padx=(4, 4))
         tip = "\n".join(m for m in (messages or []) if m).strip()
         if tip:
             self._capacity_alert_tip = tip
