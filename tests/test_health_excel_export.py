@@ -375,3 +375,74 @@ def test_nothing_to_export_raises():
             ),
             detail_card_ids=None,
         )
+
+
+def test_nothing_to_export_empty_detail_card_ids():
+    cards = [_sample_card(1)]
+    sections = HealthExcelSections(
+        summary=False,
+        issues=True,
+        command_summaries=False,
+        raw=False,
+    )
+    with pytest.raises(ValueError, match="Nothing to export"):
+        build_health_workbook(
+            cards,
+            monitor_enabled={1: True},
+            sections=sections,
+            detail_card_ids=[],
+        )
+
+
+def test_nothing_to_export_non_matching_detail_card_ids():
+    cards = [_sample_card(1)]
+    sections = HealthExcelSections(
+        summary=False,
+        issues=True,
+        command_summaries=False,
+        raw=False,
+    )
+    with pytest.raises(ValueError, match="Nothing to export"):
+        build_health_workbook(
+            cards,
+            monitor_enabled={1: True},
+            sections=sections,
+            detail_card_ids=[999],
+        )
+
+
+def test_raw_cell_truncates_full_value_including_prefix():
+    long_output = "x" * 32767
+    cards = [
+        _sample_card(
+            1,
+            name="Alpha",
+            command_results=[
+                {
+                    "label": "Health - Overall",
+                    "command": "checkhealth",
+                    "output": long_output,
+                }
+            ],
+        ),
+    ]
+    body = build_health_workbook(
+        cards,
+        monitor_enabled={1: True},
+        sections=HealthExcelSections(
+            summary=False,
+            issues=False,
+            command_summaries=False,
+            raw=True,
+        ),
+        detail_card_ids=[1],
+    )
+    wb = load_workbook(io.BytesIO(body))
+    raw_values = [
+        value
+        for value in _all_sheet_values(wb)
+        if value.startswith("Raw:")
+    ]
+    assert len(raw_values) == 1
+    assert len(raw_values[0]) <= 32767
+    assert raw_values[0].endswith("… (truncated)")

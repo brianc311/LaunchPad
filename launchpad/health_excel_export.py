@@ -277,8 +277,8 @@ def _write_site_sheet(
                 )
                 row += 1
             if sections.raw:
-                raw_text = truncate_excel_cell(str(item.get("output") or ""))
-                ws.cell(row=row, column=1, value=f"Raw: {raw_text}")
+                raw_value = truncate_excel_cell(f"Raw: {item.get('output') or ''}")
+                ws.cell(row=row, column=1, value=raw_value)
                 row += 1
             row += 1
 
@@ -293,6 +293,17 @@ def build_health_workbook(
     write_summary = sections.summary
     write_detail = detail_card_ids is not None and _detail_sections_enabled(sections)
     if not write_summary and not write_detail:
+        raise ValueError("Nothing to export")
+
+    detail_cards: list[dict[str, Any]] = []
+    if write_detail:
+        detail_ids = {int(card_id) for card_id in detail_card_ids or []}
+        detail_cards = sorted(
+            (card for card in cards if int(card.get("id", -1)) in detail_ids),
+            key=lambda card: str(card.get("name") or "").lower(),
+        )
+
+    if not write_summary and not detail_cards:
         raise ValueError("Nothing to export")
 
     wb = Workbook()
@@ -314,11 +325,6 @@ def build_health_workbook(
         wb.remove(default_ws)
 
     if write_detail:
-        detail_ids = {int(card_id) for card_id in detail_card_ids or []}
-        detail_cards = sorted(
-            (card for card in cards if int(card.get("id", -1)) in detail_ids),
-            key=lambda card: str(card.get("name") or "").lower(),
-        )
         for card in detail_cards:
             title = excel_safe_sheet_title(str(card.get("name") or ""), used=used_titles)
             ws = wb.create_sheet(title)
