@@ -453,6 +453,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <button type="button" id="excel-btn" class="secondary">Export Excel</button>
+        <button type="button" id="dell-report-btn" class="secondary" style="display:none">Dell Report</button>
         <label>Site <select id="capacity-site-select"><option value="">All servers</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
@@ -511,6 +512,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const includeOffToggle = document.getElementById("include-off-toggle");
     const capacitySiteSelectEl = document.getElementById("capacity-site-select");
     const excelBtn = document.getElementById("excel-btn");
+    const dellReportBtn = document.getElementById("dell-report-btn");
     const reportTitleInput = document.getElementById("report-title-input");
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
@@ -1086,6 +1088,60 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function downloadDellReport() {
+      if (!dellReportBtn) return;
+      dellReportBtn.disabled = true;
+      if (refreshStatusEl) refreshStatusEl.textContent = "Building Dell Report workbook…";
+      try {
+        const includeOff = includeOffToggle ? includeOffToggle.checked : false;
+        const siteId = selectedCapacitySiteId();
+        let exportUrl =
+          `/api/dell-report-export?include_off=${includeOff ? 1 : 0}&open=1`;
+        if (siteId != null) {
+          exportUrl += `&card_id=${siteId}`;
+        }
+        const res = await fetch(exportUrl);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err && err.error) detail = err.error;
+          } catch (_err) {
+            /* ignore */
+          }
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, "");
+        a.href = url;
+        a.download = `Dell_Capacity_Report_${stamp}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = "Dell Report (.xlsx) downloaded and opened in Excel.";
+        }
+      } catch (err) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `Dell Report export failed: ${err.message || err}`;
+        }
+      } finally {
+        dellReportBtn.disabled = false;
+      }
+    }
+
+    async function initDellReportButton() {
+      if (!dellReportBtn) return;
+      try {
+        const res = await fetch("/api/dell-report-settings");
+        const settings = await res.json();
+        dellReportBtn.style.display = settings && settings.enabled ? "" : "none";
+      } catch (_err) {
+        dellReportBtn.style.display = "none";
+      }
+    }
+
     async function refreshCard(cardId) {
       const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
       if (section) section.classList.add("loading");
@@ -1223,12 +1279,16 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     if (excelBtn) {
       excelBtn.addEventListener("click", downloadExcel);
     }
+    if (dellReportBtn) {
+      dellReportBtn.addEventListener("click", downloadDellReport);
+    }
 
     initDetailsToggle();
     initPageLayoutToggle();
     initPoolStorageToggle();
     loadSiteNameOverrides();
     initReportHeader();
+    initDellReportButton();
     loadCards();
     setInterval(loadCards, 15000);
   </script>

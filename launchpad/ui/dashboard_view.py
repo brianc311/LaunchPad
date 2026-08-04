@@ -8,6 +8,7 @@ from launchpad.branding import get_app_name, load_ctk_logo
 from launchpad.capacity_email_scheduler import is_capacity_email_due
 from launchpad.capacity_email_send import send_capacity_email
 from launchpad.capacity_email_settings import load_capacity_email_settings
+from launchpad.dell_report_settings import is_dell_report_enabled
 from launchpad.command_format import resolve_card_commands
 from launchpad.crypto import decrypt_text
 from launchpad.dashboard_array_rail import (
@@ -1781,6 +1782,8 @@ class DashboardView(ctk.CTkFrame):
     def _open_export_excel_menu(self) -> None:
         menu = Menu(self, tearoff=0)
         menu.add_command(label="Capacity", command=self._export_capacity_excel)
+        if is_dell_report_enabled(self.db):
+            menu.add_command(label="Dell Report…", command=self._export_dell_report_excel)
         menu.add_command(label="FC WWPN", command=self._export_fc_wwpn_excel)
         menu.add_command(label="Snapshot Schedule", command=self._export_snapshot_schedule_excel)
         menu.add_separator()
@@ -2077,6 +2080,90 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self.status_label.configure(text=f"Excel export failed: {exc}"),
+                )
+                self.after(
+                    0,
+                    lambda: messagebox.showerror("Export failed", str(exc)),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _export_dell_report_excel(self) -> None:
+        from datetime import datetime
+
+        from launchpad.capacity_export import open_exported_workbook
+        from launchpad.ssh_launcher import _log
+
+        if not is_dell_report_enabled(self.db):
+            messagebox.showinfo("Dell Report", "Dell Report is disabled in Admin.")
+            return
+
+        cards = self._health_ssh_cards()
+        if not cards:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
+        default_name = f"Dell_Capacity_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        output_path = filedialog.asksaveasfilename(
+            title="Save Dell Report Excel workbook",
+            defaultextension=".xlsx",
+            filetypes=[("Excel workbook", "*.xlsx")],
+            initialfile=default_name,
+        )
+        if not output_path:
+            return
+
+        path = Path(output_path)
+        self.status_label.configure(text=f"Exporting Dell Report for {len(cards)} site(s)...")
+        self.update_idletasks()
+
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Health dashboard register failed before Dell export: {exc}")
+
+        def worker() -> None:
+            try:
+                server = get_health_server()
+                body, filename = server.export_dell_report_excel_bytes(
+                    include_monitor_off=True,
+                )
+                path.write_bytes(body)
+                summary = f"Dell Report saved: {path.name}"
+                _log(summary)
+
+                def on_export_done() -> None:
+                    self.status_label.configure(text=summary)
+                    opened = False
+                    open_error = ""
+                    try:
+                        open_exported_workbook(path)
+                        opened = True
+                    except Exception as open_exc:
+                        open_error = str(open_exc)
+                        _log(f"Could not open Dell Report file: {open_exc}")
+
+                    def show_result_dialog() -> None:
+                        note = "\n\nOpened in Excel." if opened else (
+                            f"\n\nCould not open automatically: {open_error}"
+                            if open_error
+                            else "\n\nCould not open file automatically."
+                        )
+                        messagebox.showinfo(
+                            "Dell Report export complete",
+                            f"Saved to:\n{path}\n\nSuggested filename: {filename}" + note,
+                        )
+
+                    self.after(400 if opened else 0, show_result_dialog)
+
+                self.after(0, on_export_done)
+            except Exception as exc:
+                _log(f"Dell Report Excel export failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self.status_label.configure(text=f"Dell Report export failed: {exc}"),
                 )
                 self.after(
                     0,

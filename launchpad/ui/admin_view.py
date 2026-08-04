@@ -22,6 +22,10 @@ from launchpad.capacity_email_settings import (
     set_gmail_password,
     validate_for_send,
 )
+from launchpad.dell_report_settings import (
+    load_dell_report_settings,
+    save_dell_report_settings,
+)
 from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, DEFAULT_SSH_PORT, APP_VERSION
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
 from launchpad.firmware_catalog import (
@@ -73,6 +77,7 @@ class AdminView(ctk.CTkFrame):
         self._admin_ssh_status_timer: str | None = None
         self._capacity_email_settings: dict | None = None
         self._capacity_email_send_in_flight = False
+        self._dell_report_settings: dict | None = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -521,8 +526,45 @@ class AdminView(ctk.CTkFrame):
             justify="left",
         )
         self.email_last_error_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
+        row += 1
+
+        ctk.CTkLabel(
+            panel,
+            text="Dell Report",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=self.theme["text"],
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 4), sticky="w")
+        row += 1
+
+        ctk.CTkLabel(
+            panel,
+            text="Show or hide the Dell Report export button on the Capacity Report page and dashboard.",
+            font=ctk.CTkFont(size=12),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+        row += 1
+
+        self.dell_report_enabled_var = ctk.BooleanVar(value=True)
+        self.dell_report_enabled_check = ctk.CTkCheckBox(
+            panel,
+            text="Show Dell Report button",
+            variable=self.dell_report_enabled_var,
+        )
+        self.dell_report_enabled_check.grid(row=row, column=0, columnspan=2, padx=20, pady=8, sticky="w")
+        row += 1
+
+        ctk.CTkButton(
+            panel,
+            text="Save Dell Report Settings",
+            fg_color=self.theme["accent"],
+            hover_color=self.theme["accent_soft"],
+            command=self._save_dell_report_form,
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
 
         self._load_capacity_email_form()
+        self._load_dell_report_form()
 
     def _build_firmware_catalog_panel(self, parent) -> None:
         panel = ctk.CTkFrame(parent, fg_color=self.theme["surface_alt"], corner_radius=16)
@@ -982,6 +1024,21 @@ class AdminView(ctk.CTkFrame):
                     text=f"Capacity email failed: {result.get('error', '')}",
                     text_color=self.theme["danger"],
                 )
+
+    def _load_dell_report_form(self) -> None:
+        settings = load_dell_report_settings(self.db)
+        self._dell_report_settings = settings
+        self.dell_report_enabled_var.set(bool(settings.get("enabled", True)))
+
+    def _save_dell_report_form(self) -> None:
+        raw = {"enabled": bool(self.dell_report_enabled_var.get())}
+        saved = save_dell_report_settings(self.db, raw)
+        self._dell_report_settings = saved
+        self.dell_report_enabled_var.set(bool(saved.get("enabled", True)))
+        if hasattr(self, "admin_status"):
+            self.admin_status.configure(
+                text="Dell Report settings saved.", text_color=self.theme["accent"]
+            )
 
     def _build_card_list(self, parent) -> None:
         list_panel = ctk.CTkFrame(parent, fg_color=self.theme["surface"], corner_radius=16)

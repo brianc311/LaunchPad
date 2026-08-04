@@ -2863,6 +2863,15 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=filename,
             )
             return
+        if path == "/api/dell-report-settings":
+            from launchpad.dell_report_settings import load_dell_report_settings
+
+            settings_view = server._settings_view_for_scan()
+            if settings_view is None:
+                self._send_json({"enabled": True})
+            else:
+                self._send_json(load_dell_report_settings(settings_view))
+            return
         if path == "/api/dell-report-export":
             from launchpad.capacity_export import open_exported_workbook
             from launchpad.config import TEMP_DIR

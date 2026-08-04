@@ -1,0 +1,29 @@
+from pathlib import Path
+
+
+def test_capacity_report_html_has_dell_report_button():
+    from launchpad.capacity_report import CAPACITY_REPORT_HTML
+
+    assert "Dell Report" in CAPACITY_REPORT_HTML
+    assert 'id="dell-report-btn"' in CAPACITY_REPORT_HTML
+    assert "/api/dell-report-export" in CAPACITY_REPORT_HTML
+    assert "/api/dell-report-settings" in CAPACITY_REPORT_HTML
+
+
+def test_admin_view_has_show_dell_report_checkbox():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "admin_view.py"
+    ).read_text(encoding="utf-8")
+    assert "Show Dell Report button" in source
+    assert "save_dell_report_settings" in source
+    assert "load_dell_report_settings" in source
+    assert "_save_dell_report_form" in source
+
+
+def test_dashboard_export_menu_has_dell_report_label():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
+    ).read_text(encoding="utf-8")
+    assert "Dell Report…" in source
+    assert "_export_dell_report_excel" in source
+    assert "is_dell_report_enabled" in source
