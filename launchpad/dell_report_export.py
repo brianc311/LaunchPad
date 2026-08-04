@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.formatting.rule import CellIsRule
@@ -11,7 +12,18 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from launchpad.capacity_export import ExportSite
+from launchpad.dell_report_facility import facility_from_name
+from launchpad.dell_report_family import dell_report_family
 from launchpad.dell_report_leds import AMBER_FILL, GREEN_FILL, RED_FILL
+from launchpad.dell_report_snapshots import (
+    has_week_snapshot,
+    iso_week_key,
+    prior_and_current_for_card,
+    upsert_week_snapshot,
+    weekly_growth_fraction,
+)
+from launchpad.flashsystem_health import capacity_summary_from_pools
 
 REPORT_TITLE = "Dell Technologies Managed Services - Capacity Management Report"
 HOME_SHEET_NAME = "Home"
@@ -60,6 +72,123 @@ def bytes_to_gib(num_bytes: float) -> float:
     return num_bytes / _GIB
 
 
+def collect_dell_report_rows(
+    sites: list[ExportSite | dict[str, Any]],
+    *,
+    snapshot_store: dict,
+    now: datetime | None = None,
+) -> tuple[list[dict], list[dict], dict]:
+    """Split ibm/hp rows from capacity_summary; upsert current week if missing;
+    attach prior/current/growth; return (ibm_rows, hp_rows, updated_store)."""
+    when = _coerce_utc(now)
+    week = iso_week_key(when)
+    captured_at = when.isoformat()
+    store = dict(snapshot_store or {})
+    ibm_rows: list[dict] = []
+    hp_rows: list[dict] = []
+
+    for site in sites:
+        card_id = _site_value(site, "card_id")
+        name = str(_site_value(site, "name") or "")
+        device_profile = str(_site_value(site, "device_profile") or "")
+        family = dell_report_family(device_profile)
+        if family is None or card_id is None:
+            continue
+
+        summary = _capacity_summary_for_site(site)
+        if not summary:
+            continue
+
+        total_bytes = float(summary.get("total_bytes") or 0)
+        used_bytes = float(summary.get("used_bytes") or 0)
+        if total_bytes <= 0:
+            continue
+
+        facility = facility_from_name(name)
+        model = str(summary.get("name") or device_profile or "")
+        array_name = name
+
+        if not has_week_snapshot(store, card_id, week):
+            store = upsert_week_snapshot(
+                store,
+                card_id=card_id,
+                week=week,
+                usable_bytes=total_bytes,
+                used_bytes=used_bytes,
+                model=model,
+                facility=facility,
+                family=family,
+                array_name=array_name,
+                captured_at=captured_at,
+            )
+
+        prior, current = prior_and_current_for_card(
+            store, card_id, current_week=week
+        )
+        if current is None:
+            continue
+
+        row = _row_from_snapshots(prior, current)
+        if family == "ibm":
+            ibm_rows.append(row)
+        else:
+            hp_rows.append(row)
+
+    return ibm_rows, hp_rows, store
+
+
+def maybe_upsert_dell_snapshot_for_card(
+    card: Any,
+    *,
+    snapshot_store: dict,
+    now: datetime | None = None,
+) -> dict:
+    """Best-effort upsert for the current ISO week when missing."""
+    when = _coerce_utc(now)
+    week = iso_week_key(when)
+    card_id = getattr(card, "card_id", None)
+    name = str(getattr(card, "name", "") or "")
+    device_profile = str(getattr(card, "device_profile", "") or "")
+    family = dell_report_family(device_profile)
+    if family is None or card_id is None:
+        return snapshot_store
+
+    from launchpad.flashsystem_health import analyze_health
+
+    analysis = analyze_health(
+        name,
+        getattr(card, "command_results", None),
+        getattr(card, "metrics", None),
+    )
+    summary = analysis.get("capacity_summary")
+    pools = analysis.get("pools") or []
+    if (not summary or not int(summary.get("total_bytes") or 0)) and pools:
+        summary = capacity_summary_from_pools(pools) or summary
+    if not summary:
+        return snapshot_store
+
+    total_bytes = float(summary.get("total_bytes") or 0)
+    used_bytes = float(summary.get("used_bytes") or 0)
+    if total_bytes <= 0:
+        return snapshot_store
+
+    if has_week_snapshot(snapshot_store, card_id, week):
+        return snapshot_store
+
+    return upsert_week_snapshot(
+        snapshot_store,
+        card_id=card_id,
+        week=week,
+        usable_bytes=total_bytes,
+        used_bytes=used_bytes,
+        model=str(summary.get("name") or device_profile or ""),
+        facility=facility_from_name(name),
+        family=family,
+        array_name=name,
+        captured_at=when.isoformat(),
+    )
+
+
 def build_dell_report_workbook(
     *,
     ibm_rows: list[dict],
@@ -80,6 +209,55 @@ def workbook_to_bytes(wb: Workbook) -> bytes:
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def _site_value(site: ExportSite | dict[str, Any], key: str) -> Any:
+    if isinstance(site, dict):
+        return site.get(key)
+    return getattr(site, key, None)
+
+
+def _capacity_summary_for_site(site: ExportSite | dict[str, Any]) -> dict[str, Any] | None:
+    summary = _site_value(site, "capacity_summary")
+    pools = _site_value(site, "pools") or []
+    if (not summary or not int(summary.get("total_bytes") or 0)) and pools:
+        summary = capacity_summary_from_pools(pools) or summary
+    return summary if isinstance(summary, dict) else None
+
+
+def _util_fraction(used_bytes: float, total_bytes: float) -> float | None:
+    if total_bytes <= 0:
+        return None
+    return used_bytes / total_bytes
+
+
+def _row_from_snapshots(prior: dict | None, current: dict) -> dict:
+    curr_usable = float(current.get("usable_bytes") or 0)
+    curr_used = float(current.get("used_bytes") or 0)
+    growth = None
+    prior_usable_gib = None
+    prior_used_gib = None
+    prior_util = None
+    if prior is not None:
+        prior_usable = float(prior.get("usable_bytes") or 0)
+        prior_used = float(prior.get("used_bytes") or 0)
+        prior_usable_gib = bytes_to_gib(prior_usable)
+        prior_used_gib = bytes_to_gib(prior_used)
+        prior_util = _util_fraction(prior_used, prior_usable)
+        growth = weekly_growth_fraction(prior_used, curr_used)
+
+    return {
+        "facility": current.get("facility") or "",
+        "array_name": current.get("array_name") or "",
+        "model": current.get("model") or "",
+        "prior_usable_gib": prior_usable_gib,
+        "prior_used_gib": prior_used_gib,
+        "prior_util": prior_util,
+        "curr_usable_gib": bytes_to_gib(curr_usable),
+        "curr_used_gib": bytes_to_gib(curr_used),
+        "curr_util": _util_fraction(curr_used, curr_usable),
+        "weekly_growth": growth,
+    }
 
 
 def _coerce_utc(when: datetime | None) -> datetime:

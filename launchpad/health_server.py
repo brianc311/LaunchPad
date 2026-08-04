@@ -2863,6 +2863,65 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=filename,
             )
             return
+        if path == "/api/dell-report-export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+            from launchpad.dell_report_settings import is_dell_report_enabled
+
+            settings_view = server._settings_view_for_scan()
+            if settings_view is not None and not is_dell_report_enabled(settings_view):
+                self._send_json(
+                    {"error": "Dell Report is disabled in Admin."},
+                    status=403,
+                )
+                return
+
+            query = parse_qs(parsed.query)
+            include_off = (query.get("include_off") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "Invalid card_id"}, status=400)
+                    return
+            open_after = (query.get("open") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                server.sync_from_app()
+                body, filename = server.export_dell_report_excel_bytes(
+                    include_monitor_off=include_off,
+                    card_id=card_id,
+                )
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Dell Report Excel opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Dell Report Excel saved for download but could not open: "
+                        f"{open_exc}"
+                    )
+            self._send_bytes(
+                body,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -6010,6 +6069,8 @@ class HealthServer:
             card.error = error
             card.updated_at = _utc_now()
         self.upsert_lun_offline_inventory_from_card(card)
+        if (focus or "").strip().lower() == "capacity" and error is None:
+            self._capture_dell_snapshot_best_effort(card)
         return card
 
     def update_card_live_data(
@@ -6172,6 +6233,90 @@ class HealthServer:
                 monitor_enabled=monitor_enabled,
             )
             body = tmp_path.read_bytes()
+        return body, filename
+
+    def _capture_dell_snapshot_best_effort(self, card: HealthCard) -> None:
+        try:
+            from launchpad.dell_report_export import maybe_upsert_dell_snapshot_for_card
+            from launchpad.dell_report_snapshots import (
+                load_dell_snapshots,
+                save_dell_snapshots,
+            )
+
+            store = load_dell_snapshots()
+            updated = maybe_upsert_dell_snapshot_for_card(card, snapshot_store=store)
+            if updated is not store:
+                save_dell_snapshots(updated)
+        except Exception as exc:
+            _log(f"Dell Report snapshot capture failed (ignored): {exc}")
+
+    def export_dell_report_excel_bytes(
+        self, *, include_monitor_off: bool = False, card_id: int | None = None
+    ) -> tuple[bytes, str]:
+        """Build the Dell Managed Services capacity workbook from registered cards."""
+        from launchpad.capacity_export import (
+            ExportSite,
+            card_ids_included_for_export,
+            filter_capacity_entries_by_card_id,
+        )
+        from launchpad.dell_report_export import (
+            build_dell_report_workbook,
+            collect_dell_report_rows,
+            workbook_to_bytes,
+        )
+        from launchpad.dell_report_snapshots import (
+            load_dell_snapshots,
+            save_dell_snapshots,
+        )
+
+        with self._lock:
+            card_ids = sorted(self._cards.keys())
+        monitor_enabled = {
+            cid: self.is_monitor_enabled(cid) for cid in card_ids
+        }
+        included = card_ids_included_for_export(
+            card_ids,
+            include_monitor_off=include_monitor_off,
+            monitor_enabled=monitor_enabled,
+        )
+        included = filter_capacity_entries_by_card_id(included, card_id=card_id)
+        included_ids = sorted(included)
+
+        sites: list[ExportSite] = []
+        for site_id in included_ids:
+            with self._lock:
+                card = self._cards.get(site_id)
+            if card is None:
+                continue
+            try:
+                card = self.refresh_card(site_id)
+                error = card.error
+            except Exception as exc:
+                error = str(exc)
+            analysis = analyze_health(card.name, card.command_results, card.metrics)
+            pools = pool_capacity_from_commands(card.command_results)
+            sites.append(
+                ExportSite(
+                    card_id=site_id,
+                    name=card.name,
+                    host=card.host,
+                    serial_number=card.serial_number,
+                    category=card.category,
+                    device_profile=card.device_profile,
+                    capacity_summary=analysis.get("capacity_summary"),
+                    pools=pools,
+                    error=error,
+                )
+            )
+
+        store = load_dell_snapshots()
+        ibm_rows, hp_rows, store = collect_dell_report_rows(sites, snapshot_store=store)
+        save_dell_snapshots(store)
+
+        wb = build_dell_report_workbook(ibm_rows=ibm_rows, hp_rows=hp_rows)
+        body = workbook_to_bytes(wb)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        filename = f"Dell_Capacity_Report_{stamp}.xlsx"
         return body, filename
 
     def open_browser_once(self) -> str:
