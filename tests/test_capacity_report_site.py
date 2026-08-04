@@ -4,7 +4,7 @@ from launchpad.capacity_report import CAPACITY_REPORT_HTML
 def test_capacity_report_has_site_select():
     html = CAPACITY_REPORT_HTML
     assert 'id="capacity-site-select"' in html
-    assert '<option value="">None</option>' in html
+    assert '<option value="">All servers</option>' in html
     assert '<label>Site <select id="capacity-site-select">' in html
 
 

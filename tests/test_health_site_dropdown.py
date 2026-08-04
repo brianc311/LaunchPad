@@ -4,7 +4,7 @@ from launchpad.health_server import DASHBOARD_HTML
 def test_dashboard_has_health_site_select():
     html = DASHBOARD_HTML
     assert 'id="health-site-select"' in html
-    assert '<option value="">None</option>' in html
+    assert '<option value="">All servers</option>' in html
     assert '<label>Site <select id="health-site-select">' in html
 
 

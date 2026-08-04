@@ -72,7 +72,7 @@ def test_fc_wwpn_report_exposes_site_picker_contract():
         'id="site-select"',
         'aria-label="Site"',
         ">Site</label>",
-        'option value="">None</option>',
+        'option value="">All servers</option>',
         "function updateSiteOptions(",
         "function filterCardsBySite(",
         'new URLSearchParams(window.location.search).get("site")',

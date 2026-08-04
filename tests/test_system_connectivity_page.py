@@ -9,7 +9,7 @@ def test_system_connectivity_path_and_controls():
     for text in (
         "System Connectivity",
         'id="sc-site-select"',
-        '<option value="">None</option>',
+        '<option value="">All servers</option>',
         'id="sc-refresh-btn"',
         'id="sc-export-xlsx-btn"',
         'id="sc-export-csv-btn"',

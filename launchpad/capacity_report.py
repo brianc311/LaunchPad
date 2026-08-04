@@ -453,7 +453,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <button type="button" id="excel-btn" class="secondary">Export Excel</button>
-        <label>Site <select id="capacity-site-select"><option value="">None</option></select></label>
+        <label>Site <select id="capacity-site-select"><option value="">All servers</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/host-volume-health">Hosts & Volumes</a>
@@ -852,7 +852,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
       capacitySiteSelectEl.innerHTML =
-        '<option value="">None</option>' +
+        '<option value="">All servers</option>' +
         sorted
           .map(
             (card) =>

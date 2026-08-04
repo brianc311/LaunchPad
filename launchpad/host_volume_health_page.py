@@ -79,9 +79,9 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <div class="hero">
       <h1>Hosts & Volumes Health</h1>
-      <p>Live offline and degraded hosts and volumes on monitored IBM and HPE arrays. Unlock LaunchPad, pick a site (or None for all), then Refresh live.</p>
+      <p>Live offline and degraded hosts and volumes on monitored IBM and HPE arrays. Unlock LaunchPad, pick a site (or All servers), then Refresh live.</p>
       <div class="hero-actions">
-        <label>Site <select id="hv-site-select"><option value="">None</option></select></label>
+        <label>Site <select id="hv-site-select"><option value="">All servers</option></select></label>
         <button type="button" class="btn" id="hv-refresh-btn">Refresh live</button>
         <button type="button" class="btn secondary" id="hv-export-xlsx-btn" disabled>Export Excel</button>
         <button type="button" class="btn secondary" id="hv-export-csv-btn" disabled>Export CSV</button>
@@ -155,7 +155,7 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
         const sorted = (Array.isArray(cards) ? cards : []).slice().sort((a, b) => {
           return String(a.name || "").localeCompare(String(b.name || ""));
         });
-        siteSelectEl.innerHTML = '<option value="">None</option>' + sorted.map((card) => (
+        siteSelectEl.innerHTML = '<option value="">All servers</option>' + sorted.map((card) => (
           '<option value="' + escapeHtml(card.id) + '">' + escapeHtml(card.name || card.id) + "</option>"
         )).join("");
       } catch (_err) {

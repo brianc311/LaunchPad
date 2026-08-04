@@ -822,7 +822,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <span id="jiggler-status" class="refresh-status">Mouse jiggler: Off</span>
       </div>
       <div class="filter-bar no-print">
-        <label>Site <select id="health-site-select"><option value="">None</option></select></label>
+        <label>Site <select id="health-site-select"><option value="">All servers</option></select></label>
         <input type="search" id="health-search" placeholder="Find sites for PDF (all sites stay visible)" aria-label="Search servers">
         <button type="button" id="select-visible-btn" class="secondary">Select matches</button>
         <button type="button" id="clear-selection-btn" class="secondary">Clear selection</button>
@@ -1076,7 +1076,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
       healthSiteSelectEl.innerHTML =
-        '<option value="">None</option>' +
+        '<option value="">All servers</option>' +
         sorted
           .map(
             (card) =>
