@@ -171,6 +171,55 @@ def test_get_health_export_route_filters_by_card_id(monkeypatch):
     assert ws.cell(row=2, column=1).value == "Beta"
 
 
+def test_get_health_export_defaults_are_summary_only(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "Alpha", monitor_on=True)
+    _register(server, 2, "Beta", monitor_on=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    sent = _call_health_export_api(monkeypatch, server, "?open=0")
+    assert sent["status"] == 200
+    wb = load_workbook(io.BytesIO(sent["body"]))
+    assert wb.sheetnames == ["Summary"]
+    assert wb["Summary"].max_row == 3
+
+
+def test_get_health_export_multi_card_id_creates_site_sheets(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "Alpha", monitor_on=True)
+    _register(server, 2, "Beta", monitor_on=True)
+    _register(server, 3, "Gamma", monitor_on=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    sent = _call_health_export_api(
+        monkeypatch,
+        server,
+        "?card_id=1&card_id=2&summary=1&issues=1&command_summaries=1&raw=0&open=0",
+    )
+    assert sent["status"] == 200
+    wb = load_workbook(io.BytesIO(sent["body"]))
+    assert "Summary" in wb.sheetnames
+    site_sheets = [name for name in wb.sheetnames if name != "Summary"]
+    assert len(site_sheets) == 2
+    assert set(site_sheets) == {"Alpha", "Beta"}
+    assert wb["Summary"].max_row == 3
+
+
+def test_get_health_export_nothing_to_export_returns_400(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "Alpha", monitor_on=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    sent = _call_health_export_api(
+        monkeypatch,
+        server,
+        "?summary=0&issues=0&command_summaries=0&raw=0&open=0",
+    )
+    assert sent["status"] == 400
+    assert sent["json"]["error"] == "Nothing to export"
+    assert "body" not in sent
+
+
 def test_dashboard_has_health_export_excel_button():
     assert 'id="health-excel-btn"' in DASHBOARD_HTML
     assert "Export Excel" in DASHBOARD_HTML

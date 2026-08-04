@@ -119,6 +119,11 @@ from launchpad.flashsystem_fc import (
     parse_lsvdisk_volumes,
 )
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.health_excel_export import (
+    HealthExcelSections,
+    build_health_workbook,
+    parse_health_excel_sections,
+)
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
@@ -2779,14 +2784,27 @@ class _HealthHandler(BaseHTTPRequestHandler):
             from launchpad.config import TEMP_DIR
 
             query = parse_qs(parsed.query)
-            raw_card_id = (query.get("card_id") or [""])[0].strip()
-            card_id: int | None = None
-            if raw_card_id:
+            card_ids: list[int] = []
+            for raw_card_id in query.get("card_id") or []:
+                text = str(raw_card_id).strip()
+                if not text:
+                    continue
                 try:
-                    card_id = int(raw_card_id)
+                    card_ids.append(int(text))
                 except ValueError:
                     self._send_json({"error": "Invalid card_id"}, status=400)
                     return
+            section_keys = ("summary", "issues", "command_summaries", "raw")
+            if any(key in query for key in section_keys):
+                sections = parse_health_excel_sections(
+                    summary=(query.get("summary") or ["1"])[0],
+                    issues=(query.get("issues") or ["1"])[0],
+                    command_summaries=(query.get("command_summaries") or ["1"])[0],
+                    raw=(query.get("raw") or ["0"])[0],
+                )
+            else:
+                # No section params: preserve Summary-only backward compatibility.
+                sections = None
             open_after = (query.get("open") or ["0"])[0].strip().lower() in {
                 "1",
                 "true",
@@ -2794,7 +2812,13 @@ class _HealthHandler(BaseHTTPRequestHandler):
             }
             try:
                 server.sync_from_app()
-                body, filename = server.export_health_excel_bytes(card_id=card_id)
+                body, filename = server.export_health_excel_bytes(
+                    card_ids=card_ids or None,
+                    sections=sections,
+                )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
                 return
@@ -6155,20 +6179,35 @@ class HealthServer:
         self,
         *,
         card_id: int | None = None,
+        card_ids: list[int] | None = None,
+        sections: HealthExcelSections | None = None,
     ) -> tuple[bytes, str]:
-        from launchpad.health_excel_export import (
-            build_health_summary_workbook,
-            filter_health_summary_cards,
-        )
+        if sections is None:
+            sections = HealthExcelSections(
+                summary=True,
+                issues=False,
+                command_summaries=False,
+                raw=False,
+            )
+        if card_ids:
+            detail_card_ids: list[int] | None = [int(value) for value in card_ids]
+        elif card_id is not None:
+            detail_card_ids = [int(card_id)]
+        else:
+            detail_card_ids = None
 
         cards = self.list_cards(allow_sync=False)
-        cards = filter_health_summary_cards(cards, card_id=card_id)
         monitor_enabled = {
             int(card["id"]): self.is_monitor_enabled(int(card["id"]))
             for card in cards
             if card.get("id") is not None
         }
-        body = build_health_summary_workbook(cards, monitor_enabled=monitor_enabled)
+        body = build_health_workbook(
+            cards,
+            monitor_enabled=monitor_enabled,
+            sections=sections,
+            detail_card_ids=detail_card_ids,
+        )
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         filename = f"Health_Summary_{stamp}.xlsx"
         return body, filename
