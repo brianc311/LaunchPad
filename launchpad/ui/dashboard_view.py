@@ -2128,7 +2128,7 @@ class DashboardView(ctk.CTkFrame):
             try:
                 server = get_health_server()
                 body, filename = server.export_dell_report_excel_bytes(
-                    include_monitor_off=True,
+                    include_monitor_off=False,
                 )
                 path.write_bytes(body)
                 summary = f"Dell Report saved: {path.name}"
