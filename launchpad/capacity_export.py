@@ -17,6 +17,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from launchpad.capacity_excel_alerts import (
+    BANNER_CRITICAL_FILL,
+    BANNER_FONT_COLOR,
+    BANNER_WARN_FILL,
+    capacity_excel_banner_summary,
+)
 from launchpad.database import Card, Database
 from launchpad.flashsystem_health import (
     analyze_health,
@@ -324,6 +330,29 @@ def _pool_detail_rows_for_site(
     return rows
 
 
+def _apply_capacity_alert_banner(ws, message: str, severity: str, col_count: int) -> None:
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=col_count)
+    cell = ws.cell(row=1, column=1, value=message)
+    fill = BANNER_CRITICAL_FILL if severity == "critical" else BANNER_WARN_FILL
+    cell.fill = PatternFill("solid", fgColor=fill)
+    cell.font = Font(bold=True, color=BANNER_FONT_COLOR, size=12)
+    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 28
+
+
+def _banner_from_pool_detail_rows(pool_detail_rows: list[PoolDetailRow]) -> dict | None:
+    pool_pcts = [float(row[4]) for row in pool_detail_rows]
+    site_keys = {
+        f"{row[0]}|{row[1]}|{row[2]}"
+        for row in pool_detail_rows
+        if float(row[4]) >= 80
+    }
+    return capacity_excel_banner_summary(
+        pool_used_pcts=pool_pcts,
+        site_keys_over=site_keys,
+    )
+
+
 def _styled_workbook(
     inventory_rows: list[tuple[str, ...]],
     inventory_fills: list[InventoryFill],
@@ -342,14 +371,21 @@ def _styled_workbook(
     thin = Side(style="thin", color="B4C6E7")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
+    banner = _banner_from_pool_detail_rows(pool_detail_rows)
+    header_row = 2 if banner else 1
+    data_start = header_row + 1
+
+    if banner:
+        _apply_capacity_alert_banner(ws, banner["message"], banner["severity"], len(HEADERS))
+
     for col, title in enumerate(HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=title)
+        cell = ws.cell(row=header_row, column=col, value=title)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = border
 
-    row_idx = 2
+    row_idx = data_start
     for inv_row, (capacity, pool_stats) in zip(inventory_rows, inventory_fills, strict=True):
         location, device_sn, ip_addr, device_name, serial, model = inv_row
         values = (
@@ -385,13 +421,18 @@ def _styled_workbook(
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = f"A{header_row + 1}"
     last_row = row_idx - 1
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{last_row}"
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(HEADERS))}{last_row}"
 
     ws_pools = wb.create_sheet("Pool Capacity")
+    if banner:
+        _apply_capacity_alert_banner(
+            ws_pools, banner["message"], banner["severity"], len(POOL_HEADERS)
+        )
+
     for col, title in enumerate(POOL_HEADERS, start=1):
-        cell = ws_pools.cell(row=1, column=col, value=title)
+        cell = ws_pools.cell(row=header_row, column=col, value=title)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -401,7 +442,7 @@ def _styled_workbook(
     for col, width in enumerate(pool_widths, start=1):
         ws_pools.column_dimensions[get_column_letter(col)].width = width
 
-    for pool_row_index, row in enumerate(pool_detail_rows, start=2):
+    for pool_row_index, row in enumerate(pool_detail_rows, start=data_start):
         for col_index, value in enumerate(row, start=1):
             cell = ws_pools.cell(row=pool_row_index, column=col_index, value=value)
             cell.border = border
@@ -410,9 +451,10 @@ def _styled_workbook(
                 cell.number_format = "0.0"
 
     if pool_detail_rows:
-        ws_pools.freeze_panes = "A2"
+        ws_pools.freeze_panes = f"A{header_row + 1}"
         ws_pools.auto_filter.ref = (
-            f"A1:{get_column_letter(len(POOL_HEADERS))}{len(pool_detail_rows) + 1}"
+            f"A{header_row}:{get_column_letter(len(POOL_HEADERS))}"
+            f"{data_start + len(pool_detail_rows) - 1}"
         )
 
     return wb
