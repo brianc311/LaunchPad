@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from launchpad.capacity_export import ExportSite
-from launchpad.dell_report_export import collect_dell_report_rows
+from launchpad.dell_report_export import (
+    collect_dell_report_rows,
+    maybe_upsert_dell_snapshot_for_card,
+)
 from launchpad.dell_report_snapshots import upsert_week_snapshot
 
 
@@ -115,3 +119,37 @@ def test_collect_one_week_prior_and_growth_blank():
     assert row["prior_util"] is None
     assert row["weekly_growth"] is None
     assert row["curr_used_gib"] == pytest.approx(60.0)
+
+
+def test_maybe_upsert_creates_current_week_snapshot_when_missing(monkeypatch):
+    card = SimpleNamespace(
+        card_id=11,
+        name="WAG1_FS9200_1",
+        device_profile="flashsystem_9500",
+        command_results={},
+        metrics=None,
+    )
+    monkeypatch.setattr(
+        "launchpad.flashsystem_health.analyze_health",
+        lambda name, command_results, metrics: {
+            "capacity_summary": {
+                "name": "FlashSystem 9200",
+                "used_bytes": 60 * 1024**3,
+                "total_bytes": 100 * 1024**3,
+            },
+            "pools": [],
+        },
+    )
+
+    store = maybe_upsert_dell_snapshot_for_card(
+        card,
+        snapshot_store={},
+        now=datetime(2026, 8, 4, tzinfo=timezone.utc),
+    )
+
+    assert has_week(store, 11, "2026-W32")
+    snap = store["11"]["2026-W32"]
+    assert snap["used_bytes"] == 60 * 1024**3
+    assert snap["usable_bytes"] == 100 * 1024**3
+    assert snap["family"] == "ibm"
+    assert snap["array_name"] == "WAG1_FS9200_1"
