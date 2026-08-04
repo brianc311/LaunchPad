@@ -50,6 +50,14 @@ def test_firmware_panel_includes_ibm_upgrade_matrix_link():
     assert "IBM FlashSystem software upgrade matrix" in html
 
 
+def test_firmware_panel_includes_hpe_spock_upgrade_matrix_link():
+    from launchpad.system_connectivity_page import SYSTEM_CONNECTIVITY_HTML
+
+    html = SYSTEM_CONNECTIVITY_HTML
+    assert 'href="https://www.hpe.com/storage/spock"' in html
+    assert "HPE software upgrade matrix (SPOCK)" in html
+
+
 def test_page_has_license_key_tab_after_firmware():
     html = SYSTEM_CONNECTIVITY_HTML
     assert 'data-tab="license_key"' in html
