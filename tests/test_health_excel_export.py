@@ -7,6 +7,8 @@ from launchpad.health_excel_export import (
     HEALTH_SUMMARY_HEADERS,
     HealthExcelSections,
     build_health_summary_workbook,
+    build_health_workbook,
+    command_summary_text,
     excel_safe_sheet_title,
     filter_health_summary_cards,
     health_summary_row,
@@ -22,8 +24,9 @@ def _sample_card(
     name: str | None = None,
     host: str = "10.0.0.1",
     issues: list | None = None,
+    command_results: list | None = None,
 ) -> dict:
-    return {
+    card = {
         "id": card_id,
         "name": name or f"Site-{card_id}",
         "host": host,
@@ -31,6 +34,20 @@ def _sample_card(
         "model": "IBM FlashSystem 5200",
         "health_issues": issues or [],
     }
+    if command_results is not None:
+        card["command_results"] = command_results
+    return card
+
+
+def _all_sheet_values(wb) -> list[str]:
+    values: list[str] = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        for row in ws.iter_rows(values_only=True):
+            for cell in row:
+                if cell is not None:
+                    values.append(str(cell))
+    return values
 
 
 def test_health_summary_row_healthy_when_monitor_on_no_issues():
@@ -239,3 +256,122 @@ def test_truncate_excel_cell_appends_truncated_marker():
     assert len(result) == 30
     assert result.endswith("… (truncated)")
     assert result.startswith("A")
+
+
+def test_command_summary_text_prefers_item_summary():
+    item = {
+        "label": "Health - Overall",
+        "command": "checkhealth",
+        "output": "long raw output that should not be summarized",
+        "summary": "All systems healthy",
+    }
+    assert command_summary_text(item) == "All systems healthy"
+
+
+def test_command_summary_text_falls_back_to_summarize():
+    item = {
+        "label": "Health - Overall",
+        "command": "checkhealth",
+        "output": "",
+    }
+    assert command_summary_text(item) == "no output"
+
+
+def test_workbook_summary_plus_two_site_sheets():
+    cards = [
+        _sample_card(1, name="Alpha"),
+        _sample_card(2, name="Beta"),
+        _sample_card(3, name="Gamma"),
+    ]
+    body = build_health_workbook(
+        cards,
+        monitor_enabled={1: True, 2: True, 3: False},
+        sections=HealthExcelSections(),
+        detail_card_ids=[1, 2],
+    )
+    wb = load_workbook(io.BytesIO(body))
+    assert "Summary" in wb.sheetnames
+    assert len([name for name in wb.sheetnames if name != "Summary"]) == 2
+    assert wb["Summary"].max_row == 3
+
+
+def test_workbook_command_summary_without_raw():
+    long_output = "RAW_OUTPUT_MARKER_" + ("x" * 200)
+    cards = [
+        _sample_card(
+            1,
+            name="Alpha",
+            command_results=[
+                {
+                    "label": "Health - Overall",
+                    "command": "checkhealth",
+                    "output": long_output,
+                    "summary": "All systems healthy",
+                }
+            ],
+        ),
+    ]
+    body = build_health_workbook(
+        cards,
+        monitor_enabled={1: True},
+        sections=HealthExcelSections(
+            summary=False,
+            issues=False,
+            command_summaries=True,
+            raw=False,
+        ),
+        detail_card_ids=[1],
+    )
+    wb = load_workbook(io.BytesIO(body))
+    values = _all_sheet_values(wb)
+    assert any("Summary: All systems healthy" in value for value in values)
+    assert not any("RAW_OUTPUT_MARKER_" in value for value in values)
+    assert not any(value.startswith("Raw:") for value in values)
+
+
+def test_workbook_includes_raw_when_flag_on():
+    long_output = "RAW_OUTPUT_MARKER_" + ("y" * 200)
+    cards = [
+        _sample_card(
+            1,
+            name="Alpha",
+            command_results=[
+                {
+                    "label": "Health - Overall",
+                    "command": "checkhealth",
+                    "output": long_output,
+                }
+            ],
+        ),
+    ]
+    body = build_health_workbook(
+        cards,
+        monitor_enabled={1: True},
+        sections=HealthExcelSections(
+            summary=False,
+            issues=False,
+            command_summaries=False,
+            raw=True,
+        ),
+        detail_card_ids=[1],
+    )
+    wb = load_workbook(io.BytesIO(body))
+    values = _all_sheet_values(wb)
+    assert any("RAW_OUTPUT_MARKER_" in value for value in values)
+    assert any(value.startswith("Raw:") for value in values)
+
+
+def test_nothing_to_export_raises():
+    cards = [_sample_card(1)]
+    with pytest.raises(ValueError, match="Nothing to export"):
+        build_health_workbook(
+            cards,
+            monitor_enabled={1: True},
+            sections=HealthExcelSections(
+                summary=False,
+                issues=False,
+                command_summaries=False,
+                raw=False,
+            ),
+            detail_card_ids=None,
+        )

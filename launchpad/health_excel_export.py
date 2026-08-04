@@ -10,6 +10,9 @@ from typing import Any, Mapping
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
+
+from launchpad.flashsystem_parse import summarize_command_output
 
 HEALTH_SUMMARY_HEADERS = (
     "Card",
@@ -155,11 +158,35 @@ def _summary_rows(
     ]
 
 
-def _styled_summary_workbook(rows: list[tuple[str, str, str, str, str, int]]) -> Workbook:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Summary"
+def command_summary_text(item: dict[str, Any]) -> str:
+    """Prefer item['summary']; else summarize_command_output(label, command, output)."""
+    summary = item.get("summary")
+    if summary:
+        return str(summary)
+    label = str(item.get("label") or "")
+    command = str(item.get("command") or "")
+    output = str(item.get("output") or "")
+    return summarize_command_output(label, command, output)
 
+
+def _summary_card_list(
+    cards: list[dict[str, Any]],
+    detail_card_ids: list[int] | None,
+) -> list[dict[str, Any]]:
+    if detail_card_ids is None:
+        return list(cards)
+    id_set = {int(card_id) for card_id in detail_card_ids}
+    return [card for card in cards if int(card.get("id", -1)) in id_set]
+
+
+def _detail_sections_enabled(sections: HealthExcelSections) -> bool:
+    return sections.issues or sections.command_summaries or sections.raw
+
+
+def _styled_summary_sheet(
+    ws: Worksheet,
+    rows: list[tuple[str, str, str, str, str, int]],
+) -> None:
     header_fill = PatternFill("solid", fgColor="1F4E79")
     header_font = Font(bold=True, color="FFFFFF", size=11)
     alt_fill = PatternFill("solid", fgColor="D9E8F5")
@@ -190,7 +217,121 @@ def _styled_summary_workbook(rows: list[tuple[str, str, str, str, str, int]]) ->
         ws.auto_filter.ref = (
             f"A1:{get_column_letter(len(HEALTH_SUMMARY_HEADERS))}{len(rows) + 1}"
         )
+
+
+def _styled_summary_workbook(rows: list[tuple[str, str, str, str, str, int]]) -> Workbook:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    _styled_summary_sheet(ws, rows)
     return wb
+
+
+def _write_site_sheet(
+    ws: Worksheet,
+    card: dict[str, Any],
+    *,
+    monitor_enabled: Mapping[int | str, bool],
+    sections: HealthExcelSections,
+) -> None:
+    row = 1
+    ws.cell(row=row, column=1, value=str(card.get("name") or ""))
+    row += 1
+
+    card_id = int(card.get("id", 0))
+    monitor_on = _monitor_on(card_id, monitor_enabled)
+    ws.cell(row=row, column=1, value=f"Host: {card.get('host') or ''}")
+    ws.cell(row=row, column=2, value=f"Profile: {profile_or_model(card)}")
+    ws.cell(row=row, column=3, value=f"Monitor: {'on' if monitor_on else 'off'}")
+    row += 2
+
+    if sections.issues:
+        ws.cell(row=row, column=1, value="Issues")
+        row += 1
+        for col, title in enumerate(("Severity", "Category", "Message"), start=1):
+            ws.cell(row=row, column=col, value=title)
+        row += 1
+        for issue in card.get("health_issues") or []:
+            ws.cell(row=row, column=1, value=str(issue.get("severity") or ""))
+            ws.cell(row=row, column=2, value=str(issue.get("category") or ""))
+            ws.cell(row=row, column=3, value=str(issue.get("message") or ""))
+            row += 1
+
+    if sections.command_summaries or sections.raw:
+        ws.cell(row=row, column=1, value="Commands")
+        row += 1
+        for item in card.get("command_results") or []:
+            ws.cell(row=row, column=1, value=f"Label: {item.get('label') or ''}")
+            row += 1
+            ws.cell(row=row, column=1, value=f"Command: {item.get('command') or ''}")
+            row += 1
+            error = item.get("error")
+            if error:
+                ws.cell(row=row, column=1, value=f"Error: {error}")
+                row += 1
+            if sections.command_summaries:
+                ws.cell(
+                    row=row,
+                    column=1,
+                    value=f"Summary: {command_summary_text(item)}",
+                )
+                row += 1
+            if sections.raw:
+                raw_text = truncate_excel_cell(str(item.get("output") or ""))
+                ws.cell(row=row, column=1, value=f"Raw: {raw_text}")
+                row += 1
+            row += 1
+
+
+def build_health_workbook(
+    cards: list[dict[str, Any]],
+    *,
+    monitor_enabled: Mapping[int | str, bool],
+    sections: HealthExcelSections,
+    detail_card_ids: list[int] | None = None,
+) -> bytes:
+    write_summary = sections.summary
+    write_detail = detail_card_ids is not None and _detail_sections_enabled(sections)
+    if not write_summary and not write_detail:
+        raise ValueError("Nothing to export")
+
+    wb = Workbook()
+    used_titles: set[str] = set()
+    default_ws = wb.active
+
+    if write_summary:
+        summary_cards = _summary_card_list(cards, detail_card_ids)
+        rows = _summary_rows(summary_cards, monitor_enabled=monitor_enabled)
+        if write_detail:
+            wb.remove(default_ws)
+            ws = wb.create_sheet("Summary", 0)
+        else:
+            ws = default_ws
+            ws.title = "Summary"
+        used_titles.add("Summary")
+        _styled_summary_sheet(ws, rows)
+    elif write_detail:
+        wb.remove(default_ws)
+
+    if write_detail:
+        detail_ids = {int(card_id) for card_id in detail_card_ids or []}
+        detail_cards = sorted(
+            (card for card in cards if int(card.get("id", -1)) in detail_ids),
+            key=lambda card: str(card.get("name") or "").lower(),
+        )
+        for card in detail_cards:
+            title = excel_safe_sheet_title(str(card.get("name") or ""), used=used_titles)
+            ws = wb.create_sheet(title)
+            _write_site_sheet(
+                ws,
+                card,
+                monitor_enabled=monitor_enabled,
+                sections=sections,
+            )
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
 
 
 def build_health_summary_workbook(
@@ -198,8 +339,14 @@ def build_health_summary_workbook(
     *,
     monitor_enabled: Mapping[int | str, bool],
 ) -> bytes:
-    rows = _summary_rows(cards, monitor_enabled=monitor_enabled)
-    wb = _styled_summary_workbook(rows)
-    buffer = BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
+    return build_health_workbook(
+        cards,
+        monitor_enabled=monitor_enabled,
+        sections=HealthExcelSections(
+            summary=True,
+            issues=False,
+            command_summaries=False,
+            raw=False,
+        ),
+        detail_card_ids=None,
+    )
