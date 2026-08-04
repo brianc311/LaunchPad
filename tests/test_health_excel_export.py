@@ -5,9 +5,13 @@ from openpyxl import load_workbook
 
 from launchpad.health_excel_export import (
     HEALTH_SUMMARY_HEADERS,
+    HealthExcelSections,
     build_health_summary_workbook,
+    excel_safe_sheet_title,
     filter_health_summary_cards,
     health_summary_row,
+    parse_health_excel_sections,
+    truncate_excel_cell,
 )
 from launchpad.health_server import DASHBOARD_HTML, HealthServer, _HealthHandler
 
@@ -165,3 +169,73 @@ def test_health_handler_declares_health_export_route():
 
     source = inspect.getsource(_HealthHandler.do_GET)
     assert "/api/health-export" in source
+
+
+def test_parse_health_excel_sections_defaults():
+    sections = parse_health_excel_sections()
+    assert sections == HealthExcelSections(
+        summary=True,
+        issues=True,
+        command_summaries=True,
+        raw=False,
+    )
+
+
+def test_parse_health_excel_sections_raw_zero():
+    sections = parse_health_excel_sections(raw="0")
+    assert sections.raw is False
+    assert sections.summary is True
+    assert sections.issues is True
+    assert sections.command_summaries is True
+
+
+def test_parse_health_excel_sections_coerces_query_values():
+    sections = parse_health_excel_sections(
+        summary="0",
+        issues="1",
+        command_summaries="false",
+        raw="true",
+    )
+    assert sections.summary is False
+    assert sections.issues is True
+    assert sections.command_summaries is False
+    assert sections.raw is True
+
+
+def test_excel_safe_sheet_title_strips_invalid_chars():
+    used: set[str] = set()
+    title = excel_safe_sheet_title("Site/A[B]:x*y?z\\", used=used)
+    assert title == "Site_A_B__x_y_z_"
+    assert title in used
+
+
+def test_excel_safe_sheet_title_truncates_to_max_len():
+    used: set[str] = set()
+    title = excel_safe_sheet_title("A" * 40, used=used, max_len=31)
+    assert len(title) == 31
+    assert title in used
+
+
+def test_excel_safe_sheet_title_disambiguates_collisions():
+    used: set[str] = set()
+    first = excel_safe_sheet_title("Anderson", used=used)
+    second = excel_safe_sheet_title("Anderson", used=used)
+    third = excel_safe_sheet_title("Anderson", used=used)
+    assert first == "Anderson"
+    assert second == "Anderson (2)"
+    assert third == "Anderson (3)"
+    assert len(second) <= 31
+    assert len(third) <= 31
+
+
+def test_truncate_excel_cell_under_limit_unchanged():
+    text = "hello world"
+    assert truncate_excel_cell(text) == text
+
+
+def test_truncate_excel_cell_appends_truncated_marker():
+    text = "A" * 50
+    result = truncate_excel_cell(text, limit=30)
+    assert len(result) == 30
+    assert result.endswith("… (truncated)")
+    assert result.startswith("A")

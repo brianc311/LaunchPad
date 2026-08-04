@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Mapping
 
@@ -17,6 +19,70 @@ HEALTH_SUMMARY_HEADERS = (
     "Status",
     "Issue count",
 )
+
+_INVALID_SHEET_CHARS = re.compile(r"[\[\]:*?/\\]")
+_DEFAULT_SHEET_TITLE = "Sheet"
+_TRUNCATED_SUFFIX = "… (truncated)"
+
+
+@dataclass(frozen=True)
+class HealthExcelSections:
+    summary: bool = True
+    issues: bool = True
+    command_summaries: bool = True
+    raw: bool = False
+
+
+def _coerce_section_flag(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("0", "false"):
+        return False
+    if text in ("1", "true"):
+        return True
+    return bool(text)
+
+
+def parse_health_excel_sections(
+    *,
+    summary: str | bool = True,
+    issues: str | bool = True,
+    command_summaries: str | bool = True,
+    raw: str | bool = False,
+) -> HealthExcelSections:
+    """Coerce 0/1/true/false query values; defaults match spec."""
+    return HealthExcelSections(
+        summary=_coerce_section_flag(summary),
+        issues=_coerce_section_flag(issues),
+        command_summaries=_coerce_section_flag(command_summaries),
+        raw=_coerce_section_flag(raw),
+    )
+
+
+def excel_safe_sheet_title(name: str, *, used: set[str], max_len: int = 31) -> str:
+    """Sanitize + truncate + disambiguate into `used`."""
+    cleaned = _INVALID_SHEET_CHARS.sub("_", str(name or "").strip())
+    cleaned = cleaned[:max_len] or _DEFAULT_SHEET_TITLE
+
+    candidate = cleaned
+    suffix_num = 2
+    while candidate in used:
+        suffix = f" ({suffix_num})"
+        base = cleaned[: max_len - len(suffix)]
+        candidate = f"{base}{suffix}"
+        suffix_num += 1
+    used.add(candidate)
+    return candidate
+
+
+def truncate_excel_cell(text: str, *, limit: int = 32767) -> str:
+    """Append '… (truncated)' when over limit."""
+    if len(text) <= limit:
+        return text
+    if len(_TRUNCATED_SUFFIX) >= limit:
+        return _TRUNCATED_SUFFIX[:limit]
+    return text[: limit - len(_TRUNCATED_SUFFIX)] + _TRUNCATED_SUFFIX
 
 
 def _monitor_on(card_id: int, monitor_enabled: Mapping[int | str, bool]) -> bool:
