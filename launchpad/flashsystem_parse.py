@@ -960,6 +960,19 @@ def summarize_command_output(label: str, command: str, output: str) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return "checkhealth returned"
+        checking_only = all(line.lower().startswith("checking ") for line in lines)
+        if checking_only:
+            return f"checkhealth incomplete ({len(lines)} checks…)"[:72]
+        # Prefer a final status line over the first "Checking …" progress line.
+        for line in reversed(lines):
+            lowered = line.lower()
+            if lowered.startswith("checking "):
+                continue
+            summary = line
+            extras = len(lines) - 1
+            if extras > 0:
+                summary += f" (+{extras} more)"
+            return summary[:72]
         summary = lines[0]
         if len(lines) > 1:
             summary += f" (+{len(lines) - 1} more)"

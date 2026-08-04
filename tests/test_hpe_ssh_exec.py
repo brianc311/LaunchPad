@@ -1,7 +1,36 @@
 """HPE interactive CLI prompt detection and shell helpers."""
 
 from launchpad.command_format import filter_capacity_focus_commands
-from launchpad.ssh_paramiko import _extract_hpe_command_output, _looks_like_hpe_prompt
+from launchpad.flashsystem_parse import summarize_command_output
+from launchpad.ssh_paramiko import (
+    _extract_hpe_command_output,
+    _hpe_allows_idle_exit_without_prompt,
+    _looks_like_hpe_prompt,
+)
+
+
+def test_checkhealth_does_not_idle_exit_without_prompt():
+    assert not _hpe_allows_idle_exit_without_prompt("checkhealth")
+    assert not _hpe_allows_idle_exit_without_prompt("CHECKHEALTH")
+    assert _hpe_allows_idle_exit_without_prompt("showcpg")
+    assert _hpe_allows_idle_exit_without_prompt("showsys -d")
+
+
+def test_summarize_checkhealth_incomplete_when_only_checking_lines():
+    text = "\n".join(
+        [
+            "Checking alert",
+            "Checking ao",
+            "Checking cabling",
+            "Checking cage",
+            "Checking cert",
+            "Checking dar",
+            "Checking date",
+        ]
+    )
+    summary = summarize_command_output("Health - Overall", "checkhealth", text)
+    assert "incomplete" in summary.lower()
+    assert "Checking alert" not in summary
 
 
 def test_hpe_prompt_accepts_host_cli_style_not_percent_values():

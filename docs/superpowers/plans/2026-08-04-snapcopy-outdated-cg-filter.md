@@ -17,7 +17,7 @@
 - **Outdated when:** `age_days > expected_days` (strict).
 - **Not outdated (v1):** held schedule, missing/`None` days, missing/unparseable flash time, age exactly equal to expected days.
 - **Export:** reuse `POST /api/contingency-groups/fc-cg-summary/export-selected` with auto-checked outdated rows.
-- Bump `APP_VERSION` to **1.6.107** in the final task (tip-stickiness fix already shipped as **1.6.106** if present; if tip fix is still uncommitted, tip fix may be 1.6.106 and this feature 1.6.107).
+- Bump `APP_VERSION` to **1.6.108** in the final task (checkhealth idle-exit fix shipped as **1.6.107**; tip-stickiness as **1.6.106**).
 - Commit at each task’s commit step.
 - Run from: `C:\Users\BrianColley\LaunchPad`
 

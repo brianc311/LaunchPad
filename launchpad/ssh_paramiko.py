@@ -309,6 +309,11 @@ def _recv_until_hpe_prompt(channel, *, timeout: float, idle_seconds: float = 0.5
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+def _hpe_allows_idle_exit_without_prompt(command: str) -> bool:
+    """checkhealth prints 'Checking …' with multi-second gaps; idle exit truncates it."""
+    return "checkhealth" not in (command or "").lower()
+
+
 def _recv_hpe_command_output(
     channel,
     command: str,
@@ -323,6 +328,7 @@ def _recv_hpe_command_output(
     last_data = time.monotonic()
     cmd = command.strip()
     saw_echo = False
+    allow_idle_exit = _hpe_allows_idle_exit_without_prompt(cmd)
     while time.monotonic() < deadline:
         if channel.recv_ready():
             chunk = channel.recv(65536)
@@ -345,7 +351,13 @@ def _recv_hpe_command_output(
                 break
             # Safety: after echo + sustained idle, accept output even if prompt
             # matching fails (some builds use unusual prompt text).
-            if saw_echo and (time.monotonic() - last_data) >= max(idle_seconds, 2.5):
+            # Never do this for checkhealth — pauses between "Checking X" lines
+            # routinely exceed 2.5s and would truncate mid-run.
+            if (
+                allow_idle_exit
+                and saw_echo
+                and (time.monotonic() - last_data) >= max(idle_seconds, 2.5)
+            ):
                 break
             continue
         if channel.exit_status_ready() and not channel.recv_ready():
@@ -426,7 +438,8 @@ def run_ssh_auth_hpe_commands(
                 for command in commands:
                     cmd_timeout = shell_timeout
                     if "checkhealth" in command.lower():
-                        cmd_timeout = max(shell_timeout, 120.0)
+                        # Full checkhealth can take several minutes on large arrays.
+                        cmd_timeout = max(shell_timeout, 300.0)
                     raw = _recv_hpe_command_output(
                         channel,
                         command,
