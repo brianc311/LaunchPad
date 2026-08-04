@@ -10,6 +10,11 @@ def test_facility_wag_and_other():
     assert facility_from_name("mystery-box") == "Other"
 
 
+def test_facility_wag_priority_over_dc_host_prefix():
+    assert facility_from_name("V7K237XW-WAG1") == "Data center -WAG1"
+    assert facility_from_name("V7K37WP_wag2") == "Data center -WAG2"
+
+
 def test_facility_distribution_patterns():
     assert facility_from_name("east-dc-primary") == "Distribution center"
     assert facility_from_name("v7kNYC-g2") == "Distribution center"

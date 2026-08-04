@@ -1,10 +1,10 @@
 """Derive Dell Report Facility from card/site name heuristics.
 
 Distribution center when the lowercased name contains ``distribution``,
-``distribution center``, a standalone ``dc`` token (``\\bdc\\b``), or
-starts with Walgreens DC host prefixes ``v5k`` / ``v7k`` (unless ``remote``
-is present). WAG1/WAG2 substrings map to data-center facilities; everything
-else is ``Other``.
+``distribution center``, or a standalone ``dc`` token (``\\bdc\\b``).
+WAG1/WAG2 substrings map to data-center facilities. Names starting with
+Walgreens DC host prefixes ``v5k`` / ``v7k`` (unless ``remote`` is present)
+also map to distribution center. Everything else is ``Other``.
 """
 
 from __future__ import annotations
@@ -30,12 +30,12 @@ def facility_from_name(name: str) -> str:
     if _DC_TOKEN.search(lowered):
         return _DISTRIBUTION_CENTER
 
-    if "remote" not in lowered and _DC_PREFIX.match(lowered):
-        return _DISTRIBUTION_CENTER
-
     if "wag1" in lowered:
         return _DATA_CENTER_WAG1
     if "wag2" in lowered:
         return _DATA_CENTER_WAG2
+
+    if "remote" not in lowered and _DC_PREFIX.match(lowered):
+        return _DISTRIBUTION_CENTER
 
     return _OTHER
