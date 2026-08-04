@@ -78,6 +78,21 @@ def test_parse_hpe_showversion_firmware():
     assert current == "4.1.2"
 
 
+def test_parse_hpe_showversion_release_version_no_colon():
+    """Live 3PAR/Primera CLI uses 'Release version X' without a colon."""
+    output = (
+        "Release version 3.3.1.648 (MU5)\n"
+        "Patches: P126,P132\n"
+        "Component Name Version\n"
+        "CLI Server 3.3.1.648 (MU5)\n"
+    )
+    configured, status, details, current = parse_hpe_showversion_firmware(output)
+    assert configured == "yes"
+    assert status == "configured"
+    assert current == "3.3.1.648 (MU5)"
+    assert "version=" in details
+
+
 def test_hpe_showversion_normalizes_patch_suffix():
     output = "Version: 3.3.1.648 (MU5)+P126,P132\n"
     configured, status, details, current = parse_hpe_showversion_firmware(output)

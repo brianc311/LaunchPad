@@ -48,8 +48,10 @@ _HPE_LABEL_RE = re.compile(
     r"^(?P<label>DNS server|NTP server)\s*:\s*(?P<value>\S.*)?$",
     re.IGNORECASE,
 )
+# Real 3PAR/Primera CLI: "Release version 3.3.1.648 (MU5)" (no colon).
+# Also accept "Version: …", "Release version: …", and CSV "Release version,…".
 _HPE_VERSION_RE = re.compile(
-    r"^(?:Release\s+version|Version)\s*:\s*(?P<version>\S.+)$",
+    r"^(?:Release\s+version|Version)\s*(?:[:=,]\s*|\s+)(?P<version>\S.+)$",
     re.IGNORECASE,
 )
 _DS_FIRMWARE_NA = (
