@@ -10,6 +10,23 @@ def _register(server: HealthServer, card_id: int, name: str, *, monitor_on: bool
     server.set_monitor_enabled(card_id=card_id, enabled=monitor_on)
 
 
+def _call_dell_report_settings_api(monkeypatch, server: HealthServer):
+    handler = object.__new__(_HealthHandler)
+    handler.path = "/api/dell-report-settings"
+    sent: dict = {}
+
+    def _send_json(data, status=200):
+        sent["json"] = data
+        sent["status"] = status
+
+    handler._send_json = _send_json
+    monkeypatch.setattr("launchpad.health_server.get_health_server", lambda: server)
+
+    handler.do_GET()
+
+    return sent
+
+
 def _call_dell_report_export_api(
     monkeypatch,
     server: HealthServer,
@@ -42,6 +59,47 @@ def test_health_handler_declares_dell_report_export_route():
     source = inspect.getsource(_HealthHandler.do_GET)
 
     assert "/api/dell-report-export" in source
+
+
+def test_health_handler_declares_dell_report_settings_route():
+    source = inspect.getsource(_HealthHandler.do_GET)
+
+    assert "/api/dell-report-settings" in source
+
+
+def test_dell_report_settings_enabled_true_by_default(monkeypatch):
+    server = HealthServer()
+
+    sent = _call_dell_report_settings_api(monkeypatch, server)
+
+    assert sent["status"] == 200
+    assert sent["json"] == {"enabled": True}
+
+
+def test_dell_report_settings_enabled_true_when_no_saved_setting(monkeypatch):
+    server = HealthServer()
+    server.set_settings_backend(lambda key, default="": default, lambda key, value: None)
+
+    sent = _call_dell_report_settings_api(monkeypatch, server)
+
+    assert sent["status"] == 200
+    assert sent["json"] == {"enabled": True}
+
+
+def test_dell_report_settings_returns_disabled_when_saved(monkeypatch):
+    server = HealthServer()
+
+    def _get_setting(key: str, default: str = "") -> str:
+        if key == DELL_REPORT_SETTING:
+            return json.dumps({"enabled": False})
+        return default
+
+    server.set_settings_backend(_get_setting, lambda key, value: None)
+
+    sent = _call_dell_report_settings_api(monkeypatch, server)
+
+    assert sent["status"] == 200
+    assert sent["json"] == {"enabled": False}
 
 
 def test_dell_report_export_disabled_returns_403(monkeypatch):
