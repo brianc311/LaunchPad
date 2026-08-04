@@ -834,6 +834,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <span id="selection-count" class="selection-count"></span>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="health-excel-btn" class="secondary">Export Excel</button>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-summary" checked> Summary</label>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-issues" checked> Issues</label>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-cmd-summaries" checked> Command summaries</label>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-raw"> Raw output</label>
       </div>
       <p id="print-meta" class="print-meta"></p>
       <p id="search-hint" class="search-hint no-print"></p>
@@ -876,10 +880,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const selectionCountEl = document.getElementById("selection-count");
     const printBtn = document.getElementById("print-btn");
     const healthExcelBtn = document.getElementById("health-excel-btn");
+    const healthExcelSummaryEl = document.getElementById("health-excel-summary");
+    const healthExcelIssuesEl = document.getElementById("health-excel-issues");
+    const healthExcelCmdSummariesEl = document.getElementById("health-excel-cmd-summaries");
+    const healthExcelRawEl = document.getElementById("health-excel-raw");
     const printMetaEl = document.getElementById("print-meta");
     const searchHintEl = document.getElementById("search-hint");
     const SHOW_ALERTS_PREF_KEY = "launchpad.healthDashboard.showAlerts";
     const MONITOR_PREF_PREFIX = "launchpad.healthDashboard.monitor-";
+    const HEALTH_EXCEL_PREF = {
+      summary: "launchpad.healthExcel.summary",
+      issues: "launchpad.healthExcel.issues",
+      commandSummaries: "launchpad.healthExcel.commandSummaries",
+      rawOutput: "launchpad.healthExcel.rawOutput",
+    };
     const autoTimers = {};
     let monitorServerState = {};
 
@@ -1187,14 +1201,58 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       updateSelectionCount();
     }
 
+    function loadHealthExcelPrefs() {
+      const pairs = [
+        [healthExcelSummaryEl, HEALTH_EXCEL_PREF.summary, true],
+        [healthExcelIssuesEl, HEALTH_EXCEL_PREF.issues, true],
+        [healthExcelCmdSummariesEl, HEALTH_EXCEL_PREF.commandSummaries, true],
+        [healthExcelRawEl, HEALTH_EXCEL_PREF.rawOutput, false],
+      ];
+      for (const [el, key, defaultOn] of pairs) {
+        if (!el) continue;
+        const saved = localStorage.getItem(key);
+        if (saved === null) el.checked = defaultOn;
+        else el.checked = saved === "1";
+      }
+    }
+
+    function saveHealthExcelPref(el, key) {
+      if (!el) return;
+      localStorage.setItem(key, el.checked ? "1" : "0");
+    }
+
+    function healthExcelSectionFlag(el, defaultOn) {
+      if (!el) return defaultOn ? "1" : "0";
+      return el.checked ? "1" : "0";
+    }
+
     async function downloadHealthExcel() {
       if (!healthExcelBtn) return;
+      const summaryOn = !healthExcelSummaryEl || healthExcelSummaryEl.checked;
+      const siteId = selectedSiteId();
+      const detailIds = siteId != null ? [siteId] : [...printSelectedIds];
+      if (!detailIds.length && !summaryOn) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent =
+            "Select PDF sites or pick a site, or enable Summary, before exporting.";
+        }
+        return;
+      }
       healthExcelBtn.disabled = true;
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Health Summary Excel…";
       try {
-        const siteId = selectedSiteId();
-        const cardParam = siteId != null ? `card_id=${siteId}&` : "";
-        const res = await fetch(`/api/health-export?${cardParam}open=1`);
+        const parts = [];
+        for (const id of detailIds) {
+          parts.push(`card_id=${encodeURIComponent(id)}`);
+        }
+        parts.push(`summary=${healthExcelSectionFlag(healthExcelSummaryEl, true)}`);
+        parts.push(`issues=${healthExcelSectionFlag(healthExcelIssuesEl, true)}`);
+        parts.push(
+          `command_summaries=${healthExcelSectionFlag(healthExcelCmdSummariesEl, true)}`
+        );
+        parts.push(`raw=${healthExcelSectionFlag(healthExcelRawEl, false)}`);
+        parts.push("open=1");
+        const res = await fetch(`/api/health-export?${parts.join("&")}`);
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
           try {
@@ -1994,6 +2052,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (healthExcelBtn) {
       healthExcelBtn.addEventListener("click", downloadHealthExcel);
     }
+    if (healthExcelSummaryEl) {
+      healthExcelSummaryEl.addEventListener("change", () => {
+        saveHealthExcelPref(healthExcelSummaryEl, HEALTH_EXCEL_PREF.summary);
+      });
+    }
+    if (healthExcelIssuesEl) {
+      healthExcelIssuesEl.addEventListener("change", () => {
+        saveHealthExcelPref(healthExcelIssuesEl, HEALTH_EXCEL_PREF.issues);
+      });
+    }
+    if (healthExcelCmdSummariesEl) {
+      healthExcelCmdSummariesEl.addEventListener("change", () => {
+        saveHealthExcelPref(
+          healthExcelCmdSummariesEl,
+          HEALTH_EXCEL_PREF.commandSummaries
+        );
+      });
+    }
+    if (healthExcelRawEl) {
+      healthExcelRawEl.addEventListener("change", () => {
+        saveHealthExcelPref(healthExcelRawEl, HEALTH_EXCEL_PREF.rawOutput);
+      });
+    }
+    loadHealthExcelPrefs();
     loadShowAlertsPref();
 
     loadJigglerStatus();

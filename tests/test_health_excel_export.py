@@ -230,6 +230,31 @@ def test_dashboard_has_health_export_excel_button():
     assert "health-site-select" in filter_bar or 'id="health-site-select"' in filter_bar
 
 
+def test_dashboard_has_health_excel_section_toggles():
+    filter_bar_start = DASHBOARD_HTML.index('<div class="filter-bar no-print">')
+    filter_bar_end = DASHBOARD_HTML.index("</div>", filter_bar_start)
+    filter_bar = DASHBOARD_HTML[filter_bar_start:filter_bar_end]
+    for toggle_id in (
+        "health-excel-summary",
+        "health-excel-issues",
+        "health-excel-cmd-summaries",
+        "health-excel-raw",
+    ):
+        assert f'id="{toggle_id}"' in filter_bar
+    for key in (
+        "launchpad.healthExcel.summary",
+        "launchpad.healthExcel.issues",
+        "launchpad.healthExcel.commandSummaries",
+        "launchpad.healthExcel.rawOutput",
+    ):
+        assert key in DASHBOARD_HTML
+    download_start = DASHBOARD_HTML.index("async function downloadHealthExcel()")
+    download_end = DASHBOARD_HTML.index("\n    function ", download_start + 1)
+    download_js = DASHBOARD_HTML[download_start:download_end]
+    for param in ("summary=", "issues=", "command_summaries=", "raw=", "card_id=", "open=1"):
+        assert param in download_js
+
+
 def test_health_handler_declares_health_export_route():
     import inspect
 
