@@ -122,6 +122,7 @@ class GlowCard(ctk.CTkFrame):
         self._capacity_alert_tip = ""
         self._capacity_alert_tip_window = None
         self._capacity_alert_tip_after = None
+        self._capacity_alert_tip_hide_after = None
         self.capacity_alert_badge = ctk.CTkLabel(
             top_row,
             text="",
@@ -135,7 +136,7 @@ class GlowCard(ctk.CTkFrame):
         self.capacity_alert_badge.grid(row=0, column=4, sticky="e", padx=(4, 4))
         self.capacity_alert_badge.grid_remove()
         self.capacity_alert_badge.bind("<Enter>", self._on_capacity_alert_enter)
-        self.capacity_alert_badge.bind("<Leave>", self._hide_capacity_alert_tip)
+        self.capacity_alert_badge.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
         self.bind("<Destroy>", lambda _e: self._hide_capacity_alert_tip(), add="+")
 
         self.type_badge = ctk.CTkLabel(
@@ -208,7 +209,7 @@ class GlowCard(ctk.CTkFrame):
         self.capacity_alert_badge_compact.grid(row=0, column=1, padx=(0, 6), sticky="w")
         self.capacity_alert_badge_compact.grid_remove()
         self.capacity_alert_badge_compact.bind("<Enter>", self._on_capacity_alert_enter)
-        self.capacity_alert_badge_compact.bind("<Leave>", self._hide_capacity_alert_tip)
+        self.capacity_alert_badge_compact.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
 
         self.subtitle_label = ctk.CTkLabel(
             self.bottom_left,
@@ -404,6 +405,7 @@ class GlowCard(ctk.CTkFrame):
         self.type_badge.grid(row=0, column=5, sticky="e")
         if hasattr(self, "drag_handle"):
             self.drag_handle.grid(row=0, column=6, sticky="e", padx=(6, 0))
+        self._hide_capacity_alert_tip()
         self._place_capacity_alert_badges()
 
     def _layout_compact_header(self) -> None:
@@ -419,6 +421,7 @@ class GlowCard(ctk.CTkFrame):
         self.bottom_left.grid(row=0, column=0, padx=(0, 6), sticky="ew")
         self.compact_expand_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
         self.compact_connect_btn.grid(row=0, column=2, sticky="e")
+        self._hide_capacity_alert_tip()
         self._place_capacity_alert_badges()
 
     def set_collapsed(self, collapsed: bool, *, animate: bool = True, notify: bool = True) -> None:
@@ -713,7 +716,51 @@ class GlowCard(ctk.CTkFrame):
             )
         self._place_capacity_alert_badges()
 
+    def _pointer_over_capacity_tip_widgets(self) -> bool:
+        """True when pointer is still over the CRIT/WARN badge or the tip window."""
+        try:
+            x = int(self.winfo_pointerx())
+            y = int(self.winfo_pointery())
+        except Exception:
+            return False
+        for widget in (self._visible_capacity_badge(), getattr(self, "_capacity_alert_tip_window", None)):
+            if widget is None:
+                continue
+            try:
+                if not widget.winfo_exists():
+                    continue
+                left = int(widget.winfo_rootx())
+                top = int(widget.winfo_rooty())
+                right = left + int(widget.winfo_width())
+                bottom = top + int(widget.winfo_height())
+                if left <= x < right and top <= y < bottom:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _cancel_scheduled_hide_capacity_alert_tip(self) -> None:
+        hide_after = getattr(self, "_capacity_alert_tip_hide_after", None)
+        if hide_after:
+            try:
+                self.after_cancel(hide_after)
+            except Exception:
+                pass
+            self._capacity_alert_tip_hide_after = None
+
+    def _schedule_hide_capacity_alert_tip(self, _event=None) -> None:
+        """Defer hide so pointer can move badge → tip without killing the tip."""
+        self._cancel_scheduled_hide_capacity_alert_tip()
+        self._capacity_alert_tip_hide_after = self.after(80, self._hide_capacity_alert_tip_if_away)
+
+    def _hide_capacity_alert_tip_if_away(self) -> None:
+        self._capacity_alert_tip_hide_after = None
+        if self._pointer_over_capacity_tip_widgets():
+            return
+        self._hide_capacity_alert_tip()
+
     def _on_capacity_alert_enter(self, _event=None) -> None:
+        self._cancel_scheduled_hide_capacity_alert_tip()
         tip = getattr(self, "_capacity_alert_tip", "")
         if tip:
             self._show_capacity_alert_tip(tip)
@@ -729,7 +776,7 @@ class GlowCard(ctk.CTkFrame):
         x = badge.winfo_rootx()
         y = badge.winfo_rooty() + badge.winfo_height() + 4
         self._capacity_alert_tip_window.geometry(f"+{x}+{y}")
-        ctk.CTkLabel(
+        tip_label = ctk.CTkLabel(
             self._capacity_alert_tip_window,
             text=text,
             font=ctk.CTkFont(size=11),
@@ -738,12 +785,18 @@ class GlowCard(ctk.CTkFrame):
             corner_radius=6,
             padx=8,
             pady=4,
-        ).pack()
-        self._capacity_alert_tip_window.bind("<Leave>", lambda _e: self._hide_capacity_alert_tip())
-        self._capacity_alert_tip_window.bind("<Button-1>", lambda _e: self._hide_capacity_alert_tip())
+        )
+        tip_label.pack()
+        # Topmost overrideredirect tips often miss Leave on Windows; defer +
+        # pointer geometry check, and bind Enter/Leave on both tip and label.
+        for widget in (self._capacity_alert_tip_window, tip_label):
+            widget.bind("<Enter>", lambda _e: self._cancel_scheduled_hide_capacity_alert_tip())
+            widget.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
+            widget.bind("<Button-1>", lambda _e: self._hide_capacity_alert_tip())
         self._capacity_alert_tip_after = self.after(5000, self._hide_capacity_alert_tip)
 
     def _hide_capacity_alert_tip(self, _event=None) -> None:
+        self._cancel_scheduled_hide_capacity_alert_tip()
         if getattr(self, "_capacity_alert_tip_after", None):
             try:
                 self.after_cancel(self._capacity_alert_tip_after)
