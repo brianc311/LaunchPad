@@ -176,13 +176,15 @@ def collect_dell_report_rows(
     now: datetime | None = None,
     include_pools: bool = True,
     card_overrides: dict | None = None,
+    include_card_ids: set[str] | list | None = None,
 ) -> tuple[list[dict], list[dict], dict]:
-    """Split ibm/hp rows; upsert current week if missing; return rows + store."""
+    """Split ibm/hp rows; upsert current week; forced blank when include set."""
     when = _coerce_utc(now)
     week = iso_week_key(when)
     captured_at = when.isoformat()
     store = dict(snapshot_store or {})
     overrides = card_overrides or {}
+    include_ids = {str(x) for x in (include_card_ids or [])}
     ibm_rows: list[dict] = []
     hp_rows: list[dict] = []
 
@@ -200,12 +202,35 @@ def collect_dell_report_rows(
             pools=_site_value(site, "pools") or [],
             include_pools=include_pools,
         )
-        if not summary:
-            continue
-
-        total_bytes = float(summary.get("total_bytes") or 0)
-        used_bytes = float(summary.get("used_bytes") or 0)
-        if total_bytes <= 0:
+        total_bytes = float((summary or {}).get("total_bytes") or 0)
+        used_bytes = float((summary or {}).get("used_bytes") or 0)
+        if not summary or total_bytes <= 0:
+            if str(card_id) not in include_ids:
+                continue
+            ident = resolve_dell_identity(
+                card_id=card_id,
+                site_name=name,
+                device_profile=device_profile,
+                summary_name="",
+                overrides=overrides,
+            )
+            blank = {
+                "card_id": card_id,
+                "facility": ident["facility"],
+                "array_name": ident["array_name"],
+                "model": ident["model"],
+                "prior_usable_gib": None,
+                "prior_used_gib": None,
+                "prior_util": None,
+                "curr_usable_gib": None,
+                "curr_used_gib": None,
+                "curr_util": None,
+                "weekly_growth": None,
+            }
+            if family == "ibm":
+                ibm_rows.append(blank)
+            else:
+                hp_rows.append(blank)
             continue
 
         ident = resolve_dell_identity(

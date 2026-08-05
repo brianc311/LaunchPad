@@ -3,10 +3,13 @@ import json
 from launchpad.dell_report_settings import (
     DELL_REPORT_SETTING,
     is_dell_report_enabled,
+    is_dell_report_include_card,
     load_dell_report_settings,
     normalize_dell_report_settings,
     save_dell_report_settings,
 )
+
+_EMPTY = {"enabled": True, "card_overrides": {}, "include_card_ids": []}
 
 
 class _FakeDb:
@@ -25,45 +28,48 @@ def test_setting_key():
 
 
 def test_normalize_defaults_enabled_true():
-    assert normalize_dell_report_settings({}) == {
-        "enabled": True,
-        "card_overrides": {},
-    }
-    assert normalize_dell_report_settings(None) == {
-        "enabled": True,
-        "card_overrides": {},
-    }
-    assert normalize_dell_report_settings([]) == {
-        "enabled": True,
-        "card_overrides": {},
-    }
+    assert normalize_dell_report_settings({}) == _EMPTY
+    assert normalize_dell_report_settings(None) == _EMPTY
+    assert normalize_dell_report_settings([]) == _EMPTY
 
 
 def test_normalize_coerces_enabled():
     assert normalize_dell_report_settings({"enabled": False}) == {
         "enabled": False,
         "card_overrides": {},
+        "include_card_ids": [],
     }
-    assert normalize_dell_report_settings({"enabled": True}) == {
-        "enabled": True,
-        "card_overrides": {},
-    }
+    assert normalize_dell_report_settings({"enabled": True}) == _EMPTY
     assert normalize_dell_report_settings({"enabled": "false"}) == {
         "enabled": False,
         "card_overrides": {},
+        "include_card_ids": [],
     }
-    assert normalize_dell_report_settings({"enabled": "true"}) == {
-        "enabled": True,
-        "card_overrides": {},
-    }
-    assert normalize_dell_report_settings({"enabled": 1}) == {
-        "enabled": True,
-        "card_overrides": {},
-    }
+    assert normalize_dell_report_settings({"enabled": "true"}) == _EMPTY
+    assert normalize_dell_report_settings({"enabled": 1}) == _EMPTY
     assert normalize_dell_report_settings({"enabled": 0}) == {
         "enabled": False,
         "card_overrides": {},
+        "include_card_ids": [],
     }
+
+
+def test_normalize_include_card_ids():
+    out = normalize_dell_report_settings(
+        {"enabled": True, "include_card_ids": [12, "12", "34", "", None]}
+    )
+    assert out["include_card_ids"] == ["12", "34"]
+
+
+def test_normalize_default_include_empty():
+    assert normalize_dell_report_settings({})["include_card_ids"] == []
+
+
+def test_is_dell_report_include_card():
+    settings = normalize_dell_report_settings({"include_card_ids": ["99"]})
+    assert is_dell_report_include_card(settings, 99) is True
+    assert is_dell_report_include_card(settings, "99") is True
+    assert is_dell_report_include_card(settings, 1) is False
 
 
 def test_normalize_keeps_card_overrides():
@@ -88,24 +94,33 @@ def test_normalize_drops_bad_overrides():
 
 def test_load_empty_defaults_enabled_true():
     db = _FakeDb()
-    assert load_dell_report_settings(db) == {"enabled": True, "card_overrides": {}}
+    assert load_dell_report_settings(db) == _EMPTY
 
 
 def test_load_invalid_json_defaults_enabled_true():
     db = _FakeDb()
     db.values[DELL_REPORT_SETTING] = "not-json"
-    assert load_dell_report_settings(db) == {"enabled": True, "card_overrides": {}}
+    assert load_dell_report_settings(db) == _EMPTY
 
 
 def test_save_load_roundtrip():
     db = _FakeDb()
     saved = save_dell_report_settings(db, {"enabled": False})
-    assert saved == {"enabled": False, "card_overrides": {}}
+    assert saved == {
+        "enabled": False,
+        "card_overrides": {},
+        "include_card_ids": [],
+    }
     assert json.loads(db.values[DELL_REPORT_SETTING]) == {
         "enabled": False,
         "card_overrides": {},
+        "include_card_ids": [],
     }
-    assert load_dell_report_settings(db) == {"enabled": False, "card_overrides": {}}
+    assert load_dell_report_settings(db) == {
+        "enabled": False,
+        "card_overrides": {},
+        "include_card_ids": [],
+    }
 
 
 def test_is_dell_report_enabled():

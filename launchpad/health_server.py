@@ -6471,8 +6471,21 @@ class HealthServer:
             save_dell_snapshots,
         )
 
-        # Spec: Dell Report fidelity is monitored-on only.
+        # Spec: Dell Report defaults to monitored-on; include_card_ids always eligible.
         include_monitor_off = False
+
+        from launchpad.dell_report_settings import (
+            load_dell_report_settings,
+            normalize_dell_report_settings,
+        )
+
+        settings_view = self._settings_view_for_scan()
+        if settings_view is not None:
+            dell_settings = load_dell_report_settings(settings_view)
+        else:
+            dell_settings = normalize_dell_report_settings({})
+        overrides = dell_settings.get("card_overrides") or {}
+        include_ids = list(dell_settings.get("include_card_ids") or [])
 
         with self._lock:
             card_ids = sorted(self._cards.keys())
@@ -6495,6 +6508,25 @@ class HealthServer:
                 continue
             if dell_report_family(card.device_profile) in {"ibm", "hp"}:
                 ibm_hp_ids.append(site_id)
+
+        # Forced-include IBM/HPE cards even when Monitor is off.
+        seen = set(ibm_hp_ids)
+        for cid_str in include_ids:
+            try:
+                cid = int(cid_str)
+            except (TypeError, ValueError):
+                continue
+            if card_id is not None and cid != card_id:
+                continue
+            with self._lock:
+                card = self._cards.get(cid)
+            if card is None:
+                continue
+            if dell_report_family(card.device_profile) not in {"ibm", "hp"}:
+                continue
+            if cid not in seen:
+                ibm_hp_ids.append(cid)
+                seen.add(cid)
 
         sites: list[ExportSite] = []
         for site_id in ibm_hp_ids:
@@ -6528,21 +6560,13 @@ class HealthServer:
                 )
             )
 
-        from launchpad.dell_report_settings import load_dell_report_settings
-
-        settings_view = self._settings_view_for_scan()
-        overrides: dict = {}
-        if settings_view is not None:
-            overrides = load_dell_report_settings(settings_view).get(
-                "card_overrides"
-            ) or {}
-
         store = load_dell_snapshots()
         ibm_rows, hp_rows, store = collect_dell_report_rows(
             sites,
             snapshot_store=store,
             include_pools=include_pools,
             card_overrides=overrides,
+            include_card_ids=include_ids,
         )
         save_dell_snapshots(store)
         ensure_dell_report_has_rows(ibm_rows, hp_rows)

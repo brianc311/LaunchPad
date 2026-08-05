@@ -27,6 +27,9 @@ class GlowCard(ctk.CTkFrame):
         collapsed: bool = True,
         on_selection_change=None,
         on_collapsed_change=None,
+        show_dell_report_include: bool = False,
+        dell_report_include: bool = False,
+        on_dell_report_include_change=None,
         **kwargs,
     ) -> None:
         self.glow_color = normalize_color(glow_color)
@@ -45,6 +48,8 @@ class GlowCard(ctk.CTkFrame):
         self.on_snapshot = on_snapshot
         self.on_monitor_change = on_monitor_change
         self._monitor_enabled = monitor_enabled
+        self.on_dell_report_include_change = on_dell_report_include_change
+        self._dell_report_include = bool(dell_report_include)
         self.on_reorder = on_reorder
         self.on_selection_change = on_selection_change
         self.on_collapsed_change = on_collapsed_change
@@ -63,8 +68,14 @@ class GlowCard(ctk.CTkFrame):
         btn_row_idx = stats_row + 1
         self._stats_row = stats_row
         self._btn_row_idx = btn_row_idx
-        self._monitor_row_idx = btn_row_idx + 1 if on_monitor_change else None
-        self._snapshot_row_idx = btn_row_idx + (2 if on_monitor_change else 1)
+        next_row = btn_row_idx + 1
+        self._monitor_row_idx = next_row if on_monitor_change else None
+        if on_monitor_change:
+            next_row += 1
+        self._dell_report_row_idx = next_row if show_dell_report_include else None
+        if show_dell_report_include:
+            next_row += 1
+        self._snapshot_row_idx = next_row
         self.grid_rowconfigure(stats_row, weight=1)
 
         self.top_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -329,6 +340,33 @@ class GlowCard(ctk.CTkFrame):
             self.monitor_switch = None
             self.monitor_hint = None
 
+        if show_dell_report_include and self._dell_report_row_idx is not None:
+            self.dell_report_row = ctk.CTkFrame(self, fg_color="transparent")
+            self.dell_report_row.grid(
+                row=self._dell_report_row_idx, column=0, padx=18, pady=(0, 6), sticky="ew"
+            )
+            self.dell_report_var = ctk.BooleanVar(value=self._dell_report_include)
+            self.dell_report_check = ctk.CTkCheckBox(
+                self.dell_report_row,
+                text="Dell Report",
+                variable=self.dell_report_var,
+                command=self._on_dell_report_include_toggle,
+                font=ctk.CTkFont(size=12),
+            )
+            self.dell_report_check.pack(side="left")
+            self.dell_report_hint = ctk.CTkLabel(
+                self.dell_report_row,
+                text="Include even without SSH",
+                font=ctk.CTkFont(size=11),
+                text_color=theme["muted"],
+            )
+            self.dell_report_hint.pack(side="left", padx=(10, 0))
+        else:
+            self.dell_report_row = None
+            self.dell_report_var = None
+            self.dell_report_check = None
+            self.dell_report_hint = None
+
         if on_snapshot:
             self.snapshot_btn = ctk.CTkButton(
                 self,
@@ -348,6 +386,8 @@ class GlowCard(ctk.CTkFrame):
         self._detail_widgets = [self.compact_bottom_row, self.btn_row]
         if self.monitor_row:
             self._detail_widgets.append(self.monitor_row)
+        if self.dell_report_row:
+            self._detail_widgets.append(self.dell_report_row)
         if show_stats:
             self._detail_widgets.insert(1, self.stats_frame)
         if self.snapshot_btn:
@@ -373,6 +413,18 @@ class GlowCard(ctk.CTkFrame):
         self._monitor_enabled = enabled
         self._apply_monitor_visual(enabled)
         self.on_monitor_change(enabled)
+
+    def _on_dell_report_include_toggle(self) -> None:
+        if not self.dell_report_var or not self.on_dell_report_include_change:
+            return
+        enabled = bool(self.dell_report_var.get())
+        self._dell_report_include = enabled
+        self.on_dell_report_include_change(enabled)
+
+    def set_dell_report_include(self, enabled: bool) -> None:
+        self._dell_report_include = bool(enabled)
+        if self.dell_report_var is not None:
+            self.dell_report_var.set(self._dell_report_include)
 
     def _toggle_on_name_click(self, _event=None) -> str:
         if self._collapsed:

@@ -8,7 +8,12 @@ from launchpad.branding import get_app_name, load_ctk_logo
 from launchpad.capacity_email_scheduler import is_capacity_email_due
 from launchpad.capacity_email_send import send_capacity_email
 from launchpad.capacity_email_settings import load_capacity_email_settings
-from launchpad.dell_report_settings import is_dell_report_enabled
+from launchpad.dell_report_family import dell_report_family
+from launchpad.dell_report_settings import (
+    is_dell_report_enabled,
+    load_dell_report_settings,
+    save_dell_report_settings,
+)
 from launchpad.command_format import resolve_card_commands
 from launchpad.crypto import decrypt_text
 from launchpad.dashboard_array_rail import (
@@ -586,6 +591,9 @@ class DashboardView(ctk.CTkFrame):
             return
 
         self._load_monitor_states()
+        dell_include_ids = set(
+            load_dell_report_settings(self.db).get("include_card_ids") or []
+        )
 
         visible_ids = {card.id for card in filtered}
         self._expanded_card_ids &= visible_ids
@@ -597,6 +605,11 @@ class DashboardView(ctk.CTkFrame):
             row, col = divmod(index, cols)
             subtitle = self._card_subtitle(card)
             start_collapsed = card.id not in self._expanded_card_ids
+            show_dell_include = (
+                card.card_type == "ssh"
+                and dell_report_family(getattr(card, "device_profile", "") or "")
+                in {"ibm", "hp"}
+            )
             try:
                 widget = GlowCard(
                     self.cards_frame,
@@ -623,6 +636,17 @@ class DashboardView(ctk.CTkFrame):
                     collapsed=start_collapsed,
                     on_selection_change=self._update_selection_status,
                     on_collapsed_change=self._on_card_collapsed_change,
+                    show_dell_report_include=show_dell_include,
+                    dell_report_include=str(card.id) in dell_include_ids,
+                    on_dell_report_include_change=(
+                        (
+                            lambda enabled, c=card: self._set_dell_report_include(
+                                c.id, enabled
+                            )
+                        )
+                        if show_dell_include
+                        else None
+                    ),
                 )
             except Exception as exc:
                 self.status_label.configure(text=f"Could not render card '{card.name}': {exc}")
@@ -952,6 +976,20 @@ class DashboardView(ctk.CTkFrame):
         else:
             self.status_label.configure(text=f"Monitoring off for {card.name} — no background SSH.")
             self._set_card_ssh_monitor_off(card.id)
+
+    def _set_dell_report_include(self, card_id: int, enabled: bool) -> None:
+        settings = load_dell_report_settings(self.db)
+        ids = list(settings.get("include_card_ids") or [])
+        key = str(card_id)
+        if enabled and key not in ids:
+            ids.append(key)
+        if not enabled:
+            ids = [x for x in ids if x != key]
+        settings["include_card_ids"] = ids
+        save_dell_report_settings(self.db, settings)
+        widget = self._find_card_widget(card_id)
+        if widget is not None and hasattr(widget, "set_dell_report_include"):
+            widget.set_dell_report_include(enabled)
 
     def _toggle_all_monitoring(self) -> None:
         enabled = bool(self.monitor_all_switch.get())

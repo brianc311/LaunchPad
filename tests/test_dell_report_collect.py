@@ -231,3 +231,56 @@ def test_maybe_upsert_creates_current_week_snapshot_when_missing(monkeypatch):
     assert snap["family"] == "ibm"
     assert snap["array_name"] == "FlashSystem 9200"
     assert snap["model"] == "IBM FlashSystem 9500"
+
+
+def test_collect_forced_include_blank_capacity_no_snapshot():
+    sites = [
+        {
+            "card_id": 99,
+            "name": "IBM - SVCPVCW1 - WAG1",
+            "device_profile": "ibm_svc_2145",
+            "capacity_summary": None,
+            "raw_capacity_summary": None,
+            "pools": [],
+        }
+    ]
+    ibm, hp, store = collect_dell_report_rows(
+        sites,
+        snapshot_store={},
+        include_pools=False,
+        include_card_ids={"99"},
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    assert hp == []
+    assert len(ibm) == 1
+    row = ibm[0]
+    assert row["facility"] == "Data center -WAG1"
+    assert row["array_name"] == "IBM - SVCPVCW1 - WAG1"
+    assert row["curr_usable_gib"] is None
+    assert row["curr_used_gib"] is None
+    assert row["curr_util"] is None
+    assert row["weekly_growth"] is None
+    assert "99" not in store
+
+
+def test_collect_skips_unreachable_without_include():
+    sites = [
+        {
+            "card_id": 99,
+            "name": "IBM - SVCPVCW1 - WAG1",
+            "device_profile": "ibm_svc_2145",
+            "capacity_summary": None,
+            "raw_capacity_summary": None,
+            "pools": [],
+        }
+    ]
+    ibm, hp, store = collect_dell_report_rows(
+        sites,
+        snapshot_store={},
+        include_card_ids=set(),
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    assert ibm == []
+    assert hp == []
+    assert store == {}
+

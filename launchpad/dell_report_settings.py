@@ -1,4 +1,4 @@
-"""Dell Report Admin settings: normalize, load, save enable flag + overrides."""
+"""Dell Report Admin settings: enable, overrides, include_card_ids."""
 
 from __future__ import annotations
 
@@ -31,8 +31,24 @@ def _normalize_overrides(raw: Any) -> dict[str, dict[str, str]]:
     return out
 
 
+def _normalize_include_ids(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if item is None or item == "":
+            continue
+        key = str(item).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 def normalize_dell_report_settings(raw: Any) -> dict:
-    """Return ``{"enabled": bool, "card_overrides": {...}}``; enabled defaults True."""
+    """Return enabled, card_overrides, include_card_ids; enabled defaults True."""
     data = raw if isinstance(raw, dict) else {}
     if "enabled" not in data:
         enabled = True
@@ -41,6 +57,7 @@ def normalize_dell_report_settings(raw: Any) -> dict:
     return {
         "enabled": enabled,
         "card_overrides": _normalize_overrides(data.get("card_overrides")),
+        "include_card_ids": _normalize_include_ids(data.get("include_card_ids")),
     }
 
 
@@ -63,3 +80,8 @@ def save_dell_report_settings(db, settings: dict) -> dict:
 
 def is_dell_report_enabled(db) -> bool:
     return bool(load_dell_report_settings(db)["enabled"])
+
+
+def is_dell_report_include_card(settings: dict, card_id: int | str) -> bool:
+    ids = settings.get("include_card_ids") or []
+    return str(card_id) in {str(x) for x in ids}

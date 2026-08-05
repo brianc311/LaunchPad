@@ -25,6 +25,23 @@ def test_admin_view_has_show_dell_report_checkbox():
     assert "Card overrides" in source
 
 
+def test_card_widget_has_dell_report_include_hook():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "card_widget.py"
+    ).read_text(encoding="utf-8")
+    assert "Dell Report" in source
+    assert "dell_report_include" in source
+    assert "show_dell_report_include" in source
+
+
+def test_dashboard_wires_dell_report_include():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
+    ).read_text(encoding="utf-8")
+    assert "include_card_ids" in source
+    assert "_set_dell_report_include" in source
+
+
 def test_dashboard_export_menu_has_dell_report_label():
     source = (
         Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"

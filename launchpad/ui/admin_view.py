@@ -1069,9 +1069,11 @@ class AdminView(ctk.CTkFrame):
                     "Dell Report", "Card overrides must be a JSON object."
                 )
                 return
+        existing = load_dell_report_settings(self.db)
         raw = {
             "enabled": bool(self.dell_report_enabled_var.get()),
             "card_overrides": overrides_raw,
+            "include_card_ids": list(existing.get("include_card_ids") or []),
         }
         saved = save_dell_report_settings(self.db, raw)
         self._dell_report_settings = saved
