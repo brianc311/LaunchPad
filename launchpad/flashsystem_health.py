@@ -16,6 +16,7 @@ from launchpad.flashsystem_parse import (
     format_command_output_html,
     parse_capacity_summary,
     parse_pool_capacity_rows,
+    parse_raw_capacity_summary,
 )
 
 _GOOD_STATUS = frozenset({"online", "ok", "normal", "active", "yes"})
@@ -262,10 +263,24 @@ def format_pools_capacity_html(pools: list[dict[str, Any]]) -> str:
 def format_capacity_report_html(
     system_capacity: dict[str, Any] | None,
     pools_output: str = "",
+    *,
+    raw_capacity: dict[str, Any] | None = None,
 ) -> str:
+    """Build capacity popup HTML; optional raw/physical block uses capacity-raw-wrap."""
     parts: list[str] = []
     if system_capacity:
         parts.append(format_capacity_popup_html(system_capacity))
+    if raw_capacity:
+        parts.append(
+            '<div class="capacity-raw-wrap">'
+            + _format_capacity_block(
+                raw_capacity,
+                summary_suffix="raw / physical capacity",
+                bar_label="Raw utilization",
+                section_class="capacity-section capacity-raw-block",
+            )
+            + "</div>"
+        )
     pools = parse_pool_capacity_rows(pools_output) if pools_output.strip() else []
     if pools:
         parts.append(format_pools_capacity_html(pools))
@@ -800,6 +815,8 @@ def analyze_health(
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     capacity: dict[str, Any] | None = None
+    system_capacity: dict[str, Any] | None = None
+    raw_capacity_summary: dict[str, Any] | None = None
     pools_output = ""
 
     if command_results:
@@ -829,6 +846,8 @@ def analyze_health(
                 break
         if system_output:
             capacity = _parse_system_capacity(system_output)
+            system_capacity = capacity
+            raw_capacity_summary = parse_raw_capacity_summary(system_output)
             if capacity and capacity["used_pct"] >= 80:
                 issues.append(
                     {
@@ -987,7 +1006,11 @@ def analyze_health(
                     }
                 )
 
-    popup_html = format_capacity_report_html(capacity, pools_output)
+    popup_html = format_capacity_report_html(
+        capacity,
+        pools_output,
+        raw_capacity=raw_capacity_summary,
+    )
     if not popup_html:
         popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
     if not popup_html:
@@ -1022,7 +1045,7 @@ def analyze_health(
                 "used_pct": float(capacity.get("used_pct") or 0),
             }
         ]
-    if not capacity and pools:
+    if not system_capacity and not capacity and pools:
         capacity = capacity_summary_from_pools(pools)
 
     # Raise issues from final capacity/pools so HPE CSV rollups are included.
@@ -1054,6 +1077,7 @@ def analyze_health(
     return {
         "health_issues": issues,
         "capacity_summary": capacity,
+        "raw_capacity_summary": raw_capacity_summary,
         "capacity_popup_html": popup_html,
         "pools": pools,
     }
