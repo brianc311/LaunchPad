@@ -29,6 +29,8 @@ REPORT_TITLE = "Dell Technologies Managed Services - Capacity Management Report"
 HOME_SHEET_NAME = "Home"
 IBM_SHEET_NAME = "IBM Report"
 HP_SHEET_NAME = "HP Report"
+IBM_FORECAST_SHEET_NAME = "IBM Forecast"
+HP_FORECAST_SHEET_NAME = "HP Forecast"
 
 STUB_SHEET_NAMES: list[str] = [
     "PowerMax Report",
@@ -64,7 +66,19 @@ _HEADER_LABELS = (
     "Weekly Growth %",
 )
 
+_FORECAST_HEADER_LABELS = (
+    "Facility",
+    "Storage Array",
+    "Model Number",
+    "Date",
+    "3 Month",
+    "6 Month",
+    "9 Month",
+    "12 Month",
+)
+
 _UTIL_COLUMNS = (6, 9)
+_FORECAST_UTIL_COLUMNS = (4, 5, 6, 7, 8)
 _GIB = 1024**3
 
 
@@ -200,6 +214,12 @@ def build_dell_report_workbook(
     _build_home_sheet(wb.active, report_date=when)
     _build_data_sheet(wb.create_sheet(IBM_SHEET_NAME), ibm_rows, report_date=when)
     _build_data_sheet(wb.create_sheet(HP_SHEET_NAME), hp_rows, report_date=when)
+    _build_forecast_sheet(
+        wb.create_sheet(IBM_FORECAST_SHEET_NAME), ibm_rows, report_date=when
+    )
+    _build_forecast_sheet(
+        wb.create_sheet(HP_FORECAST_SHEET_NAME), hp_rows, report_date=when
+    )
     for name in STUB_SHEET_NAMES:
         _build_stub_sheet(wb.create_sheet(name), report_date=when)
     return wb
@@ -284,7 +304,13 @@ def _build_home_sheet(ws: Worksheet, *, report_date: datetime) -> None:
     ws["A4"] = "Sheets"
     ws["A4"].font = Font(bold=True)
     row = 5
-    for title in [IBM_SHEET_NAME, HP_SHEET_NAME, *STUB_SHEET_NAMES]:
+    for title in [
+        IBM_SHEET_NAME,
+        HP_SHEET_NAME,
+        IBM_FORECAST_SHEET_NAME,
+        HP_FORECAST_SHEET_NAME,
+        *STUB_SHEET_NAMES,
+    ]:
         ws.cell(row=row, column=1, value=title)
         row += 1
     ws.column_dimensions["A"].width = 48
@@ -292,6 +318,22 @@ def _build_home_sheet(ws: Worksheet, *, report_date: datetime) -> None:
 
 def _build_stub_sheet(ws: Worksheet, *, report_date: datetime) -> None:
     _write_sheet_header(ws, report_date=report_date)
+
+
+def _build_forecast_sheet(
+    ws: Worksheet,
+    rows: list[dict],
+    *,
+    report_date: datetime,
+) -> None:
+    header_row = _write_forecast_sheet_header(ws, report_date=report_date)
+    data_start = header_row + 1
+    _write_forecast_grouped_rows(ws, rows, data_start=data_start)
+    if rows:
+        end_row = data_start + len(rows) - 1
+        _apply_direct_utilization_fills(
+            ws, data_start, end_row, util_columns=_FORECAST_UTIL_COLUMNS
+        )
 
 
 def _build_data_sheet(
@@ -307,6 +349,37 @@ def _build_data_sheet(
         end_row = data_start + len(rows) - 1
         _apply_direct_utilization_fills(ws, data_start, end_row)
         _apply_utilization_formatting(ws, data_start, end_row)
+
+
+def _write_forecast_grouped_rows(
+    ws: Worksheet,
+    rows: list[dict],
+    *,
+    data_start: int,
+) -> None:
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("facility") or "").lower(),
+            str(row.get("array_name") or "").lower(),
+        ),
+    )
+    last_facility: str | None = None
+    for offset, row in enumerate(sorted_rows):
+        excel_row = data_start + offset
+        facility = row.get("facility")
+        if facility == last_facility:
+            facility_value = None
+        else:
+            facility_value = facility
+            last_facility = facility
+        ws.cell(row=excel_row, column=1, value=facility_value)
+        ws.cell(row=excel_row, column=2, value=row.get("array_name"))
+        ws.cell(row=excel_row, column=3, value=row.get("model"))
+        curr_util = row.get("curr_util")
+        for col in _FORECAST_UTIL_COLUMNS:
+            cell = ws.cell(row=excel_row, column=col, value=curr_util)
+            cell.number_format = "0.0%"
 
 
 def _write_grouped_facility_rows(
@@ -350,6 +423,21 @@ def _apply_direct_utilization_fills(
             fill_color = utilization_led_fill(cell.value)
             if fill_color is not None:
                 cell.fill = PatternFill("solid", fgColor=fill_color)
+
+
+def _write_forecast_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
+    ws["A1"] = "Home"
+    ws["B1"] = REPORT_TITLE
+    ws["B1"].font = Font(bold=True)
+    header_row = 4
+    for col, label in enumerate(_FORECAST_HEADER_LABELS, start=1):
+        cell = ws.cell(row=header_row, column=col, value=label)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+    widths = (22, 24, 20, 14, 14, 14, 14, 14)
+    for col, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    return header_row
 
 
 def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:

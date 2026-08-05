@@ -6,6 +6,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from launchpad.dell_report_export import (
+    HOME_SHEET_NAME,
     STUB_SHEET_NAMES,
     build_dell_report_workbook,
     bytes_to_gib,
@@ -182,3 +183,36 @@ def _data_start_row(ws) -> int:
         if ws.cell(row, 1).value == "Facility":
             return row + 1
     raise AssertionError("Facility header row not found")
+
+
+def _forecast_data_start_row(ws) -> int:
+    for row in range(1, ws.max_row + 1):
+        if ws.cell(row, 5).value == "3 Month":
+            return row + 1
+    raise AssertionError("3 Month header row not found")
+
+
+def test_workbook_includes_ibm_and_hp_forecast_sheets():
+    wb = build_dell_report_workbook(
+        ibm_rows=[_minimal_row(curr_util=0.61)],
+        hp_rows=[_minimal_row(array_name="3PAR001", curr_util=0.82)],
+    )
+    assert "IBM Forecast" in wb.sheetnames
+    assert "HP Forecast" in wb.sheetnames
+    ibm_f = wb["IBM Forecast"]
+    start = _forecast_data_start_row(ibm_f)
+    for col in (4, 5, 6, 7, 8):
+        assert ibm_f.cell(start, col).value == 0.61
+    assert ibm_f.cell(start, 4).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
+
+
+def test_home_lists_forecast_sheets():
+    wb = build_dell_report_workbook(ibm_rows=[_minimal_row()], hp_rows=[])
+    home_text = " ".join(
+        str(c.value)
+        for row in wb[HOME_SHEET_NAME].iter_rows(max_row=20)
+        for c in row
+        if c.value
+    )
+    assert "IBM Forecast" in home_text
+    assert "HP Forecast" in home_text
