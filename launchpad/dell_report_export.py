@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -31,14 +33,69 @@ IBM_SHEET_NAME = "IBM Report"
 HP_SHEET_NAME = "HP Report"
 IBM_FORECAST_SHEET_NAME = "IBM Forecast"
 HP_FORECAST_SHEET_NAME = "HP Forecast"
+IBM_FORECAST_WKLY_SHEET_NAME = "IBM Forecast - Wkly"
+HP_FORECAST_WKLY_SHEET_NAME = "HP Forecast - Wkly"
 
-STUB_SHEET_NAMES: list[str] = [
+# Walgreens-style order: vendor Report / Forecast / Forecast - Wkly families.
+# Live IBM/HP Report+Forecast are filled; all others are empty header shells.
+ORDERED_SHEET_NAMES: list[str] = [
     "PowerMax Report",
+    "PowerMax Forecast",
+    "PowerMax Forecast - Wkly",
     "PowerStore Report",
+    "PowerStore Forecast",
+    "PowerStore Forecast - Wkly",
+    "PowerScale Report",
+    "PowerScale Forecast",
+    "PowerScale Forecast - Wkly",
     "NetApp Report",
+    "NetApp Forecast",
+    "NetApp Forecast - Wkly",
+    IBM_SHEET_NAME,
+    IBM_FORECAST_SHEET_NAME,
+    IBM_FORECAST_WKLY_SHEET_NAME,
+    HP_SHEET_NAME,
+    HP_FORECAST_SHEET_NAME,
+    HP_FORECAST_WKLY_SHEET_NAME,
     "Data Domain Report",
+    "Data Domain Forecast",
+    "Data Domain Forecast - Wkly",
+    "Cluster Report",
+    "Cluster Forecast",
+    "Cluster Forecast - Wkly",
+    "Host Report",
+    "Datastore Report",
     "ECS Report",
+    "ECS Forecast",
+    "ECS Forecast - Wkly",
 ]
+
+# Back-compat for tests that import STUB_SHEET_NAMES.
+STUB_SHEET_NAMES: list[str] = [
+    name
+    for name in ORDERED_SHEET_NAMES
+    if name
+    not in {
+        IBM_SHEET_NAME,
+        HP_SHEET_NAME,
+        IBM_FORECAST_SHEET_NAME,
+        HP_FORECAST_SHEET_NAME,
+    }
+]
+
+_ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "dell_report"
+_LOGO_FILES = ("logo_1.png", "logo_4.png")
+
+# Excel columns: A blank, B Home link, data from C (Facility) through L.
+_FIRST_DATA_COL = 3
+_HEADER_ROW = 9
+_FORECAST_HEADER_ROW = 9
+_META_ROW = 7
+_DATE_ROW = 8
+
+_HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
+_HEADER_FONT = Font(bold=True, color="FFFFFF")
+_TITLE_FONT = Font(bold=True, size=14, color="1F4E79")
 
 _DATA_COLUMNS = (
     ("facility", None),
@@ -57,12 +114,12 @@ _HEADER_LABELS = (
     "Facility",
     "Storage Array",
     "Model Number",
-    "Usable (GiB)",
-    "Used (GiB)",
-    "Utilization %",
-    "Usable (GiB)",
-    "Used (GiB)",
-    "Utilization %",
+    "Useable Capacity (GiB)",
+    "Used Capacity (GiB)",
+    "Utilization % ",
+    "Useable Capacity (GiB)",
+    "Used Capacity (GiB)",
+    "Utilization % ",
     "Weekly Growth %",
 )
 
@@ -77,8 +134,10 @@ _FORECAST_HEADER_LABELS = (
     "12 Month",
 )
 
-_UTIL_COLUMNS = (6, 9)
-_FORECAST_UTIL_COLUMNS = (4, 5, 6, 7, 8)
+# Utilization % columns (1-based Excel): prior H=8, current K=11.
+_UTIL_COLUMNS = (8, 11)
+# Forecast util columns: Date F=6 through 12 Month J=10.
+_FORECAST_UTIL_COLUMNS = (6, 7, 8, 9, 10)
 _GIB = 1024**3
 
 
@@ -223,16 +282,20 @@ def build_dell_report_workbook(
     when = _coerce_utc(report_date)
     wb = Workbook()
     _build_home_sheet(wb.active, report_date=when)
-    _build_data_sheet(wb.create_sheet(IBM_SHEET_NAME), ibm_rows, report_date=when)
-    _build_data_sheet(wb.create_sheet(HP_SHEET_NAME), hp_rows, report_date=when)
-    _build_forecast_sheet(
-        wb.create_sheet(IBM_FORECAST_SHEET_NAME), ibm_rows, report_date=when
-    )
-    _build_forecast_sheet(
-        wb.create_sheet(HP_FORECAST_SHEET_NAME), hp_rows, report_date=when
-    )
-    for name in STUB_SHEET_NAMES:
-        _build_stub_sheet(wb.create_sheet(name), report_date=when)
+    for name in ORDERED_SHEET_NAMES:
+        ws = wb.create_sheet(name)
+        if name == IBM_SHEET_NAME:
+            _build_data_sheet(ws, ibm_rows, report_date=when)
+        elif name == HP_SHEET_NAME:
+            _build_data_sheet(ws, hp_rows, report_date=when)
+        elif name == IBM_FORECAST_SHEET_NAME:
+            _build_forecast_sheet(ws, ibm_rows, report_date=when)
+        elif name == HP_FORECAST_SHEET_NAME:
+            _build_forecast_sheet(ws, hp_rows, report_date=when)
+        elif "Forecast" in name:
+            _build_forecast_sheet(ws, [], report_date=when)
+        else:
+            _build_stub_sheet(ws, report_date=when)
     return wb
 
 
@@ -309,22 +372,18 @@ def _prior_week_date(when: datetime) -> str:
 
 def _build_home_sheet(ws: Worksheet, *, report_date: datetime) -> None:
     ws.title = HOME_SHEET_NAME
-    ws["A1"] = REPORT_TITLE
-    ws["A1"].font = Font(bold=True, size=14)
-    ws["A2"] = f"Report date: {_format_report_date(report_date)}"
-    ws["A4"] = "Sheets"
-    ws["A4"].font = Font(bold=True)
-    row = 5
-    for title in [
-        IBM_SHEET_NAME,
-        HP_SHEET_NAME,
-        IBM_FORECAST_SHEET_NAME,
-        HP_FORECAST_SHEET_NAME,
-        *STUB_SHEET_NAMES,
-    ]:
-        ws.cell(row=row, column=1, value=title)
+    _add_logos(ws)
+    ws["B8"] = REPORT_TITLE
+    ws["B8"].font = _TITLE_FONT
+    ws["B9"] = f"Report date: {_format_report_date(report_date)}"
+    ws["B11"] = "Sheets"
+    ws["B11"].font = Font(bold=True)
+    row = 12
+    for title in ORDERED_SHEET_NAMES:
+        ws.cell(row=row, column=2, value=title)
         row += 1
-    ws.column_dimensions["A"].width = 48
+    ws.column_dimensions["A"].width = 4
+    ws.column_dimensions["B"].width = 48
 
 
 def _build_stub_sheet(ws: Worksheet, *, report_date: datetime) -> None:
@@ -362,6 +421,33 @@ def _build_data_sheet(
         _apply_utilization_formatting(ws, data_start, end_row)
 
 
+def _add_logos(ws: Worksheet) -> None:
+    """Embed bundled Dell header logos when assets exist; never fail export."""
+    col_anchor = "A1"
+    for name in _LOGO_FILES:
+        path = _ASSETS_DIR / name
+        if not path.is_file():
+            continue
+        try:
+            img = XLImage(str(path))
+        except Exception:
+            continue
+        max_height = 48
+        if img.height and img.height > max_height:
+            scale = max_height / float(img.height)
+            img.height = int(img.height * scale)
+            img.width = int(img.width * scale)
+        img.anchor = col_anchor
+        ws.add_image(img)
+        col_anchor = "E1"
+
+
+def _style_header_cell(cell) -> None:
+    cell.font = _HEADER_FONT
+    cell.fill = _HEADER_FILL
+    cell.alignment = Alignment(horizontal="center", wrap_text=True, vertical="center")
+
+
 def _write_forecast_grouped_rows(
     ws: Worksheet,
     rows: list[dict],
@@ -384,9 +470,9 @@ def _write_forecast_grouped_rows(
         else:
             facility_value = facility
             last_facility = facility
-        ws.cell(row=excel_row, column=1, value=facility_value)
-        ws.cell(row=excel_row, column=2, value=row.get("array_name"))
-        ws.cell(row=excel_row, column=3, value=row.get("model"))
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL, value=facility_value)
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL + 1, value=row.get("array_name"))
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL + 2, value=row.get("model"))
         curr_util = row.get("curr_util")
         for col in _FORECAST_UTIL_COLUMNS:
             cell = ws.cell(row=excel_row, column=col, value=curr_util)
@@ -415,7 +501,8 @@ def _write_grouped_facility_rows(
         else:
             facility_value = facility
             last_facility = facility
-        for col, (key, number_format) in enumerate(_DATA_COLUMNS, start=1):
+        for idx, (key, number_format) in enumerate(_DATA_COLUMNS):
+            col = _FIRST_DATA_COL + idx
             value = facility_value if key == "facility" else row.get(key)
             cell = ws.cell(row=excel_row, column=col, value=value)
             if number_format is not None:
@@ -437,47 +524,38 @@ def _apply_direct_utilization_fills(
 
 
 def _write_forecast_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
-    ws["A1"] = "Home"
-    ws["B1"] = REPORT_TITLE
-    ws["B1"].font = Font(bold=True)
-    header_row = 4
-    for col, label in enumerate(_FORECAST_HEADER_LABELS, start=1):
-        cell = ws.cell(row=header_row, column=col, value=label)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center", wrap_text=True)
-    widths = (22, 24, 20, 14, 14, 14, 14, 14)
+    _add_logos(ws)
+    ws.cell(row=_META_ROW, column=2, value="Home")
+    ws.cell(row=_META_ROW, column=3, value="Sum of Utilization %")
+    ws.cell(row=_META_ROW, column=6, value="Date")
+    for col, label in enumerate(_FORECAST_HEADER_LABELS, start=_FIRST_DATA_COL):
+        cell = ws.cell(row=_FORECAST_HEADER_ROW, column=col, value=label)
+        _style_header_cell(cell)
+    ws.cell(row=_DATE_ROW, column=_FIRST_DATA_COL + 3, value=_format_report_date(report_date))
+    widths = (4, 10, 22, 24, 20, 14, 12, 12, 12, 12)
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
-    return header_row
+    ws.row_dimensions[_FORECAST_HEADER_ROW].height = 30
+    return _FORECAST_HEADER_ROW
 
 
 def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
-    ws["A1"] = "Home"
-    ws["B1"] = REPORT_TITLE
-    ws["B1"].font = Font(bold=True)
-    ws["D2"] = _prior_week_date(report_date)
-    ws["G2"] = _format_report_date(report_date)
-    ws["D2"].alignment = Alignment(horizontal="center")
-    ws["G2"].alignment = Alignment(horizontal="center")
-    ws.merge_cells("D2:F2")
-    ws.merge_cells("G2:I2")
-    ws["D3"] = "Prior Week"
-    ws["G3"] = "Current Week"
-    ws["D3"].font = Font(bold=True)
-    ws["G3"].font = Font(bold=True)
-    ws["D3"].alignment = Alignment(horizontal="center")
-    ws["G3"].alignment = Alignment(horizontal="center")
-    ws.merge_cells("D3:F3")
-    ws.merge_cells("G3:I3")
-    header_row = 4
-    for col, label in enumerate(_HEADER_LABELS, start=1):
-        cell = ws.cell(row=header_row, column=col, value=label)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center", wrap_text=True)
-    widths = (22, 24, 20, 14, 14, 14, 14, 14, 14, 16)
+    _add_logos(ws)
+    ws.cell(row=_META_ROW, column=2, value="Home")
+    ws.cell(row=_META_ROW, column=6, value="Date")
+    ws.cell(row=_META_ROW, column=7, value="Values")
+    prior = ws.cell(row=_DATE_ROW, column=6, value=_prior_week_date(report_date))
+    current = ws.cell(row=_DATE_ROW, column=9, value=_format_report_date(report_date))
+    prior.alignment = Alignment(horizontal="center")
+    current.alignment = Alignment(horizontal="center")
+    for col, label in enumerate(_HEADER_LABELS, start=_FIRST_DATA_COL):
+        cell = ws.cell(row=_HEADER_ROW, column=col, value=label)
+        _style_header_cell(cell)
+    widths = (4, 10, 22, 24, 22, 16, 16, 14, 16, 16, 14, 16)
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
-    return header_row
+    ws.row_dimensions[_HEADER_ROW].height = 32
+    return _HEADER_ROW
 
 
 def _apply_utilization_formatting(

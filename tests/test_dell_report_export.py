@@ -7,7 +7,10 @@ from openpyxl import load_workbook
 
 from launchpad.dell_report_export import (
     HOME_SHEET_NAME,
+    ORDERED_SHEET_NAMES,
     STUB_SHEET_NAMES,
+    _FIRST_DATA_COL,
+    _HEADER_FILL,
     build_dell_report_workbook,
     bytes_to_gib,
     workbook_to_bytes,
@@ -40,8 +43,18 @@ def test_bytes_to_gib():
 
 def test_stub_sheet_names_include_required_tabs():
     names = " ".join(STUB_SHEET_NAMES)
-    for token in ("PowerMax", "PowerStore", "NetApp", "Data Domain", "ECS"):
+    for token in ("PowerMax", "PowerStore", "NetApp", "Data Domain", "ECS", "Forecast - Wkly"):
         assert token in names
+
+
+def test_ordered_sheets_place_ibm_hp_after_netapp():
+    assert ORDERED_SHEET_NAMES.index("NetApp Forecast - Wkly") < ORDERED_SHEET_NAMES.index(
+        "IBM Report"
+    )
+    assert ORDERED_SHEET_NAMES.index("IBM Report") < ORDERED_SHEET_NAMES.index("HP Report")
+    assert ORDERED_SHEET_NAMES.index("IBM Forecast") < ORDERED_SHEET_NAMES.index(
+        "IBM Forecast - Wkly"
+    )
 
 
 def test_workbook_has_ibm_hp_and_stub():
@@ -52,8 +65,9 @@ def test_workbook_has_ibm_hp_and_stub():
     assert "IBM Report" in wb.sheetnames
     assert "HP Report" in wb.sheetnames
     assert any("PowerMax" in name for name in wb.sheetnames)
-    stub = wb[[name for name in wb.sheetnames if "PowerMax" in name][0]]
-    assert stub.max_row <= 5
+    stub = wb[[name for name in wb.sheetnames if name == "PowerMax Report"][0]]
+    assert stub.cell(9, _FIRST_DATA_COL).value == "Facility"
+    assert stub.max_row == 9
 
 
 def test_home_sheet_title():
@@ -61,7 +75,7 @@ def test_home_sheet_title():
     home = wb.worksheets[0]
     title_cells = [
         str(cell.value)
-        for row in home.iter_rows(max_row=5)
+        for row in home.iter_rows(max_row=20)
         for cell in row
         if cell.value
     ]
@@ -81,8 +95,13 @@ def test_rows_sorted_by_facility_then_array_name():
     )
     ws = wb["IBM Report"]
     data_start = _data_start_row(ws)
-    facilities = [ws.cell(row, 1).value for row in range(data_start, ws.max_row + 1)]
-    arrays = [ws.cell(row, 2).value for row in range(data_start, ws.max_row + 1)]
+    facilities = [
+        ws.cell(row, _FIRST_DATA_COL).value for row in range(data_start, ws.max_row + 1)
+    ]
+    arrays = [
+        ws.cell(row, _FIRST_DATA_COL + 1).value
+        for row in range(data_start, ws.max_row + 1)
+    ]
     assert facilities == ["A-facility", None, "Z-facility"]
     assert arrays == ["A-array", "B-array", "Z-array"]
 
@@ -97,9 +116,10 @@ def test_utilization_cells_have_direct_led_fills():
     )
     ws = wb["IBM Report"]
     start = _data_start_row(ws)
-    assert ws.cell(start, 6).fill.fgColor.rgb[-6:].upper() == AMBER_FILL
-    assert ws.cell(start, 9).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
-    assert ws.cell(start + 1, 9).fill.fgColor.rgb[-6:].upper() == RED_FILL
+    # prior util col 8, curr util col 11
+    assert ws.cell(start, 8).fill.fgColor.rgb[-6:].upper() == AMBER_FILL
+    assert ws.cell(start, 11).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
+    assert ws.cell(start + 1, 11).fill.fgColor.rgb[-6:].upper() == RED_FILL
 
 
 def test_facility_shown_only_on_first_row_of_group():
@@ -113,8 +133,12 @@ def test_facility_shown_only_on_first_row_of_group():
     )
     ws = wb["IBM Report"]
     start = _data_start_row(ws)
-    facilities = [ws.cell(row, 1).value for row in range(start, ws.max_row + 1)]
-    arrays = [ws.cell(row, 2).value for row in range(start, ws.max_row + 1)]
+    facilities = [
+        ws.cell(row, _FIRST_DATA_COL).value for row in range(start, ws.max_row + 1)
+    ]
+    arrays = [
+        ws.cell(row, _FIRST_DATA_COL + 1).value for row in range(start, ws.max_row + 1)
+    ]
     assert arrays == ["A-array", "B-array", "Z-array"]
     assert facilities == ["A-facility", None, "Z-facility"]
 
@@ -127,19 +151,28 @@ def test_gib_and_utilization_values_written():
     )
     ws = wb["IBM Report"]
     row = _data_start_row(ws)
-    assert ws.cell(row, 1).value == "Data center -WAG1"
-    assert ws.cell(row, 2).value == "V7K001"
-    assert ws.cell(row, 3).value == "FlashSystem 9200"
-    assert ws.cell(row, 4).value == 100.0
-    assert ws.cell(row, 5).value == 50.0
-    assert ws.cell(row, 6).value == 0.5
-    assert ws.cell(row, 7).value == 100.0
-    assert ws.cell(row, 8).value == 60.0
-    assert ws.cell(row, 9).value == 0.6
-    assert ws.cell(row, 10).value == 0.2
-    assert ws.cell(row, 6).number_format == "0.0%"
-    assert ws.cell(row, 9).number_format == "0.0%"
-    assert ws.cell(row, 10).number_format == "0.0%"
+    c = _FIRST_DATA_COL
+    assert ws.cell(row, c).value == "Data center -WAG1"
+    assert ws.cell(row, c + 1).value == "V7K001"
+    assert ws.cell(row, c + 2).value == "FlashSystem 9200"
+    assert ws.cell(row, c + 3).value == 100.0
+    assert ws.cell(row, c + 4).value == 50.0
+    assert ws.cell(row, c + 5).value == 0.5
+    assert ws.cell(row, c + 6).value == 100.0
+    assert ws.cell(row, c + 7).value == 60.0
+    assert ws.cell(row, c + 8).value == 0.6
+    assert ws.cell(row, c + 9).value == 0.2
+    assert ws.cell(row, c + 5).number_format == "0.0%"
+    assert ws.cell(row, c + 8).number_format == "0.0%"
+    assert ws.cell(row, c + 9).number_format == "0.0%"
+    assert "Useable Capacity" in str(ws.cell(9, c + 3).value)
+    assert ws.cell(9, c + 3).fill.fgColor.rgb[-6:].upper() == _HEADER_FILL.fgColor.rgb[-6:].upper()
+
+
+def test_report_embeds_logos_when_assets_present():
+    wb = build_dell_report_workbook(ibm_rows=[_minimal_row()], hp_rows=[])
+    assert len(wb["IBM Report"]._images) >= 1
+    assert len(wb["HP Forecast"]._images) >= 1
 
 
 def test_utilization_conditional_formatting():
@@ -180,15 +213,17 @@ def test_workbook_to_bytes_roundtrip():
 
 def _data_start_row(ws) -> int:
     for row in range(1, ws.max_row + 1):
-        if ws.cell(row, 1).value == "Facility":
-            return row + 1
+        for col in range(1, 15):
+            if ws.cell(row, col).value == "Facility":
+                return row + 1
     raise AssertionError("Facility header row not found")
 
 
 def _forecast_data_start_row(ws) -> int:
     for row in range(1, ws.max_row + 1):
-        if ws.cell(row, 5).value == "3 Month":
-            return row + 1
+        for col in range(1, 15):
+            if ws.cell(row, col).value == "3 Month":
+                return row + 1
     raise AssertionError("3 Month header row not found")
 
 
@@ -201,18 +236,19 @@ def test_workbook_includes_ibm_and_hp_forecast_sheets():
     assert "HP Forecast" in wb.sheetnames
     ibm_f = wb["IBM Forecast"]
     start = _forecast_data_start_row(ibm_f)
-    for col in (4, 5, 6, 7, 8):
+    for col in (6, 7, 8, 9, 10):
         assert ibm_f.cell(start, col).value == 0.61
-    assert ibm_f.cell(start, 4).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
+    assert ibm_f.cell(start, 6).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
 
 
 def test_home_lists_forecast_sheets():
     wb = build_dell_report_workbook(ibm_rows=[_minimal_row()], hp_rows=[])
     home_text = " ".join(
         str(c.value)
-        for row in wb[HOME_SHEET_NAME].iter_rows(max_row=20)
+        for row in wb[HOME_SHEET_NAME].iter_rows(max_row=40)
         for c in row
         if c.value
     )
     assert "IBM Forecast" in home_text
     assert "HP Forecast" in home_text
+    assert "PowerMax Forecast - Wkly" in home_text
