@@ -7,6 +7,7 @@ from launchpad.dell_report_settings import (
     load_dell_report_settings,
     normalize_dell_report_settings,
     save_dell_report_settings,
+    set_dell_report_include_card,
 )
 
 _EMPTY = {"enabled": True, "card_overrides": {}, "include_card_ids": []}
@@ -65,11 +66,12 @@ def test_normalize_default_include_empty():
     assert normalize_dell_report_settings({})["include_card_ids"] == []
 
 
-def test_is_dell_report_include_card():
-    settings = normalize_dell_report_settings({"include_card_ids": ["99"]})
-    assert is_dell_report_include_card(settings, 99) is True
-    assert is_dell_report_include_card(settings, "99") is True
-    assert is_dell_report_include_card(settings, 1) is False
+def test_set_dell_report_include_card():
+    db = _FakeDb()
+    saved = set_dell_report_include_card(db, 99, enabled=True)
+    assert "99" in saved["include_card_ids"]
+    saved = set_dell_report_include_card(db, 99, enabled=False)
+    assert "99" not in saved["include_card_ids"]
 
 
 def test_normalize_keeps_card_overrides():

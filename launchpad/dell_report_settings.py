@@ -85,3 +85,16 @@ def is_dell_report_enabled(db) -> bool:
 def is_dell_report_include_card(settings: dict, card_id: int | str) -> bool:
     ids = settings.get("include_card_ids") or []
     return str(card_id) in {str(x) for x in ids}
+
+
+def set_dell_report_include_card(db, card_id: int | str, *, enabled: bool) -> dict:
+    """Add or remove card_id from include_card_ids; return saved settings."""
+    settings = load_dell_report_settings(db)
+    ids = list(settings.get("include_card_ids") or [])
+    key = str(card_id)
+    if enabled and key not in ids:
+        ids.append(key)
+    if not enabled:
+        ids = [x for x in ids if x != key]
+    settings["include_card_ids"] = ids
+    return save_dell_report_settings(db, settings)

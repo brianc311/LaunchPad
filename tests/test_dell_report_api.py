@@ -78,6 +78,50 @@ def _call_dell_report_export_api(
     return sent
 
 
+def _call_dell_report_settings_post(monkeypatch, server: HealthServer, payload: dict):
+    handler = object.__new__(_HealthHandler)
+    handler.path = "/api/dell-report-settings"
+    sent: dict = {}
+    body = json.dumps(payload).encode("utf-8")
+
+    def _send_json(data, status=200):
+        sent["json"] = data
+        sent["status"] = status
+
+    class _Headers(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    handler.headers = _Headers({"Content-Length": str(len(body))})
+    handler.rfile = __import__("io").BytesIO(body)
+    handler._send_json = _send_json
+    monkeypatch.setattr("launchpad.health_server.get_health_server", lambda: server)
+    handler.do_POST()
+    return sent
+
+
+def test_dell_report_settings_post_include_card(monkeypatch):
+    server = HealthServer()
+    store = {}
+
+    def _get(key, default=""):
+        return store.get(key, default)
+
+    def _set(key, value):
+        store[key] = value
+
+    server.set_settings_backend(_get, _set)
+    sent = _call_dell_report_settings_post(
+        monkeypatch, server, {"card_id": 42, "include": True}
+    )
+    assert sent["status"] == 200
+    assert "42" in sent["json"]["include_card_ids"]
+    sent2 = _call_dell_report_settings_post(
+        monkeypatch, server, {"card_id": 42, "include": False}
+    )
+    assert "42" not in sent2["json"]["include_card_ids"]
+
+
 def test_health_handler_declares_dell_report_export_route():
     source = inspect.getsource(_HealthHandler.do_GET)
 

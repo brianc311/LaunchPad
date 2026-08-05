@@ -223,6 +223,7 @@ class HealthCard:
             "port": self.port,
             "username": self.username,
             "device_profile": self.device_profile,
+            "dell_report_family": dell_report_family(self.device_profile),
             "model": model,
             "category": self.category,
             "command_mode": bool(
@@ -3093,6 +3094,35 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     return
                 server.set_monitor_enabled(card_id=card_id, enabled=enabled)
             self._send_json({"states": server.monitor_states(), "default": False})
+            return
+        if path == "/api/dell-report-settings":
+            from launchpad.dell_report_settings import set_dell_report_include_card
+
+            settings_view = server._settings_view_for_scan()
+            if settings_view is None:
+                self._send_json(
+                    {"error": "Settings backend unavailable"}, status=503
+                )
+                return
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            if "include" not in payload:
+                self._send_json({"error": "include required"}, status=400)
+                return
+            saved = set_dell_report_include_card(
+                settings_view, card_id, enabled=bool(payload.get("include"))
+            )
+            self._send_json(saved)
             return
         if path == "/api/snapshot-notes":
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -6471,8 +6501,8 @@ class HealthServer:
             save_dell_snapshots,
         )
 
-        # Spec: Dell Report defaults to monitored-on; include_card_ids always eligible.
-        include_monitor_off = False
+        # Spec: monitored-on by default; include_off from Capacity Report; include_card_ids always eligible.
+        # (Do not force include_monitor_off=False — callers pass the page toggle.)
 
         from launchpad.dell_report_settings import (
             load_dell_report_settings,

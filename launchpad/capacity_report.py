@@ -152,9 +152,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       cursor: pointer;
       user-select: none;
       margin-top: 8px;
+      margin-right: 14px;
     }
     .monitor-toggle input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
     .monitor-toggle.on { color: #4ade80; }
+    .dell-include-toggle.on { color: var(--accent); }
     .paused-note {
       margin: 8px 0 0;
       color: var(--muted);
@@ -489,7 +491,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           <input type="checkbox" id="show-title-toggle" checked>
           Show report title on print
         </label>
-        <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel.">
+        <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel. Does not add no-capacity sites to Dell Report — use the Dell Report checkbox on each site card for that.">
           <input type="checkbox" id="include-off-toggle">
           Include monitoring-off sites
         </label>
@@ -538,6 +540,56 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     let cardsCache = [];
     let siteNameOverrides = {};
     let monitorServerState = {};
+    let dellIncludeIds = new Set();
+
+    function isDellReportFamily(card) {
+      const family = (card.dell_report_family || "").toLowerCase();
+      if (family === "ibm" || family === "hp") return true;
+      const p = (card.device_profile || "").toLowerCase();
+      return /flashsystem|storwize|svc|xiv|ds8|ibm_|hpe|3par|primera|^hp_/.test(p);
+    }
+
+    function isDellIncludeOn(cardId) {
+      return dellIncludeIds.has(String(cardId));
+    }
+
+    async function loadDellIncludeState() {
+      try {
+        const res = await fetch("/api/dell-report-settings");
+        const data = await res.json();
+        dellIncludeIds = new Set(
+          (data.include_card_ids || []).map((id) => String(id))
+        );
+      } catch (_err) {
+        dellIncludeIds = new Set();
+      }
+    }
+
+    async function persistDellInclude(cardId, on) {
+      const key = String(cardId);
+      if (on) dellIncludeIds.add(key);
+      else dellIncludeIds.delete(key);
+      try {
+        await fetch("/api/dell-report-settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ card_id: cardId, include: on }),
+        });
+      } catch (_err) {
+        /* best-effort */
+      }
+    }
+
+    function setDellInclude(cardId, on) {
+      void persistDellInclude(cardId, on).then(() => {
+        const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
+        if (!section) return;
+        const toggle = section.querySelector(".dell-include-toggle");
+        const input = section.querySelector(".dell-include-switch");
+        if (toggle) toggle.classList.toggle("on", on);
+        if (input) input.checked = on;
+      });
+    }
 
     function isMonitorOn(cardId) {
       const key = String(cardId);
@@ -982,6 +1034,8 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         ? `Last updated: ${card.updated_at}`
         : "Not refreshed yet";
       const monitorOn = isMonitorOn(card.id);
+      const dellFamily = isDellReportFamily(card);
+      const dellIncludeOn = isDellIncludeOn(card.id);
       const offClass = monitorOn ? "" : " monitor-off";
       const issues = capacityIssues(card);
       const hasCritical = issues.some((issue) => issue.severity === "critical");
@@ -999,8 +1053,18 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         body =
           capacityAlertBanner(card) +
           '<div class="error">No capacity data for this site. ' +
-          "Turn on Monitor and refresh, or check SSH credentials in Admin.</div>";
+          "Turn on Monitor and refresh, or check SSH credentials in Admin." +
+          (dellFamily
+            ? " Or check <strong>Dell Report</strong> on this card to list it on the Dell workbook with blank capacity."
+            : "") +
+          "</div>";
       }
+      const dellToggle = dellFamily
+        ? `<label class="monitor-toggle dell-include-toggle no-print${dellIncludeOn ? " on" : ""}" title="Include on Dell Report even when SSH/capacity fails (capacity cells blank).">
+              <input type="checkbox" class="dell-include-switch" data-id="${card.id}"${dellIncludeOn ? " checked" : ""}>
+              Dell Report
+            </label>`
+        : "";
       return `
         <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}${alertClass}" data-id="${card.id}">
           <div class="site-head">
@@ -1016,6 +1080,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
               <input type="checkbox" class="monitor-switch" data-id="${card.id}"${monitorOn ? " checked" : ""}>
               Monitor
             </label>
+            ${dellToggle}
             <p class="paused-note no-print"${monitorOn ? ' style="display:none"' : ""}>Monitoring off — showing last snapshot. Turn on Monitor to connect over SSH.</p>
             <p class="updated">${escapeHtml(updated)}</p>
           </div>
@@ -1064,6 +1129,10 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       document.querySelectorAll(".monitor-switch").forEach((input) => {
         const cardId = parseInt(input.dataset.id, 10);
         input.onchange = () => setMonitor(cardId, input.checked);
+      });
+      document.querySelectorAll(".dell-include-switch").forEach((input) => {
+        const cardId = parseInt(input.dataset.id, 10);
+        input.onchange = () => setDellInclude(cardId, input.checked);
       });
       sorted.forEach((card) => applyMonitorVisual(card.id));
       updateMasterMonitorToggle();
@@ -1279,6 +1348,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           // Sync is best-effort; /api/cards also syncs when LaunchPad is unlocked.
         }
         await loadMonitorState();
+        await loadDellIncludeState();
         const res = await fetch("/api/cards");
         if (!res.ok) {
           throw new Error(`Health server returned ${res.status}`);
