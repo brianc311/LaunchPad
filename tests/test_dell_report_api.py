@@ -96,7 +96,7 @@ def test_dell_report_settings_enabled_true_by_default(monkeypatch):
     sent = _call_dell_report_settings_api(monkeypatch, server)
 
     assert sent["status"] == 200
-    assert sent["json"] == {"enabled": True}
+    assert sent["json"] == {"enabled": True, "card_overrides": {}}
 
 
 def test_dell_report_settings_enabled_true_when_no_saved_setting(monkeypatch):
@@ -106,7 +106,7 @@ def test_dell_report_settings_enabled_true_when_no_saved_setting(monkeypatch):
     sent = _call_dell_report_settings_api(monkeypatch, server)
 
     assert sent["status"] == 200
-    assert sent["json"] == {"enabled": True}
+    assert sent["json"] == {"enabled": True, "card_overrides": {}}
 
 
 def test_dell_report_settings_returns_disabled_when_saved(monkeypatch):
@@ -122,7 +122,7 @@ def test_dell_report_settings_returns_disabled_when_saved(monkeypatch):
     sent = _call_dell_report_settings_api(monkeypatch, server)
 
     assert sent["status"] == 200
-    assert sent["json"] == {"enabled": False}
+    assert sent["json"] == {"enabled": False, "card_overrides": {}}
 
 
 def test_dell_report_export_disabled_returns_403(monkeypatch):

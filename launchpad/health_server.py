@@ -6525,8 +6525,22 @@ class HealthServer:
                 )
             )
 
+        from launchpad.dell_report_settings import load_dell_report_settings
+
+        settings_view = self._settings_view_for_scan()
+        overrides: dict = {}
+        if settings_view is not None:
+            overrides = load_dell_report_settings(settings_view).get(
+                "card_overrides"
+            ) or {}
+
         store = load_dell_snapshots()
-        ibm_rows, hp_rows, store = collect_dell_report_rows(sites, snapshot_store=store)
+        ibm_rows, hp_rows, store = collect_dell_report_rows(
+            sites,
+            snapshot_store=store,
+            include_pools=include_pools,
+            card_overrides=overrides,
+        )
         save_dell_snapshots(store)
         ensure_dell_report_has_rows(ibm_rows, hp_rows)
 

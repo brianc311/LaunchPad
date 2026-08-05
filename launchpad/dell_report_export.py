@@ -15,8 +15,9 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from launchpad.capacity_export import ExportSite
-from launchpad.dell_report_facility import facility_from_name
+from launchpad.dell_report_capacity import select_dell_capacity_summary
 from launchpad.dell_report_family import dell_report_family
+from launchpad.dell_report_identity import resolve_dell_identity
 from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
 from launchpad.dell_report_snapshots import (
     has_week_snapshot,
@@ -25,7 +26,6 @@ from launchpad.dell_report_snapshots import (
     upsert_week_snapshot,
     weekly_growth_fraction,
 )
-from launchpad.flashsystem_health import capacity_summary_from_pools
 
 REPORT_TITLE = "Dell Technologies Managed Services - Capacity Management Report"
 HOME_SHEET_NAME = "Home"
@@ -164,13 +164,15 @@ def collect_dell_report_rows(
     *,
     snapshot_store: dict,
     now: datetime | None = None,
+    include_pools: bool = True,
+    card_overrides: dict | None = None,
 ) -> tuple[list[dict], list[dict], dict]:
-    """Split ibm/hp rows from capacity_summary; upsert current week if missing;
-    attach prior/current/growth; return (ibm_rows, hp_rows, updated_store)."""
+    """Split ibm/hp rows; upsert current week if missing; return rows + store."""
     when = _coerce_utc(now)
     week = iso_week_key(when)
     captured_at = when.isoformat()
     store = dict(snapshot_store or {})
+    overrides = card_overrides or {}
     ibm_rows: list[dict] = []
     hp_rows: list[dict] = []
 
@@ -182,7 +184,12 @@ def collect_dell_report_rows(
         if family is None or card_id is None:
             continue
 
-        summary = _capacity_summary_for_site(site)
+        summary = select_dell_capacity_summary(
+            capacity_summary=_site_value(site, "capacity_summary"),
+            raw_capacity_summary=_site_value(site, "raw_capacity_summary"),
+            pools=_site_value(site, "pools") or [],
+            include_pools=include_pools,
+        )
         if not summary:
             continue
 
@@ -191,9 +198,16 @@ def collect_dell_report_rows(
         if total_bytes <= 0:
             continue
 
-        facility = facility_from_name(name)
-        model = str(summary.get("name") or device_profile or "")
-        array_name = name
+        ident = resolve_dell_identity(
+            card_id=card_id,
+            site_name=name,
+            device_profile=device_profile,
+            summary_name=str(summary.get("name") or ""),
+            overrides=overrides,
+        )
+        facility = ident["facility"]
+        model = ident["model"]
+        array_name = ident["array_name"]
 
         if not has_week_snapshot(store, card_id, week):
             store = upsert_week_snapshot(
@@ -216,6 +230,7 @@ def collect_dell_report_rows(
             continue
 
         row = _row_from_snapshots(prior, current)
+        row["card_id"] = card_id
         if family == "ibm":
             ibm_rows.append(row)
         else:
@@ -229,6 +244,8 @@ def maybe_upsert_dell_snapshot_for_card(
     *,
     snapshot_store: dict,
     now: datetime | None = None,
+    include_pools: bool = True,
+    card_overrides: dict | None = None,
 ) -> dict:
     """Best-effort upsert for the current ISO week when missing."""
     when = _coerce_utc(now)
@@ -247,10 +264,12 @@ def maybe_upsert_dell_snapshot_for_card(
         getattr(card, "command_results", None),
         getattr(card, "metrics", None),
     )
-    summary = analysis.get("capacity_summary")
-    pools = analysis.get("pools") or []
-    if (not summary or not int(summary.get("total_bytes") or 0)) and pools:
-        summary = capacity_summary_from_pools(pools) or summary
+    summary = select_dell_capacity_summary(
+        capacity_summary=analysis.get("capacity_summary"),
+        raw_capacity_summary=analysis.get("raw_capacity_summary"),
+        pools=analysis.get("pools") or [],
+        include_pools=include_pools,
+    )
     if not summary:
         return snapshot_store
 
@@ -262,16 +281,23 @@ def maybe_upsert_dell_snapshot_for_card(
     if has_week_snapshot(snapshot_store, card_id, week):
         return snapshot_store
 
+    ident = resolve_dell_identity(
+        card_id=card_id,
+        site_name=name,
+        device_profile=device_profile,
+        summary_name=str(summary.get("name") or ""),
+        overrides=card_overrides or {},
+    )
     return upsert_week_snapshot(
         snapshot_store,
         card_id=card_id,
         week=week,
         usable_bytes=total_bytes,
         used_bytes=used_bytes,
-        model=str(summary.get("name") or device_profile or ""),
-        facility=facility_from_name(name),
+        model=ident["model"],
+        facility=ident["facility"],
         family=family,
-        array_name=name,
+        array_name=ident["array_name"],
         captured_at=when.isoformat(),
     )
 
@@ -312,14 +338,6 @@ def _site_value(site: ExportSite | dict[str, Any], key: str) -> Any:
     if isinstance(site, dict):
         return site.get(key)
     return getattr(site, key, None)
-
-
-def _capacity_summary_for_site(site: ExportSite | dict[str, Any]) -> dict[str, Any] | None:
-    summary = _site_value(site, "capacity_summary")
-    pools = _site_value(site, "pools") or []
-    if (not summary or not int(summary.get("total_bytes") or 0)) and pools:
-        summary = capacity_summary_from_pools(pools) or summary
-    return summary if isinstance(summary, dict) else None
 
 
 def _util_fraction(used_bytes: float, total_bytes: float) -> float | None:

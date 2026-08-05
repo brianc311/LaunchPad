@@ -58,12 +58,44 @@ def test_collect_splits_ibm_and_hp_rows():
 
     assert len(ibm_rows) == 1
     assert len(hp_rows) == 1
-    assert ibm_rows[0]["array_name"] == "WAG1_FS9200_1"
-    assert hp_rows[0]["array_name"] == "HPE-3PAR-site"
+    assert ibm_rows[0]["array_name"] == "FlashSystem 9200"
+    assert hp_rows[0]["array_name"] == "FlashSystem 9200"
     assert ibm_rows[0]["facility"] == "Data center -WAG1"
+    assert ibm_rows[0]["model"] == "IBM FlashSystem 9500"
+    assert ibm_rows[0]["card_id"] == 1
     assert has_week(store, 1, "2026-W32")
     assert has_week(store, 2, "2026-W32")
     assert "3" not in store
+
+
+def test_collect_uses_raw_when_include_pools_false():
+    sites = [
+        {
+            "card_id": 5,
+            "name": "Primera Remote",
+            "device_profile": "hpe_primera_600",
+            "capacity_summary": None,
+            "raw_capacity_summary": {
+                "name": "Vdiprimera101",
+                "total_bytes": 200 * 1024**3,
+                "used_bytes": 50 * 1024**3,
+                "used_pct": 25.0,
+            },
+            "pools": [],
+        }
+    ]
+    ibm, hp, store = collect_dell_report_rows(
+        sites,
+        snapshot_store={},
+        include_pools=False,
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    assert ibm == []
+    assert len(hp) == 1
+    assert hp[0]["array_name"] == "Vdiprimera101"
+    assert hp[0]["facility"] == "Remote"
+    assert hp[0]["model"] == "HPE Primera 600 4-way"
+    assert has_week(store, 5, "2026-W32")
 
 
 def has_week(store, card_id, week):
@@ -152,4 +184,5 @@ def test_maybe_upsert_creates_current_week_snapshot_when_missing(monkeypatch):
     assert snap["used_bytes"] == 60 * 1024**3
     assert snap["usable_bytes"] == 100 * 1024**3
     assert snap["family"] == "ibm"
-    assert snap["array_name"] == "WAG1_FS9200_1"
+    assert snap["array_name"] == "FlashSystem 9200"
+    assert snap["model"] == "IBM FlashSystem 9500"
