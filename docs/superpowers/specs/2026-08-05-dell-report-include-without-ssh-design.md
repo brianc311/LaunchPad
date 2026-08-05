@@ -1,7 +1,7 @@
 # Dell Report Include-Without-SSH — Design
 
 **Date:** 2026-08-05  
-**Status:** Approved (pending operator review of this written spec)  
+**Status:** Approved  
 **App version target:** 1.6.121+  
 **Extends:** `docs/superpowers/specs/2026-08-05-dell-report-raw-facility-wkly-design.md`  
 **Problem context:** Some IBM/HPE cards (e.g. `IBM - SVCPVCW1 - WAG1`, `IBM - XIV Danville - Remote`, `No Access - Wag1_XIV_13557 - WAG1`) never get live capacity because SSH fails, so Dell Report drops them. Operators need an explicit opt-in to keep those rows on the report.
