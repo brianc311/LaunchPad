@@ -23,7 +23,12 @@ def test_facility_wag_priority_over_dc_host_prefix():
 def test_facility_distribution_patterns():
     assert facility_from_name("east-dc-primary") == "Distribution center"
     assert facility_from_name("v7kNYC-g2") == "Distribution center"
-    assert facility_from_name("v5k remote backup") == "Other"
+    assert facility_from_name("v5k remote backup") == "Remote"
+
+
+def test_facility_remote_from_name():
+    assert facility_from_name("Anderson, SC - Remote") == "Remote"
+    assert facility_from_name("REMOTE site") == "Remote"
 
 
 def test_family_ibm_hp():
