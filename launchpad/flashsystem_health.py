@@ -1006,16 +1006,6 @@ def analyze_health(
                     }
                 )
 
-    popup_html = format_capacity_report_html(
-        capacity,
-        pools_output,
-        raw_capacity=raw_capacity_summary,
-    )
-    if not popup_html:
-        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
-    if not popup_html:
-        popup_html = format_preset_capacity_fallback_html(command_results)
-
     # Always fill capacity for Linux / metric hosts — not only when a popup exists.
     if not capacity:
         root_item = _find_result(command_results, "capacity - root disk", "df -h /")
@@ -1031,9 +1021,6 @@ def analyze_health(
         if not capacity and metrics:
             capacity = _capacity_from_metrics(metrics)
 
-    if not popup_html and capacity:
-        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
-
     pools = parse_pool_capacity_rows(pools_output) if pools_output else []
     if not pools and capacity:
         pools = [
@@ -1047,6 +1034,20 @@ def analyze_health(
         ]
     if not system_capacity and not capacity and pools:
         capacity = capacity_summary_from_pools(pools)
+
+    # Build System / Raw / pool HTML after capacity resolution so HPE cards still
+    # get a System utilization bar when showsys failed but CPG rollup exists.
+    popup_html = format_capacity_report_html(
+        system_capacity or capacity,
+        pools_output,
+        raw_capacity=raw_capacity_summary,
+    )
+    if not popup_html:
+        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
+    if not popup_html:
+        popup_html = format_preset_capacity_fallback_html(command_results)
+    if not popup_html and capacity:
+        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
 
     # Raise issues from final capacity/pools so HPE CSV rollups are included.
     if capacity and float(capacity.get("used_pct") or 0) >= 80:

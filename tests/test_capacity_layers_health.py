@@ -92,3 +92,54 @@ def test_analyze_health_popup_html_includes_raw_wrap_when_physical_present():
     ]
     analysis = analyze_health("HPE-WAG", results, None)
     assert "capacity-raw-wrap" in analysis["capacity_popup_html"]
+
+
+def test_analyze_health_system_bar_from_cpg_when_showsys_unparseable():
+    """When showsys has no usable totals, still show System utilization from CPG rollup."""
+    results = [
+        {
+            "label": "Capacity - System",
+            "command": "showsys -d",
+            "output": "System Name : HPEW101\nTotal Capacity : --",
+            "error": None,
+        },
+        {
+            "label": "Capacity - CPG %",
+            "command": "showcpg",
+            "output": SAMPLE_SHOWCPG_NEAR_FULL,
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE-WAG", results, None)
+    html = analysis["capacity_popup_html"] or ""
+    assert "System utilization" in html
+    assert analysis["capacity_summary"] is not None
+    assert analysis["capacity_summary"]["used_pct"] >= 80
+
+
+def test_analyze_health_raw_from_total_raw_capacity_labels():
+    showsys = """------------General-------------
+System Name : HPEW101SSTOR01
+-----System Capacity (MB)-----
+Total Capacity : 25000000
+Allocated Capacity : 24700000
+Free Capacity : 300000
+-----Raw Capacity (MB)-----
+Total Raw Capacity : 34000000
+Free Raw Capacity : 9000000
+Allocated Raw Capacity : 25000000
+"""
+    results = [
+        {
+            "label": "Capacity - System",
+            "command": "showsys -d",
+            "output": showsys,
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE-WAG", results, None)
+    html = analysis["capacity_popup_html"] or ""
+    assert "System utilization" in html
+    assert "Raw utilization" in html
+    assert "capacity-raw-wrap" in html
+    assert analysis["raw_capacity_summary"]["used_pct"] == 73.5

@@ -63,6 +63,44 @@ def test_parse_raw_capacity_summary_from_physical_fields():
     assert ibm_raw["used_pct"] == 25.0
 
 
+def test_parse_raw_capacity_summary_hpe_total_raw_capacity_labels():
+    """Primera/3PAR showsys -d often uses Total/Free/Allocated Raw Capacity."""
+    showsys = """------------General-------------
+System Name : HPEW101SSTOR01
+-----System Capacity (MB)-----
+Total Capacity : 25000000
+Allocated Capacity : 24700000
+Free Capacity : 300000
+-----Raw Capacity (MB)-----
+Total Raw Capacity : 34000000
+Free Raw Capacity : 9000000
+Allocated Raw Capacity : 25000000
+"""
+    capacity = parse_capacity_summary(showsys)
+    assert capacity is not None
+    assert capacity["used_pct"] == 98.8
+
+    raw = parse_raw_capacity_summary(showsys)
+    assert raw is not None
+    assert raw["total_bytes"] == 34000000 * 1024**2
+    assert raw["used_bytes"] == 25000000 * 1024**2
+    assert raw["free_bytes"] == 9000000 * 1024**2
+    assert raw["used_pct"] == 73.5
+
+
+def test_parse_capacity_summary_hpe_showsys_totalcap_table():
+    """Bare showsys summary table uses TotalCap/AllocCap/FreeCap (MB)."""
+    showsys = """ID --Name-- ---Model---- --Serial-- Nodes Master ClusterLED TotalCap AllocCap  FreeCap FailedCap
+0 HPEW101SSTOR01 HP_3PAR 12345 2 0 green 25000000 24700000 300000 0
+"""
+    capacity = parse_capacity_summary(showsys)
+    assert capacity is not None
+    assert capacity["total_bytes"] == 25000000 * 1024**2
+    assert capacity["used_bytes"] == 24700000 * 1024**2
+    assert capacity["free_bytes"] == 300000 * 1024**2
+    assert capacity["used_pct"] == 98.8
+
+
 def test_parse_capacity_summary_ibm_usable_free_without_allocated():
     """Regression: free_capacity must not match physical_free_capacity."""
     ibm = parse_capacity_summary(IBM_LSSYSTEM_NO_ALLOCATED)

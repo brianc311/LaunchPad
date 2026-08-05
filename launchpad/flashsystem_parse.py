@@ -437,6 +437,14 @@ _MB_CAPACITY_KEYS = frozenset(
         "failed_capacity",
         "raw_capacity",
         "raw_free_capacity",
+        "raw_used_capacity",
+        "total_raw_capacity",
+        "free_raw_capacity",
+        "allocated_raw_capacity",
+        "totalcap",
+        "alloccap",
+        "freecap",
+        "failedcap",
     }
 )
 
@@ -488,6 +496,9 @@ _RAW_CAPACITY_KEYS = frozenset(
         "raw_capacity",
         "raw_free_capacity",
         "raw_used_capacity",
+        "total_raw_capacity",
+        "free_raw_capacity",
+        "allocated_raw_capacity",
         "physical_capacity",
         "physical_free_capacity",
         "physical_used_capacity",
@@ -515,12 +526,14 @@ def parse_raw_capacity_summary(output: str) -> dict[str, Any] | None:
 
     total = _pick_capacity_bytes(
         lowered,
+        "total_raw_capacity",
         "raw_capacity",
         "physical_capacity",
         default_unit=default_unit,
     )
     free = _pick_capacity_bytes(
         lowered,
+        "free_raw_capacity",
         "raw_free_capacity",
         "physical_free_capacity",
         default_unit=default_unit,
@@ -528,9 +541,20 @@ def parse_raw_capacity_summary(output: str) -> dict[str, Any] | None:
 
     if total and free is not None:
         used = max(0.0, total - free)
+        allocated = _pick_capacity_bytes(
+            lowered,
+            "allocated_raw_capacity",
+            "raw_used_capacity",
+            "physical_used_capacity",
+            default_unit=default_unit,
+        )
+        if allocated is not None and total:
+            used = allocated
+            free = max(0.0, total - used)
     else:
         used = _pick_capacity_bytes(
             lowered,
+            "allocated_raw_capacity",
             "raw_used_capacity",
             "physical_used_capacity",
             default_unit=default_unit,
@@ -636,11 +660,22 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
                 (idx for idx, header in enumerate(headers) if "used" in header.lower() and "%" in header),
                 None,
             )
+        def _header_key(header: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", header.lower())
+
         total_idx = next(
             (
                 idx
                 for idx, header in enumerate(headers)
-                if header.lower() in {"total", "capacity", "totalcapacity", "usr_total_mb"}
+                if _header_key(header)
+                in {
+                    "total",
+                    "capacity",
+                    "totalcapacity",
+                    "totalcap",
+                    "usr_total_mb",
+                    "usrtotalmb",
+                }
             ),
             None,
         )
@@ -648,7 +683,15 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
             (
                 idx
                 for idx, header in enumerate(headers)
-                if header.lower() in {"used", "usedcapacity", "allocated", "usr_used_mb"}
+                if _header_key(header)
+                in {
+                    "used",
+                    "usedcapacity",
+                    "allocated",
+                    "alloccap",
+                    "usr_used_mb",
+                    "usrusedmb",
+                }
             ),
             None,
         )
@@ -656,18 +699,38 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
             (
                 idx
                 for idx, header in enumerate(headers)
-                if header.lower() in {"free", "rawfree", "usablefree", "free_capacity"}
+                if _header_key(header)
+                in {
+                    "free",
+                    "rawfree",
+                    "usablefree",
+                    "free_capacity",
+                    "freecapacity",
+                    "freecap",
+                }
             ),
             None,
         )
         if rows and (total_idx is not None or free_idx is not None or used_idx is not None):
             best_row = rows[0]
+            showsys_table = any(
+                _header_key(header) in {"totalcap", "alloccap", "freecap"}
+                for header in headers
+            )
+
             def cell_size(idx: int | None) -> float | None:
                 if idx is None or idx >= len(best_row):
                     return None
                 raw = best_row[idx].strip()
                 header = headers[idx] if idx < len(headers) else ""
-                if header.lower().endswith("_mb") or "(mib)" in text.lower() or default_unit == "MB":
+                header_l = header.lower()
+                if (
+                    header_l.endswith("_mb")
+                    or "(mib)" in text.lower()
+                    or default_unit == "MB"
+                    or showsys_table
+                    or _header_key(header) in {"totalcap", "alloccap", "freecap", "failedcap"}
+                ):
                     if raw and not re.search(r"[A-Za-z]", raw):
                         return _parse_size_bytes(f"{raw}MB")
                 return _parse_size_bytes(raw)
