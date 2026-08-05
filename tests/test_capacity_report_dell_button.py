@@ -10,6 +10,9 @@ def test_capacity_report_html_has_dell_report_button():
     assert "/api/dell-report-settings" in CAPACITY_REPORT_HTML
     assert "dell-include-switch" in CAPACITY_REPORT_HTML
     assert "loadDellIncludeState" in CAPACITY_REPORT_HTML
+    assert 'id="dell-include-noss-btn"' in CAPACITY_REPORT_HTML
+    assert "Include no-SSH on Dell Report" in CAPACITY_REPORT_HTML
+    assert "includeNoSshOnDellReport" in CAPACITY_REPORT_HTML
     # Do not clobber "Building…" status while Export Excel / Dell Report is in flight.
     assert "exportBusy" in CAPACITY_REPORT_HTML
     assert "excelBtn.disabled" in CAPACITY_REPORT_HTML

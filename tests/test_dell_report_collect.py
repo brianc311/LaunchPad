@@ -263,7 +263,29 @@ def test_collect_forced_include_blank_capacity_no_snapshot():
     assert "99" not in store
 
 
-def test_collect_skips_unreachable_without_include():
+def test_collect_forced_include_blank_with_empty_profile_uses_name_family():
+    sites = [
+        {
+            "card_id": 88,
+            "name": "IBM - XIV Danville - Remote",
+            "device_profile": "",
+            "capacity_summary": None,
+            "raw_capacity_summary": None,
+            "pools": [],
+        }
+    ]
+    ibm, hp, store = collect_dell_report_rows(
+        sites,
+        snapshot_store={},
+        include_card_ids={"88"},
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    assert hp == []
+    assert len(ibm) == 1
+    assert ibm[0]["facility"] == "Remote"
+    assert ibm[0]["array_name"] == "IBM - XIV Danville - Remote"
+    assert "88" not in store
+
     sites = [
         {
             "card_id": 99,

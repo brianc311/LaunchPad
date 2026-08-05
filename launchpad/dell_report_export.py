@@ -16,7 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from launchpad.capacity_export import ExportSite
 from launchpad.dell_report_capacity import select_dell_capacity_summary
-from launchpad.dell_report_family import dell_report_family
+from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.dell_report_identity import resolve_dell_identity
 from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
 from launchpad.dell_report_snapshots import (
@@ -192,7 +192,7 @@ def collect_dell_report_rows(
         card_id = _site_value(site, "card_id")
         name = str(_site_value(site, "name") or "")
         device_profile = str(_site_value(site, "device_profile") or "")
-        family = dell_report_family(device_profile)
+        family = dell_report_family_for_site(device_profile, site_name=name)
         if family is None or card_id is None:
             continue
 
@@ -289,7 +289,7 @@ def maybe_upsert_dell_snapshot_for_card(
     card_id = getattr(card, "card_id", None)
     name = str(getattr(card, "name", "") or "")
     device_profile = str(getattr(card, "device_profile", "") or "")
-    family = dell_report_family(device_profile)
+    family = dell_report_family_for_site(device_profile, site_name=name)
     if family is None or card_id is None:
         return snapshot_store
 

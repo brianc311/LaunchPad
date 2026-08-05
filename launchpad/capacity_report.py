@@ -459,6 +459,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <button type="button" id="excel-btn" class="secondary">Export Excel</button>
         <button type="button" id="dell-report-btn" class="secondary" style="display:none">Dell Report</button>
+        <button type="button" id="dell-include-noss-btn" class="secondary" style="display:none" title="Check Dell Report on every IBM/HPE site that has no live capacity / SSH failure so they appear on the Dell workbook with blank capacity.">Include no-SSH on Dell Report</button>
         <label>Site <select id="capacity-site-select"><option value="">All servers</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
@@ -523,6 +524,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const capacitySiteSelectEl = document.getElementById("capacity-site-select");
     const excelBtn = document.getElementById("excel-btn");
     const dellReportBtn = document.getElementById("dell-report-btn");
+    const dellIncludeNoSshBtn = document.getElementById("dell-include-noss-btn");
     const reportTitleInput = document.getElementById("report-title-input");
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
@@ -569,26 +571,94 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       const key = String(cardId);
       if (on) dellIncludeIds.add(key);
       else dellIncludeIds.delete(key);
-      try {
-        await fetch("/api/dell-report-settings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ card_id: cardId, include: on }),
-        });
-      } catch (_err) {
-        /* best-effort */
+      const res = await fetch("/api/dell-report-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card_id: cardId, include: on }),
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const err = await res.json();
+          if (err && err.error) detail = err.error;
+        } catch (_err) {
+          /* ignore */
+        }
+        if (on) dellIncludeIds.delete(key);
+        else dellIncludeIds.add(key);
+        throw new Error(detail);
       }
+      const data = await res.json();
+      dellIncludeIds = new Set(
+        (data.include_card_ids || []).map((id) => String(id))
+      );
     }
 
     function setDellInclude(cardId, on) {
-      void persistDellInclude(cardId, on).then(() => {
-        const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
-        if (!section) return;
-        const toggle = section.querySelector(".dell-include-toggle");
-        const input = section.querySelector(".dell-include-switch");
-        if (toggle) toggle.classList.toggle("on", on);
-        if (input) input.checked = on;
+      void persistDellInclude(cardId, on)
+        .then(() => {
+          const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
+          if (!section) return;
+          const toggle = section.querySelector(".dell-include-toggle");
+          const input = section.querySelector(".dell-include-switch");
+          if (toggle) toggle.classList.toggle("on", isDellIncludeOn(cardId));
+          if (input) input.checked = isDellIncludeOn(cardId);
+        })
+        .catch((err) => {
+          if (refreshStatusEl) {
+            refreshStatusEl.textContent = `Dell Report include failed: ${err.message || err}`;
+          }
+          const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
+          const input = section && section.querySelector(".dell-include-switch");
+          if (input) input.checked = isDellIncludeOn(cardId);
+        });
+    }
+
+    function noSshDellCandidates(cards) {
+      return (cards || []).filter((card) => {
+        if (!isDellReportFamily(card)) return false;
+        const hasCapacity = Boolean(card.capacity_popup_html);
+        const hasSummary =
+          card.capacity_summary && Number(card.capacity_summary.total_bytes || 0) > 0;
+        const hasRaw =
+          card.raw_capacity_summary &&
+          Number(card.raw_capacity_summary.total_bytes || 0) > 0;
+        return Boolean(card.error) || !(hasCapacity || hasSummary || hasRaw);
       });
+    }
+
+    async function includeNoSshOnDellReport() {
+      if (!dellIncludeNoSshBtn) return;
+      const candidates = noSshDellCandidates(cardsCache);
+      if (!candidates.length) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent =
+            "No IBM/HPE sites without capacity found to add to Dell Report.";
+        }
+        return;
+      }
+      dellIncludeNoSshBtn.disabled = true;
+      if (refreshStatusEl) {
+        refreshStatusEl.textContent = `Adding ${candidates.length} no-SSH site(s) to Dell Report…`;
+      }
+      let ok = 0;
+      let failed = 0;
+      for (const card of candidates) {
+        try {
+          await persistDellInclude(card.id, true);
+          ok += 1;
+        } catch (_err) {
+          failed += 1;
+        }
+      }
+      renderAll(cardsCache);
+      if (refreshStatusEl) {
+        refreshStatusEl.textContent =
+          `Dell Report include: ${ok} site(s) checked` +
+          (failed ? `, ${failed} failed` : "") +
+          ". Click Dell Report to export (capacity blank for those rows).";
+      }
+      dellIncludeNoSshBtn.disabled = false;
     }
 
     function isMonitorOn(cardId) {
@@ -1250,9 +1320,14 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       try {
         const res = await fetch("/api/dell-report-settings");
         const settings = await res.json();
-        dellReportBtn.style.display = settings && settings.enabled ? "" : "none";
+        const show = settings && settings.enabled;
+        dellReportBtn.style.display = show ? "" : "none";
+        if (dellIncludeNoSshBtn) {
+          dellIncludeNoSshBtn.style.display = show ? "" : "none";
+        }
       } catch (_err) {
         dellReportBtn.style.display = "none";
+        if (dellIncludeNoSshBtn) dellIncludeNoSshBtn.style.display = "none";
       }
     }
 
@@ -1402,6 +1477,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     }
     if (dellReportBtn) {
       dellReportBtn.addEventListener("click", downloadDellReport);
+    }
+    if (dellIncludeNoSshBtn) {
+      dellIncludeNoSshBtn.addEventListener("click", () => {
+        void includeNoSshOnDellReport();
+      });
     }
 
     initDetailsToggle();

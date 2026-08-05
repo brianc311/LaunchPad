@@ -35,10 +35,13 @@ def test_facility_v5k_token_anywhere():
     assert facility_from_name("host-v5kPEN-g3v1") == "Distribution center"
 
 
-def test_family_ibm_hp():
-    assert dell_report_family("flashsystem_9500") == "ibm"
-    assert dell_report_family("hpe_3par_8450") == "hp"
-    assert dell_report_family("dell_powermax") is None
+def test_family_from_site_name_when_profile_empty():
+    from launchpad.dell_report_family import dell_report_family_for_site
+
+    assert dell_report_family_for_site("", site_name="IBM - XIV Danville - Remote") == "ibm"
+    assert dell_report_family_for_site("", site_name="No Access - Wag1_XIV_13557 - WAG1") == "ibm"
+    assert dell_report_family_for_site("", site_name="HPE - Primera - WAG2") == "hp"
+
 
 
 def test_family_manufacturer_hint():

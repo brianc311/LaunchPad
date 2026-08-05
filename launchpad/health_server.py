@@ -118,7 +118,7 @@ from launchpad.flashsystem_fc import (
     parse_host_lun_maps,
     parse_lsvdisk_volumes,
 )
-from launchpad.dell_report_family import dell_report_family
+from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
 from launchpad.health_excel_export import (
     HealthExcelSections,
@@ -223,7 +223,9 @@ class HealthCard:
             "port": self.port,
             "username": self.username,
             "device_profile": self.device_profile,
-            "dell_report_family": dell_report_family(self.device_profile),
+            "dell_report_family": dell_report_family_for_site(
+                self.device_profile, site_name=self.name
+            ),
             "model": model,
             "category": self.category,
             "command_mode": bool(
@@ -6536,7 +6538,9 @@ class HealthServer:
                 card = self._cards.get(site_id)
             if card is None:
                 continue
-            if dell_report_family(card.device_profile) in {"ibm", "hp"}:
+            if dell_report_family_for_site(
+                card.device_profile, site_name=card.name
+            ) in {"ibm", "hp"}:
                 ibm_hp_ids.append(site_id)
 
         # Forced-include IBM/HPE cards even when Monitor is off.
@@ -6552,7 +6556,9 @@ class HealthServer:
                 card = self._cards.get(cid)
             if card is None:
                 continue
-            if dell_report_family(card.device_profile) not in {"ibm", "hp"}:
+            if dell_report_family_for_site(
+                card.device_profile, site_name=card.name
+            ) not in {"ibm", "hp"}:
                 continue
             if cid not in seen:
                 ibm_hp_ids.append(cid)
