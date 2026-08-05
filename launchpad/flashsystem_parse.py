@@ -459,38 +459,44 @@ def _pick_capacity_bytes(
     *keys: str,
     default_unit: str = "",
     mb_keys: frozenset[str] | None = None,
+    exclude_prefixes: frozenset[str] = frozenset(),
 ) -> float | None:
+    """Pick the first matching capacity value using exact key names only."""
     mb_keys = mb_keys or _MB_CAPACITY_KEYS
     for key in keys:
-        for candidate, value in lowered.items():
-            if key not in candidate:
-                continue
-            raw = str(value).strip()
-            if not raw:
-                continue
-            unit_hint = default_unit
-            if candidate in mb_keys or candidate.endswith("_mb"):
-                unit_hint = "MB"
-            if unit_hint and not re.search(r"[A-Za-z]", raw):
-                parsed = _parse_size_bytes(f"{raw}{unit_hint}")
-            else:
-                parsed = _parse_size_bytes(raw)
-            if parsed is not None:
-                return parsed
+        if exclude_prefixes and any(key.startswith(prefix) for prefix in exclude_prefixes):
+            continue
+        if key not in lowered:
+            continue
+        raw = str(lowered[key]).strip()
+        if not raw:
+            continue
+        unit_hint = default_unit
+        if key in mb_keys or key.endswith("_mb"):
+            unit_hint = "MB"
+        if unit_hint and not re.search(r"[A-Za-z]", raw):
+            parsed = _parse_size_bytes(f"{raw}{unit_hint}")
+        else:
+            parsed = _parse_size_bytes(raw)
+        if parsed is not None:
+            return parsed
     return None
 
 
-def _has_raw_capacity_fields(lowered: dict[str, str]) -> bool:
-    raw_keys = (
+_RAW_CAPACITY_KEYS = frozenset(
+    {
         "raw_capacity",
         "raw_free_capacity",
+        "raw_used_capacity",
         "physical_capacity",
         "physical_free_capacity",
-    )
-    return any(
-        any(raw_key in candidate for candidate in lowered)
-        for raw_key in raw_keys
-    )
+        "physical_used_capacity",
+    }
+)
+
+
+def _has_raw_capacity_fields(lowered: dict[str, str]) -> bool:
+    return any(key in _RAW_CAPACITY_KEYS for key in lowered)
 
 
 def parse_raw_capacity_summary(output: str) -> dict[str, Any] | None:
@@ -561,23 +567,34 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
 
     kv, lowered, default_unit, name = _capacity_context(text)
 
+    _USABLE_EXCLUDE = frozenset({"physical_", "raw_"})
+
     def pick_size(*keys: str) -> float | None:
-        return _pick_capacity_bytes(lowered, *keys, default_unit=default_unit)
+        return _pick_capacity_bytes(
+            lowered,
+            *keys,
+            default_unit=default_unit,
+            exclude_prefixes=_USABLE_EXCLUDE,
+        )
 
     total = pick_size(
         "total_capacity",
         "total_mdisk_capacity",
         "total_usable",
         "total",
-        "physical_capacity",
     )
+    if total is None:
+        total = _pick_capacity_bytes(
+            lowered,
+            "physical_capacity",
+            default_unit=default_unit,
+        )
     free = pick_size(
         "free_capacity",
         "total_free_space",
         "rawfree",
         "usablefree",
         "free",
-        "physical_free_capacity",
     )
 
     if total and free is not None:

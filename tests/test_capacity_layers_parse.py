@@ -23,6 +23,13 @@ total_free_space : 75.00TB
 allocated_capacity : 25.00TB
 """
 
+IBM_LSSYSTEM_NO_ALLOCATED = """name : FS9500
+physical_capacity : 120.00TB
+physical_free_capacity : 90.00TB
+total_mdisk_capacity : 100.00TB
+total_free_space : 75.00TB
+"""
+
 
 def test_parse_capacity_summary_prefers_allocated_not_physical():
     capacity = parse_capacity_summary(HPE_SHOWSYS_WITH_RAW)
@@ -49,6 +56,23 @@ def test_parse_raw_capacity_summary_from_physical_fields():
     assert raw["used_pct"] == 22.5
 
     ibm_raw = parse_raw_capacity_summary(IBM_LSSYSTEM_WITH_PHYSICAL)
+    assert ibm_raw is not None
+    assert ibm_raw["total_bytes"] == 120 * 1024**4
+    assert ibm_raw["free_bytes"] == 90 * 1024**4
+    assert ibm_raw["used_bytes"] == 30 * 1024**4
+    assert ibm_raw["used_pct"] == 25.0
+
+
+def test_parse_capacity_summary_ibm_usable_free_without_allocated():
+    """Regression: free_capacity must not match physical_free_capacity."""
+    ibm = parse_capacity_summary(IBM_LSSYSTEM_NO_ALLOCATED)
+    assert ibm is not None
+    assert ibm["total_bytes"] == 100 * 1024**4
+    assert ibm["free_bytes"] == 75 * 1024**4
+    assert ibm["used_bytes"] == 25 * 1024**4
+    assert ibm["used_pct"] == 25.0
+
+    ibm_raw = parse_raw_capacity_summary(IBM_LSSYSTEM_NO_ALLOCATED)
     assert ibm_raw is not None
     assert ibm_raw["total_bytes"] == 120 * 1024**4
     assert ibm_raw["free_bytes"] == 90 * 1024**4
