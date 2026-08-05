@@ -1,7 +1,7 @@
 # Dell Report Raw Capacity, Facility Mapping & Weekly Sheets — Design
 
 **Date:** 2026-08-05  
-**Status:** Approved (pending operator review of this written spec)  
+**Status:** Approved  
 **App version target:** 1.6.119+  
 **Extends:**  
 - `docs/superpowers/specs/2026-08-05-dell-report-walgreens-visual-design.md`  
