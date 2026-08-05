@@ -118,6 +118,23 @@ def test_parse_capacity_summary_ibm_usable_free_without_allocated():
     assert ibm_raw["used_pct"] == 25.0
 
 
+def test_parse_showsys_space_raw_matches_ssmc_total_row():
+    from launchpad.flashsystem_parse import parse_showsys_space_raw
+
+    showsys_space = """---------System Capacity---------
+Total Capacity     :   57184000
+Allocated Capacity :   41181000
+Free Capacity      :   16003000
+Failed Capacity    :          0
+"""
+    raw = parse_showsys_space_raw(showsys_space)
+    assert raw is not None
+    assert raw["total_bytes"] == 57184000 * 1024**2
+    assert raw["used_bytes"] == 41181000 * 1024**2
+    assert raw["free_bytes"] == 16003000 * 1024**2
+    assert raw["used_pct"] == round(41181000 / 57184000 * 100, 1)
+
+
 def test_parse_raw_capacity_summary_none_when_absent():
     showsys_no_raw = """System Name : S424
 Total Capacity : 6277120

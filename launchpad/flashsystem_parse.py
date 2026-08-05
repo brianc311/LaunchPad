@@ -580,6 +580,64 @@ def parse_raw_capacity_summary(output: str) -> dict[str, Any] | None:
     }
 
 
+def parse_showsys_space_raw(output: str) -> dict[str, Any] | None:
+    """Raw capacity from ``showsys -space`` (SSMC Total/Allocated/Free, MB).
+
+    Same key names as ``showsys -d`` System Capacity; callers must only pass
+    ``showsys -space`` output here so System and Raw stay distinct.
+    """
+    text = (output or "").strip()
+    if not text:
+        return None
+
+    kv, lowered, default_unit, name = _capacity_context(text)
+    if not default_unit:
+        default_unit = "MB"
+
+    total = _pick_capacity_bytes(
+        lowered,
+        "total_capacity",
+        "total",
+        default_unit=default_unit,
+    )
+    free = _pick_capacity_bytes(
+        lowered,
+        "free_capacity",
+        "free",
+        default_unit=default_unit,
+    )
+    allocated = _pick_capacity_bytes(
+        lowered,
+        "allocated_capacity",
+        "allocated",
+        default_unit=default_unit,
+    )
+
+    if total and allocated is not None:
+        used = allocated
+        free = free if free is not None else max(0.0, total - used)
+    elif total and free is not None:
+        used = max(0.0, total - free)
+    elif allocated is not None and free is not None:
+        used = allocated
+        total = used + free
+    else:
+        return None
+
+    if not total or used is None or free is None:
+        return None
+
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": kv,
+    }
+
+
 def parse_capacity_summary(output: str) -> dict[str, Any] | None:
     """Normal/usable summary. Prefer allocated + total_capacity (HPE) or usable
     mdisk capacity (IBM). Do NOT use physical_capacity as total when allocated

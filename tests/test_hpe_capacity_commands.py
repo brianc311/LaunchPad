@@ -33,8 +33,28 @@ def test_hpe_presets_use_showcpg_not_sdg_or_bare_showspace_cpg():
     assert ("Capacity - CPG %", "showspace -cpg") not in HPE_PRIMERA_COMMANDS
     assert ("Capacity - System", "showsys -d") in HP_3PAR_COMMANDS
     assert ("Capacity - System", "showsys -d") in HPE_PRIMERA_COMMANDS
+    assert ("Capacity - Raw", "showsys -space") in HP_3PAR_COMMANDS
+    assert ("Capacity - Raw", "showsys -space") in HPE_PRIMERA_COMMANDS
     assert HP_3PAR_COMMANDS[0][1] == "showsys -d"
-    assert HP_3PAR_COMMANDS[1][1] == "showcpg"
+    assert HP_3PAR_COMMANDS[1][1] == "showsys -space"
+    assert HP_3PAR_COMMANDS[2][1] == "showcpg"
+    assert HP_3PAR_COMMANDS.index(("Capacity - System", "showsys -d")) < HP_3PAR_COMMANDS.index(
+        ("Capacity - Raw", "showsys -space")
+    )
+
+
+def test_ensure_hpe_inserts_showsys_space_and_keeps_showsys_d():
+    from launchpad.storage_presets import ensure_hpe_capacity_commands
+
+    cmds = ensure_hpe_capacity_commands("hpe_primera_600", [("Health - Alerts", "showalert")])
+    assert ("Capacity - System", "showsys -d") in cmds
+    assert ("Capacity - Raw", "showsys -space") in cmds
+    cmds2 = ensure_hpe_capacity_commands(
+        "hpe_primera_600",
+        [("Capacity - Raw", "showsys -space"), ("Health - Alerts", "showalert")],
+    )
+    assert ("Capacity - System", "showsys -d") in cmds2
+    assert ("Capacity - Raw", "showsys -space") in cmds2
 
 
 def test_ensure_hpe_capacity_rewrites_legacy_custom_commands():

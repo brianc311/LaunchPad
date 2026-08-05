@@ -17,6 +17,7 @@ from launchpad.flashsystem_parse import (
     parse_capacity_summary,
     parse_pool_capacity_rows,
     parse_raw_capacity_summary,
+    parse_showsys_space_raw,
 )
 
 _GOOD_STATUS = frozenset({"online", "ok", "normal", "active", "yes"})
@@ -53,6 +54,47 @@ def _find_result(
     for item in command_results:
         haystack = f"{item.get('label', '')} {item.get('command', '')}".lower()
         if any(needle in haystack for needle in needles):
+            return item
+    return None
+
+
+def _is_hpe_showsys_space_item(item: dict[str, Any] | None) -> bool:
+    if not item:
+        return False
+    haystack = f"{item.get('label', '')} {item.get('command', '')}".lower()
+    return "showsys -space" in haystack or "capacity - raw" in haystack
+
+
+def _find_system_capacity_result(
+    command_results: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Prefer lssystem / showsys -d; never treat showsys -space as System."""
+    if not command_results:
+        return None
+    for needles in (
+        ("lssystem", "capacity - system"),
+        ("showsys", "capacity - system"),
+        ("showspace", "capacity - system"),
+        ("lssi", "capacity - system"),
+        ("space_show", "capacity - system"),
+    ):
+        for item in command_results:
+            if _is_hpe_showsys_space_item(item):
+                continue
+            haystack = f"{item.get('label', '')} {item.get('command', '')}".lower()
+            if any(needle in haystack for needle in needles):
+                if _capacity_result_output(item):
+                    return item
+    return None
+
+
+def _find_showsys_space_result(
+    command_results: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not command_results:
+        return None
+    for item in command_results:
+        if _is_hpe_showsys_space_item(item) and _capacity_result_output(item):
             return item
     return None
 
@@ -831,19 +873,8 @@ def analyze_health(
                     }
                 )
 
-        system_item = None
-        system_output = ""
-        for needles in (
-            ("lssystem", "capacity - system"),
-            ("showsys", "capacity - system"),
-            ("showspace", "capacity - system"),
-            ("lssi", "capacity - system"),
-            ("space_show", "capacity - system"),
-        ):
-            system_item = _find_result(command_results, *needles)
-            system_output = _capacity_result_output(system_item)
-            if system_output:
-                break
+        system_item = _find_system_capacity_result(command_results)
+        system_output = _capacity_result_output(system_item)
         if system_output:
             capacity = _parse_system_capacity(system_output)
             system_capacity = capacity
@@ -861,6 +892,13 @@ def analyze_health(
                         "server": server_name,
                     }
                 )
+
+        space_item = _find_showsys_space_result(command_results)
+        space_output = _capacity_result_output(space_item)
+        if space_output:
+            space_raw = parse_showsys_space_raw(space_output)
+            if space_raw:
+                raw_capacity_summary = space_raw
 
         pools_item = _find_pool_capacity_result(command_results)
         pools_output = _capacity_result_output(pools_item)
@@ -1035,10 +1073,15 @@ def analyze_health(
     if not system_capacity and not capacity and pools:
         capacity = capacity_summary_from_pools(pools)
 
+    # System bar from showsys/lssystem; All-CPGs rollup only when pool rows exist.
+    display_system = system_capacity
+    if display_system is None and pools:
+        display_system = capacity
+
     # Build System / Raw / pool HTML after capacity resolution so HPE cards still
     # get a System utilization bar when showsys failed but CPG rollup exists.
     popup_html = format_capacity_report_html(
-        system_capacity or capacity,
+        display_system,
         pools_output,
         raw_capacity=raw_capacity_summary,
     )

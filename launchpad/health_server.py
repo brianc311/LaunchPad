@@ -6163,7 +6163,10 @@ class HealthServer:
             serial_number = card.serial_number
             prior_results = list(card.command_results or [])
 
-        from launchpad.command_format import filter_capacity_focus_commands
+        from launchpad.command_format import (
+            drop_pool_capacity_results,
+            filter_capacity_focus_commands,
+        )
 
         commands = resolve_card_commands(
             device_profile,
@@ -6195,6 +6198,8 @@ class HealthServer:
                 for item in command_results:
                     by_key[f"{item.get('label')}|{item.get('command')}"] = item
                 command_results = list(by_key.values())
+                if not include_pools:
+                    command_results = drop_pool_capacity_results(command_results)
             failures = [item for item in command_results if item.get("error")]
             if failures and len(failures) == len(command_results):
                 error = failures[0]["error"]

@@ -31,6 +31,7 @@ SVC_COMMANDS: list[tuple[str, str]] = [
 # showcpg -sdg — that option only shows snapshot-data autogrow settings.
 HP_3PAR_COMMANDS: list[tuple[str, str]] = [
     ("Capacity - System", "showsys -d"),
+    ("Capacity - Raw", "showsys -space"),
     ("Capacity - CPG %", "showcpg"),
     ("Health - Overall", "checkhealth"),
     ("Health - Alerts", "showalert"),
@@ -46,6 +47,7 @@ HP_3PAR_COMMANDS: list[tuple[str, str]] = [
 # showspace -cpg requires a CPG name/pattern; use showcpg for CPG capacity.
 HPE_PRIMERA_COMMANDS: list[tuple[str, str]] = [
     ("Capacity - System", "showsys -d"),
+    ("Capacity - Raw", "showsys -space"),
     ("Capacity - CPG %", "showcpg"),
     ("Health - Nodes", "shownode -status"),
     ("Health - Alerts", "showalert"),
@@ -467,7 +469,7 @@ def ensure_hpe_capacity_commands(
     profile: str,
     commands: list[tuple[str, str]],
 ) -> list[tuple[str, str]]:
-    """Rewrite outdated HPE capacity CLI and ensure showsys/showcpg are present.
+    """Rewrite outdated HPE capacity CLI and ensure showsys -d / -space / showcpg.
 
     Older cards used ``showcpg -sdg`` (autogrow settings only) and bare
     ``showspace -cpg`` (requires a CPG name and fails with Missing -cpg argument).
@@ -513,11 +515,32 @@ def ensure_hpe_capacity_commands(
             rest.append(item)
     rewritten = capacity + rest
 
-    if not has_command("showsys"):
+    def has_showsys_system() -> bool:
+        for _label, command in rewritten:
+            lower = command.strip().lower()
+            if "showsys" in lower and "-space" not in lower:
+                return True
+        return False
+
+    def has_showsys_space() -> bool:
+        return any("showsys -space" in command.strip().lower() for _label, command in rewritten)
+
+    if not has_showsys_system():
         rewritten.insert(0, ("Capacity - System", "showsys -d"))
+    if not has_showsys_space():
+        insert_at = 0
+        for idx, (_label, command) in enumerate(rewritten):
+            lower = command.strip().lower()
+            if "showsys" in lower and "-space" not in lower:
+                insert_at = idx + 1
+                break
+        rewritten.insert(insert_at, ("Capacity - Raw", "showsys -space"))
     if not has_command("showcpg"):
-        # After showsys if present.
-        insert_at = 1 if rewritten and "showsys" in rewritten[0][1].lower() else 0
+        # After system/raw showsys if present.
+        insert_at = 0
+        for idx, (_label, command) in enumerate(rewritten):
+            if "showsys" in command.strip().lower():
+                insert_at = idx + 1
         rewritten.insert(insert_at, ("Capacity - CPG %", "showcpg"))
     return rewritten
 

@@ -57,6 +57,22 @@ def _is_pool_capacity_command(label: str, command: str) -> bool:
     return False
 
 
+def drop_pool_capacity_results(
+    results: list[dict] | None,
+) -> list[dict]:
+    """Remove showcpg / lsmdiskgrp (and similar) rows from merged command results."""
+    if not results:
+        return []
+    return [
+        item
+        for item in results
+        if not _is_pool_capacity_command(
+            str(item.get("label") or ""),
+            str(item.get("command") or ""),
+        )
+    ]
+
+
 def filter_capacity_focus_commands(
     commands: list[tuple[str, str]],
     *,

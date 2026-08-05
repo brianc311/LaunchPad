@@ -6,15 +6,17 @@ from launchpad.command_format import filter_capacity_focus_commands
 from launchpad.health_server import HealthCard, HealthServer, _HealthHandler
 
 
-def test_filter_capacity_focus_drops_pools_when_include_pools_false():
+def test_filter_capacity_focus_keeps_showsys_space_when_pools_off():
     commands = [
         ("Capacity - System", "showsys -d"),
+        ("Capacity - Raw", "showsys -space"),
         ("Capacity - CPG %", "showcpg"),
-        ("Capacity - Pools %", "svcinfo lsmdiskgrp -delim :"),
-        ("Health - Overall", "checkhealth"),
     ]
     focused = filter_capacity_focus_commands(commands, include_pools=False)
-    assert focused == [("Capacity - System", "showsys -d")]
+    assert focused == [
+        ("Capacity - System", "showsys -d"),
+        ("Capacity - Raw", "showsys -space"),
+    ]
 
 
 def test_filter_capacity_focus_keeps_pools_by_default():
@@ -103,6 +105,83 @@ def test_refresh_card_applies_include_pools_filter(monkeypatch):
 
     server.refresh_card(1, focus="capacity", include_pools=False)
     assert filtered == [False]
+
+
+def test_refresh_card_drops_stale_showcpg_when_include_pools_false(monkeypatch):
+    server = HealthServer()
+    server.register_card(1, "HPE", "10.0.0.1", 22, "user", "", device_profile="hpe_3par_8400")
+    showcpg = """Id,Name,Warn%,VVs,Usr_Used_MB,Usr_Total_MB
+0,CPG_DATA01,0,7,13600000,13842640
+"""
+    server._cards[1].command_results = [
+        {
+            "label": "Capacity - System",
+            "command": "showsys -d",
+            "output": "System Name : A\nTotal Capacity : --",
+            "error": None,
+        },
+        {
+            "label": "Capacity - CPG %",
+            "command": "showcpg",
+            "output": showcpg,
+            "error": None,
+        },
+        {
+            "label": "Health - Alerts",
+            "command": "showalert",
+            "output": "No alerts",
+            "error": None,
+        },
+    ]
+    monkeypatch.setattr(
+        "launchpad.health_server.resolve_card_commands",
+        lambda *a, **k: [
+            ("Capacity - System", "showsys -d"),
+            ("Capacity - Raw", "showsys -space"),
+            ("Capacity - CPG %", "showcpg"),
+        ],
+    )
+    monkeypatch.setattr(
+        "launchpad.health_server.run_remote_command_suite",
+        lambda *a, **k: [
+            {
+                "label": "Capacity - System",
+                "command": "showsys -d",
+                "output": (
+                    "System Name : A\n"
+                    "Total Capacity : 1000000\n"
+                    "Allocated Capacity : 270000\n"
+                    "Free Capacity : 730000\n"
+                ),
+                "error": None,
+            },
+            {
+                "label": "Capacity - Raw",
+                "command": "showsys -space",
+                "output": (
+                    "Total Capacity : 57184000\n"
+                    "Allocated Capacity : 41181000\n"
+                    "Free Capacity : 16003000\n"
+                ),
+                "error": None,
+            },
+        ],
+    )
+
+    card = server.refresh_card(1, focus="capacity", include_pools=False)
+    cmds = [f"{i.get('label')}|{i.get('command')}" for i in (card.command_results or [])]
+    assert not any("showcpg" in c for c in cmds)
+    assert any("showalert" in c for c in cmds)
+    html = card.to_api().get("capacity_popup_html") or ""
+    assert "All CPGs" not in html
+    assert "System utilization" in html
+    assert "Raw utilization" in html
+    pool_issues = [
+        i
+        for i in (card.to_api().get("health_issues") or [])
+        if "Pool " in str(i.get("message") or "")
+    ]
+    assert not pool_issues
 
 
 def test_to_api_includes_raw_capacity_summary():

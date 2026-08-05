@@ -94,6 +94,57 @@ def test_analyze_health_popup_html_includes_raw_wrap_when_physical_present():
     assert "capacity-raw-wrap" in analysis["capacity_popup_html"]
 
 
+SHOWSYS_SPACE = """---------System Capacity---------
+Total Capacity     :   57184000
+Allocated Capacity :   41181000
+Free Capacity      :   16003000
+Failed Capacity    :          0
+"""
+
+
+def test_analyze_health_uses_showsys_space_for_raw_not_system():
+    results = [
+        {
+            "label": "Capacity - System",
+            "command": "showsys -d",
+            "output": (
+                "System Name : A\n"
+                "Total Capacity : 1000000\n"
+                "Allocated Capacity : 270000\n"
+                "Free Capacity : 730000\n"
+            ),
+            "error": None,
+        },
+        {
+            "label": "Capacity - Raw",
+            "command": "showsys -space",
+            "output": SHOWSYS_SPACE,
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE", results, None)
+    assert analysis["capacity_summary"]["used_pct"] == 27.0
+    assert analysis["raw_capacity_summary"]["total_bytes"] == 57184000 * 1024**2
+    html = analysis["capacity_popup_html"] or ""
+    assert "System utilization" in html
+    assert "Raw utilization" in html
+
+
+def test_analyze_health_no_all_cpgs_system_when_no_pools():
+    results = [
+        {
+            "label": "Capacity - System",
+            "command": "showsys -d",
+            "output": "System Name : X\nTotal Capacity : --",
+            "error": None,
+        },
+    ]
+    analysis = analyze_health("HPE", results, None)
+    html = analysis["capacity_popup_html"] or ""
+    assert "All CPGs" not in html
+    assert "System utilization" not in html
+
+
 def test_analyze_health_system_bar_from_cpg_when_showsys_unparseable():
     """When showsys has no usable totals, still show System utilization from CPG rollup."""
     results = [
