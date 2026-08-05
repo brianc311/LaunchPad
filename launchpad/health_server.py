@@ -238,6 +238,7 @@ class HealthCard:
             "updated_at": self.updated_at,
             "health_issues": analysis["health_issues"],
             "capacity_summary": analysis["capacity_summary"],
+            "raw_capacity_summary": analysis.get("raw_capacity_summary"),
             "capacity_popup_html": analysis["capacity_popup_html"],
             "pools": analysis.get("pools") or [],
             "fc_ports": fc.get("fc_ports") or [],
@@ -3495,13 +3496,22 @@ class _HealthHandler(BaseHTTPRequestHandler):
         suffix = parsed.path.removeprefix("/api/refresh/")
         query = parse_qs(parsed.query)
         focus = (query.get("focus") or [""])[0].strip().lower()
+        include_pools = (query.get("include_pools") or ["1"])[0].strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
         try:
             card_id = int(suffix)
         except ValueError:
             self.send_error(400)
             return
         try:
-            card = server.refresh_card(card_id, focus=focus)
+            card = server.refresh_card(
+                card_id,
+                focus=focus,
+                include_pools=include_pools,
+            )
             self._send_json(card.to_api())
         except KeyError:
             self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
@@ -6113,7 +6123,13 @@ class HealthServer:
                 updated_at=existing.updated_at if existing else None,
             )
 
-    def refresh_card(self, card_id: int, *, focus: str = "") -> HealthCard:
+    def refresh_card(
+        self,
+        card_id: int,
+        *,
+        focus: str = "",
+        include_pools: bool = True,
+    ) -> HealthCard:
         with self._lock:
             if card_id not in self._cards:
                 raise KeyError(card_id)
@@ -6137,7 +6153,10 @@ class HealthServer:
             instance_id=serial_number,
         )
         if (focus or "").strip().lower() == "capacity":
-            commands = filter_capacity_focus_commands(commands)
+            commands = filter_capacity_focus_commands(
+                commands,
+                include_pools=include_pools,
+            )
         if commands:
             command_results = run_remote_command_suite(
                 host,

@@ -43,13 +43,35 @@ def resolve_card_commands(
     return apply_command_placeholders(commands, instance_id=instance_id)
 
 
+def _is_pool_capacity_command(label: str, command: str) -> bool:
+    haystack = f"{label} {command}".lower()
+    label_lower = label.lower()
+    if any(token in haystack for token in ("showcpg", "lsmdiskgrp", "lsextpool")):
+        return True
+    if "showspace -cpg" in haystack or "showspace-cpg" in haystack:
+        return True
+    if "capacity - cpg" in label_lower or "capacity - pools" in label_lower:
+        return True
+    if "capacity - pool" in label_lower and "capacity - pools" not in label_lower:
+        return True
+    return False
+
+
 def filter_capacity_focus_commands(
     commands: list[tuple[str, str]],
+    *,
+    include_pools: bool = True,
 ) -> list[tuple[str, str]]:
-    """Keep only capacity-oriented CLI commands for faster Capacity Report refresh."""
+    """Keep only capacity-oriented CLI commands for faster Capacity Report refresh.
+
+    When include_pools is False, drop showcpg / lsmdiskgrp / capacity - cpg /
+    capacity - pools (and similar pool labels). Keep showsys / lssystem.
+    """
     kept: list[tuple[str, str]] = []
     for label, command in commands:
         haystack = f"{label} {command}".lower()
+        if not include_pools and _is_pool_capacity_command(label, command):
+            continue
         if "capacity" in haystack:
             kept.append((label, command))
             continue
