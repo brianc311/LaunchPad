@@ -6337,7 +6337,9 @@ class HealthServer:
             if card is None:
                 continue
             try:
-                card = self.refresh_card(site_id)
+                # Capacity-only suite — full health refresh on every monitored site
+                # made Export Excel hang the Capacity Report UI for minutes.
+                card = self.refresh_card(site_id, focus="capacity")
                 error = card.error
             except Exception as exc:
                 error = str(exc)

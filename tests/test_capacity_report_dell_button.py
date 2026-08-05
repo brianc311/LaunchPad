@@ -8,6 +8,9 @@ def test_capacity_report_html_has_dell_report_button():
     assert 'id="dell-report-btn"' in CAPACITY_REPORT_HTML
     assert "/api/dell-report-export" in CAPACITY_REPORT_HTML
     assert "/api/dell-report-settings" in CAPACITY_REPORT_HTML
+    # Do not clobber "Building…" status while Export Excel / Dell Report is in flight.
+    assert "exportBusy" in CAPACITY_REPORT_HTML
+    assert "excelBtn.disabled" in CAPACITY_REPORT_HTML
 
 
 def test_admin_view_has_show_dell_report_checkbox():

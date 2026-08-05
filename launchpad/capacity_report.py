@@ -1216,7 +1216,9 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
 
     async function loadCards() {
       try {
-        if (refreshStatusEl && !refreshAllRunning) {
+        const exportBusy =
+          (excelBtn && excelBtn.disabled) || (dellReportBtn && dellReportBtn.disabled);
+        if (refreshStatusEl && !refreshAllRunning && !exportBusy) {
           refreshStatusEl.textContent = "Loading servers from LaunchPad...";
         }
         if (sitesEl && !cardsCache.length) {

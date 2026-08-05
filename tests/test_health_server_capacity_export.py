@@ -15,7 +15,7 @@ def test_export_bytes_are_xlsx_with_expected_filename(monkeypatch):
     monkeypatch.setattr(
         server,
         "refresh_card",
-        lambda card_id: server._cards[card_id],
+        lambda card_id, focus="": server._cards[card_id],
     )
 
     body, filename = server.export_capacity_excel_bytes()
@@ -31,7 +31,7 @@ def test_export_excludes_monitor_off_cards_by_default(monkeypatch):
     _register(server, 2, "Off", monitor_on=False)
     refreshed: list[int] = []
 
-    def _fake_refresh(card_id: int) -> HealthCard:
+    def _fake_refresh(card_id: int, focus: str = "") -> HealthCard:
         refreshed.append(card_id)
         return server._cards[card_id]
 
@@ -48,7 +48,7 @@ def test_export_includes_monitor_off_cards_when_requested(monkeypatch):
     _register(server, 2, "Off", monitor_on=False)
     refreshed: list[int] = []
 
-    def _fake_refresh(card_id: int) -> HealthCard:
+    def _fake_refresh(card_id: int, focus: str = "") -> HealthCard:
         refreshed.append(card_id)
         return server._cards[card_id]
 
@@ -63,7 +63,7 @@ def test_export_keeps_going_when_refresh_card_raises(monkeypatch):
     server = HealthServer()
     _register(server, 1, "Flaky", monitor_on=True)
 
-    def _raise(card_id: int) -> HealthCard:
+    def _raise(card_id: int, focus: str = "") -> HealthCard:
         raise RuntimeError("SSH connection refused")
 
     monkeypatch.setattr(server, "refresh_card", _raise)
@@ -105,7 +105,7 @@ def _call_capacity_export_api(
 def test_get_capacity_export_route_syncs_from_app(monkeypatch):
     server = HealthServer()
     _register(server, 1, "On", monitor_on=True)
-    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(server, "refresh_card", lambda card_id, focus="": server._cards[card_id])
     synced = {"called": False}
 
     def _sync_from_app():
@@ -122,7 +122,7 @@ def test_get_capacity_export_route_syncs_from_app(monkeypatch):
 def test_get_capacity_export_route_sends_xlsx_bytes(monkeypatch):
     server = HealthServer()
     _register(server, 1, "On", monitor_on=True)
-    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(server, "refresh_card", lambda card_id, focus="": server._cards[card_id])
     monkeypatch.setattr(server, "sync_from_app", lambda: 0)
 
     sent = _call_capacity_export_api(monkeypatch, server, "?include_off=0&open=0")
@@ -138,7 +138,7 @@ def test_get_capacity_export_route_sends_xlsx_bytes(monkeypatch):
 def test_get_capacity_export_route_opens_workbook_when_requested(monkeypatch):
     server = HealthServer()
     _register(server, 1, "On", monitor_on=True)
-    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(server, "refresh_card", lambda card_id, focus="": server._cards[card_id])
     monkeypatch.setattr(server, "sync_from_app", lambda: 0)
     opened: list[str] = []
     monkeypatch.setattr(
@@ -176,7 +176,7 @@ def test_export_capacity_excel_bytes_filters_by_card_id(monkeypatch):
     _register(server, 2, "Beta", monitor_on=True)
     refreshed: list[int] = []
 
-    def _fake_refresh(card_id: int) -> HealthCard:
+    def _fake_refresh(card_id: int, focus: str = "") -> HealthCard:
         refreshed.append(card_id)
         return server._cards[card_id]
 
@@ -191,11 +191,11 @@ def test_get_capacity_export_route_filters_by_card_id(monkeypatch):
     server = HealthServer()
     _register(server, 1, "Alpha", monitor_on=True)
     _register(server, 2, "Beta", monitor_on=True)
-    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(server, "refresh_card", lambda card_id, focus="": server._cards[card_id])
     monkeypatch.setattr(server, "sync_from_app", lambda: 0)
     refreshed: list[int] = []
 
-    def _spy_refresh(card_id: int) -> HealthCard:
+    def _spy_refresh(card_id: int, focus: str = "") -> HealthCard:
         refreshed.append(card_id)
         return server._cards[card_id]
 
@@ -205,3 +205,19 @@ def test_get_capacity_export_route_filters_by_card_id(monkeypatch):
 
     assert sent["status"] == 200
     assert refreshed == [2]
+
+
+def test_export_capacity_excel_uses_capacity_focus_refresh(monkeypatch):
+    server = HealthServer()
+    _register(server, 1, "On", monitor_on=True)
+    calls: list[tuple[int, str]] = []
+
+    def _spy(card_id: int, focus: str = "") -> HealthCard:
+        calls.append((card_id, focus))
+        return server._cards[card_id]
+
+    monkeypatch.setattr(server, "refresh_card", _spy)
+
+    server.export_capacity_excel_bytes(include_monitor_off=False)
+
+    assert calls == [(1, "capacity")]
