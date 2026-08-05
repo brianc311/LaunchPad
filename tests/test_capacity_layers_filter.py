@@ -28,6 +28,12 @@ def test_filter_capacity_focus_keeps_pools_by_default():
     assert ("Capacity - System", "showsys -d") in focused
 
 
+def test_filter_capacity_focus_pool_only_returns_empty_when_include_pools_false():
+    commands = [("Capacity - CPG", "showcpg")]
+    focused = filter_capacity_focus_commands(commands, include_pools=False)
+    assert focused == []
+
+
 def test_filter_capacity_focus_keeps_lssystem_when_pools_off():
     commands = [
         ("Capacity - System", "lssystem"),

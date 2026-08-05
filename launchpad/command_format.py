@@ -88,6 +88,8 @@ def filter_capacity_focus_commands(
             )
         ):
             kept.append((label, command))
+    if not include_pools:
+        return kept
     return kept or list(commands)
 
 
