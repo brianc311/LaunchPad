@@ -1,4 +1,4 @@
-"""Dell Report Admin settings: normalize, load, save enable flag."""
+"""Dell Report Admin settings: normalize, load, save enable flag + overrides."""
 
 from __future__ import annotations
 
@@ -14,14 +14,34 @@ def _as_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_overrides(raw: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for card_id, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        cleaned: dict[str, str] = {}
+        for key in ("facility", "array_name", "model"):
+            val = entry.get(key)
+            if isinstance(val, str) and val.strip():
+                cleaned[key] = val.strip()
+        if cleaned:
+            out[str(card_id)] = cleaned
+    return out
+
+
 def normalize_dell_report_settings(raw: Any) -> dict:
-    """Return ``{"enabled": bool}``; default enabled True when missing."""
+    """Return ``{"enabled": bool, "card_overrides": {...}}``; enabled defaults True."""
     data = raw if isinstance(raw, dict) else {}
     if "enabled" not in data:
         enabled = True
     else:
         enabled = _as_bool(data.get("enabled"))
-    return {"enabled": enabled}
+    return {
+        "enabled": enabled,
+        "card_overrides": _normalize_overrides(data.get("card_overrides")),
+    }
 
 
 def load_dell_report_settings(db) -> dict:
