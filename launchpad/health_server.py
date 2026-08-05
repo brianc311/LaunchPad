@@ -2984,11 +2984,14 @@ class _HealthHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/api/dell-report-settings":
-            from launchpad.dell_report_settings import load_dell_report_settings
+            from launchpad.dell_report_settings import (
+                load_dell_report_settings,
+                normalize_dell_report_settings,
+            )
 
             settings_view = server._settings_view_for_scan()
             if settings_view is None:
-                self._send_json({"enabled": True})
+                self._send_json(normalize_dell_report_settings({}))
             else:
                 self._send_json(load_dell_report_settings(settings_view))
             return
