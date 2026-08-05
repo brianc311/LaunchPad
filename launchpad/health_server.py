@@ -118,6 +118,7 @@ from launchpad.flashsystem_fc import (
     parse_host_lun_maps,
     parse_lsvdisk_volumes,
 )
+from launchpad.dell_report_family import dell_report_family
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
 from launchpad.health_excel_export import (
     HealthExcelSections,
@@ -2979,8 +2980,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json(load_dell_report_settings(settings_view))
             return
         if path == "/api/dell-report-export":
+            # Inline: capacity_export / dell_report_export pull monitor→health_server.
             from launchpad.capacity_export import open_exported_workbook
-            from launchpad.config import TEMP_DIR
+            from launchpad.dell_report_export import DellReportEmptyError
             from launchpad.dell_report_settings import is_dell_report_enabled
 
             settings_view = server._settings_view_for_scan()
@@ -3016,6 +3018,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     include_monitor_off=include_off,
                     card_id=card_id,
                 )
+            except DellReportEmptyError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
                 return
@@ -6383,7 +6388,12 @@ class HealthServer:
     def export_dell_report_excel_bytes(
         self, *, include_monitor_off: bool = False, card_id: int | None = None
     ) -> tuple[bytes, str]:
-        """Build the Dell Managed Services capacity workbook from registered cards."""
+        """Build the Dell Managed Services capacity workbook from registered cards.
+
+        Always exports monitored-on cards only (`include_monitor_off` is ignored).
+        Refreshes IBM/HPE cards only; raises DellReportEmptyError when no rows.
+        """
+        # Inline: capacity_export / dell_report_export pull monitor→health_server.
         from launchpad.capacity_export import (
             ExportSite,
             card_ids_included_for_export,
@@ -6392,12 +6402,16 @@ class HealthServer:
         from launchpad.dell_report_export import (
             build_dell_report_workbook,
             collect_dell_report_rows,
+            ensure_dell_report_has_rows,
             workbook_to_bytes,
         )
         from launchpad.dell_report_snapshots import (
             load_dell_snapshots,
             save_dell_snapshots,
         )
+
+        # Spec: Dell Report fidelity is monitored-on only.
+        include_monitor_off = False
 
         with self._lock:
             card_ids = sorted(self._cards.keys())
@@ -6412,8 +6426,17 @@ class HealthServer:
         included = filter_capacity_entries_by_card_id(included, card_id=card_id)
         included_ids = sorted(included)
 
-        sites: list[ExportSite] = []
+        ibm_hp_ids: list[int] = []
         for site_id in included_ids:
+            with self._lock:
+                card = self._cards.get(site_id)
+            if card is None:
+                continue
+            if dell_report_family(card.device_profile) in {"ibm", "hp"}:
+                ibm_hp_ids.append(site_id)
+
+        sites: list[ExportSite] = []
+        for site_id in ibm_hp_ids:
             with self._lock:
                 card = self._cards.get(site_id)
             if card is None:
@@ -6442,6 +6465,7 @@ class HealthServer:
         store = load_dell_snapshots()
         ibm_rows, hp_rows, store = collect_dell_report_rows(sites, snapshot_store=store)
         save_dell_snapshots(store)
+        ensure_dell_report_has_rows(ibm_rows, hp_rows)
 
         wb = build_dell_report_workbook(ibm_rows=ibm_rows, hp_rows=hp_rows)
         body = workbook_to_bytes(wb)

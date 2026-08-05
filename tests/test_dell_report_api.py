@@ -1,12 +1,35 @@
 import inspect
 import json
 
+import pytest
+
+from launchpad.dell_report_export import DellReportEmptyError
 from launchpad.dell_report_settings import DELL_REPORT_SETTING
 from launchpad.health_server import HealthServer, _HealthHandler
 
 
 def _register(server: HealthServer, card_id: int, name: str, *, monitor_on: bool) -> None:
     server.register_card(card_id, name, f"10.0.0.{card_id}", 22, "user", "")
+    server.set_monitor_enabled(card_id=card_id, enabled=monitor_on)
+
+
+def _register_profile(
+    server: HealthServer,
+    card_id: int,
+    name: str,
+    *,
+    monitor_on: bool,
+    device_profile: str,
+) -> None:
+    server.register_card(
+        card_id,
+        name,
+        f"10.0.0.{card_id}",
+        22,
+        "user",
+        "",
+        device_profile=device_profile,
+    )
     server.set_monitor_enabled(card_id=card_id, enabled=monitor_on)
 
 
@@ -137,7 +160,7 @@ def test_dell_report_export_sends_xlsx_when_enabled(monkeypatch):
         lambda card_id: server._cards[card_id],
     )
     monkeypatch.setattr(
-        "launchpad.flashsystem_health.analyze_health",
+        "launchpad.health_server.analyze_health",
         lambda name, command_results, metrics: {
             "health_issues": [],
             "capacity_summary": {
@@ -150,6 +173,14 @@ def test_dell_report_export_sends_xlsx_when_enabled(monkeypatch):
             "pools": [],
         },
     )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.load_dell_snapshots",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.save_dell_snapshots",
+        lambda store: None,
+    )
 
     sent = _call_dell_report_export_api(monkeypatch, server, "?include_off=0&open=0")
 
@@ -160,3 +191,97 @@ def test_dell_report_export_sends_xlsx_when_enabled(monkeypatch):
     )
     assert sent["filename"].startswith("Dell_Capacity_Report_")
     assert sent["filename"].endswith(".xlsx")
+
+
+def test_export_raises_when_no_ibm_hp_rows(monkeypatch):
+    server = HealthServer()
+    _register_profile(
+        server,
+        1,
+        "LinuxHost",
+        monitor_on=True,
+        device_profile="linux",
+    )
+    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.load_dell_snapshots",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.save_dell_snapshots",
+        lambda store: None,
+    )
+
+    with pytest.raises(DellReportEmptyError, match="No Dell Report capacity data"):
+        server.export_dell_report_excel_bytes()
+
+
+def test_api_returns_400_when_dell_report_empty(monkeypatch):
+    server = HealthServer()
+
+    def _raise_empty(*, include_monitor_off=False, card_id=None):
+        raise DellReportEmptyError(
+            "No Dell Report capacity data for monitored IBM/HPE sites after refresh."
+        )
+
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(server, "export_dell_report_excel_bytes", _raise_empty)
+
+    sent = _call_dell_report_export_api(monkeypatch, server, "?open=0")
+
+    assert sent["status"] == 400
+    assert sent["json"] == {
+        "error": "No Dell Report capacity data for monitored IBM/HPE sites after refresh."
+    }
+
+
+def test_export_skips_refresh_for_non_ibm_hp(monkeypatch):
+    server = HealthServer()
+    _register_profile(
+        server,
+        1,
+        "WAG1_FS9200_1",
+        monitor_on=True,
+        device_profile="flashsystem_9500",
+    )
+    _register_profile(
+        server,
+        2,
+        "LinuxHost",
+        monitor_on=True,
+        device_profile="linux",
+    )
+    refreshed: list[int] = []
+
+    def _fake_refresh(card_id: int):
+        refreshed.append(card_id)
+        return server._cards[card_id]
+
+    monkeypatch.setattr(server, "refresh_card", _fake_refresh)
+    monkeypatch.setattr(
+        "launchpad.health_server.analyze_health",
+        lambda name, command_results, metrics: {
+            "health_issues": [],
+            "capacity_summary": {
+                "name": "FlashSystem 9200",
+                "used_bytes": 60 * 1024**3,
+                "total_bytes": 100 * 1024**3,
+                "free_bytes": 40 * 1024**3,
+                "used_pct": 60.0,
+            },
+            "pools": [],
+        },
+    )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.load_dell_snapshots",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.save_dell_snapshots",
+        lambda store: None,
+    )
+
+    server.export_dell_report_excel_bytes()
+
+    assert 2 not in refreshed
+    assert refreshed == [1]

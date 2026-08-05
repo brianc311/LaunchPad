@@ -82,6 +82,17 @@ _FORECAST_UTIL_COLUMNS = (4, 5, 6, 7, 8)
 _GIB = 1024**3
 
 
+class DellReportEmptyError(ValueError):
+    """Raised when no IBM/HP capacity rows after collection."""
+
+
+def ensure_dell_report_has_rows(ibm_rows: list, hp_rows: list) -> None:
+    if not ibm_rows and not hp_rows:
+        raise DellReportEmptyError(
+            "No Dell Report capacity data for monitored IBM/HPE sites after refresh."
+        )
+
+
 def bytes_to_gib(num_bytes: float) -> float:
     return num_bytes / _GIB
 
