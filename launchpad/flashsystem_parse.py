@@ -429,60 +429,155 @@ def _summarize_lssi(output: str) -> str:
     return "DS8000 system info returned"
 
 
-def parse_capacity_summary(output: str) -> dict[str, Any] | None:
-    """Best-effort capacity parse for SVC, 3PAR, XIV, and DS8000 CLI output."""
-    text = (output or "").strip()
-    if not text:
-        return None
-
-    kv = _parse_key_values(text)
-    lowered = {key.lower().replace(" ", "_"): value for key, value in kv.items()}
-    # showsys -d labels capacities as MB without a unit suffix on each value.
-    mb_keys = {
+_MB_CAPACITY_KEYS = frozenset(
+    {
         "total_capacity",
         "allocated_capacity",
         "free_capacity",
         "failed_capacity",
+        "raw_capacity",
+        "raw_free_capacity",
     }
+)
+
+
+def _capacity_context(text: str) -> tuple[dict[str, str], dict[str, str], str, str]:
+    kv = _parse_key_values(text)
+    lowered = {key.lower().replace(" ", "_"): value for key, value in kv.items()}
     text_lower = text.lower()
     default_unit = ""
     if "(mb)" in text_lower or "capacity (mb)" in text_lower:
         default_unit = "MB"
     elif "(mib)" in text_lower or "estimated(mib)" in text_lower:
         default_unit = "MB"
+    name = kv.get("name") or kv.get("System Name") or kv.get("id") or "System"
+    return kv, lowered, default_unit, name
 
-    def pick_size(*keys: str) -> float | None:
-        for key in keys:
-            for candidate, value in lowered.items():
-                if key in candidate:
-                    raw = str(value).strip()
-                    if not raw:
-                        continue
-                    unit_hint = default_unit
-                    if candidate in mb_keys or candidate.endswith("_mb"):
-                        unit_hint = "MB"
-                    if unit_hint and not re.search(r"[A-Za-z]", raw):
-                        parsed = _parse_size_bytes(f"{raw}{unit_hint}")
-                    else:
-                        parsed = _parse_size_bytes(raw)
-                    if parsed is not None:
-                        return parsed
+
+def _pick_capacity_bytes(
+    lowered: dict[str, str],
+    *keys: str,
+    default_unit: str = "",
+    mb_keys: frozenset[str] | None = None,
+) -> float | None:
+    mb_keys = mb_keys or _MB_CAPACITY_KEYS
+    for key in keys:
+        for candidate, value in lowered.items():
+            if key not in candidate:
+                continue
+            raw = str(value).strip()
+            if not raw:
+                continue
+            unit_hint = default_unit
+            if candidate in mb_keys or candidate.endswith("_mb"):
+                unit_hint = "MB"
+            if unit_hint and not re.search(r"[A-Za-z]", raw):
+                parsed = _parse_size_bytes(f"{raw}{unit_hint}")
+            else:
+                parsed = _parse_size_bytes(raw)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _has_raw_capacity_fields(lowered: dict[str, str]) -> bool:
+    raw_keys = (
+        "raw_capacity",
+        "raw_free_capacity",
+        "physical_capacity",
+        "physical_free_capacity",
+    )
+    return any(
+        any(raw_key in candidate for candidate in lowered)
+        for raw_key in raw_keys
+    )
+
+
+def parse_raw_capacity_summary(output: str) -> dict[str, Any] | None:
+    """From showsys -d / lssystem text: physical/raw total/free/used + used_pct.
+
+    Return None if physical/raw fields absent.
+    Keys mirror capacity_summary: name, used_bytes, total_bytes, free_bytes, used_pct, raw.
+    """
+    text = (output or "").strip()
+    if not text:
         return None
 
-    total = pick_size(
+    kv, lowered, default_unit, name = _capacity_context(text)
+    if not _has_raw_capacity_fields(lowered):
+        return None
+
+    total = _pick_capacity_bytes(
+        lowered,
+        "raw_capacity",
         "physical_capacity",
+        default_unit=default_unit,
+    )
+    free = _pick_capacity_bytes(
+        lowered,
+        "raw_free_capacity",
+        "physical_free_capacity",
+        default_unit=default_unit,
+    )
+
+    if total and free is not None:
+        used = max(0.0, total - free)
+    else:
+        used = _pick_capacity_bytes(
+            lowered,
+            "raw_used_capacity",
+            "physical_used_capacity",
+            default_unit=default_unit,
+        )
+        if total and used is None and free is not None:
+            used = max(0.0, total - free)
+        elif total and free is None and used is not None:
+            free = max(0.0, total - used)
+        elif used is not None and free is not None and not total:
+            total = used + free
+
+    if not total or used is None or free is None:
+        return None
+
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": kv,
+    }
+
+
+def parse_capacity_summary(output: str) -> dict[str, Any] | None:
+    """Normal/usable summary. Prefer allocated + total_capacity (HPE) or usable
+    mdisk capacity (IBM). Do NOT use physical_capacity as total when allocated
+    + total_capacity are present (physical belongs in parse_raw_capacity_summary).
+    """
+    text = (output or "").strip()
+    if not text:
+        return None
+
+    kv, lowered, default_unit, name = _capacity_context(text)
+
+    def pick_size(*keys: str) -> float | None:
+        return _pick_capacity_bytes(lowered, *keys, default_unit=default_unit)
+
+    total = pick_size(
         "total_capacity",
         "total_mdisk_capacity",
         "total_usable",
         "total",
+        "physical_capacity",
     )
     free = pick_size(
-        "physical_free_capacity",
         "free_capacity",
         "total_free_space",
         "rawfree",
         "usablefree",
         "free",
+        "physical_free_capacity",
     )
 
     if total and free is not None:
@@ -555,7 +650,7 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
                     return None
                 raw = best_row[idx].strip()
                 header = headers[idx] if idx < len(headers) else ""
-                if header.lower().endswith("_mb") or "(mib)" in text_lower or default_unit == "MB":
+                if header.lower().endswith("_mb") or "(mib)" in text.lower() or default_unit == "MB":
                     if raw and not re.search(r"[A-Za-z]", raw):
                         return _parse_size_bytes(f"{raw}MB")
                 return _parse_size_bytes(raw)
