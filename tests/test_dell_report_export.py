@@ -82,8 +82,40 @@ def test_rows_sorted_by_facility_then_array_name():
     data_start = _data_start_row(ws)
     facilities = [ws.cell(row, 1).value for row in range(data_start, ws.max_row + 1)]
     arrays = [ws.cell(row, 2).value for row in range(data_start, ws.max_row + 1)]
-    assert facilities == ["A-facility", "A-facility", "Z-facility"]
+    assert facilities == ["A-facility", None, "Z-facility"]
     assert arrays == ["A-array", "B-array", "Z-array"]
+
+
+def test_utilization_cells_have_direct_led_fills():
+    wb = build_dell_report_workbook(
+        ibm_rows=[
+            _minimal_row(array_name="Cold", curr_util=0.5, prior_util=0.75),
+            _minimal_row(array_name="Hot", curr_util=0.95, prior_util=0.95),
+        ],
+        hp_rows=[],
+    )
+    ws = wb["IBM Report"]
+    start = _data_start_row(ws)
+    assert ws.cell(start, 6).fill.fgColor.rgb[-6:].upper() == AMBER_FILL
+    assert ws.cell(start, 9).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
+    assert ws.cell(start + 1, 9).fill.fgColor.rgb[-6:].upper() == RED_FILL
+
+
+def test_facility_shown_only_on_first_row_of_group():
+    wb = build_dell_report_workbook(
+        ibm_rows=[
+            _minimal_row(facility="A-facility", array_name="B-array"),
+            _minimal_row(facility="A-facility", array_name="A-array"),
+            _minimal_row(facility="Z-facility", array_name="Z-array"),
+        ],
+        hp_rows=[],
+    )
+    ws = wb["IBM Report"]
+    start = _data_start_row(ws)
+    facilities = [ws.cell(row, 1).value for row in range(start, ws.max_row + 1)]
+    arrays = [ws.cell(row, 2).value for row in range(start, ws.max_row + 1)]
+    assert arrays == ["A-array", "B-array", "Z-array"]
+    assert facilities == ["A-facility", None, "Z-facility"]
 
 
 def test_gib_and_utilization_values_written():

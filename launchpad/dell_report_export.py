@@ -15,7 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from launchpad.capacity_export import ExportSite
 from launchpad.dell_report_facility import facility_from_name
 from launchpad.dell_report_family import dell_report_family
-from launchpad.dell_report_leds import AMBER_FILL, GREEN_FILL, RED_FILL
+from launchpad.dell_report_leds import AMBER_FILL, GREEN_FILL, RED_FILL, utilization_led_fill
 from launchpad.dell_report_snapshots import (
     has_week_snapshot,
     iso_week_key,
@@ -302,6 +302,19 @@ def _build_data_sheet(
 ) -> None:
     header_row = _write_sheet_header(ws, report_date=report_date)
     data_start = header_row + 1
+    _write_grouped_facility_rows(ws, rows, data_start=data_start)
+    if rows:
+        end_row = data_start + len(rows) - 1
+        _apply_direct_utilization_fills(ws, data_start, end_row)
+        _apply_utilization_formatting(ws, data_start, end_row)
+
+
+def _write_grouped_facility_rows(
+    ws: Worksheet,
+    rows: list[dict],
+    *,
+    data_start: int,
+) -> None:
     sorted_rows = sorted(
         rows,
         key=lambda row: (
@@ -309,15 +322,34 @@ def _build_data_sheet(
             str(row.get("array_name") or "").lower(),
         ),
     )
+    last_facility: str | None = None
     for offset, row in enumerate(sorted_rows):
         excel_row = data_start + offset
+        facility = row.get("facility")
+        if facility == last_facility:
+            facility_value = None
+        else:
+            facility_value = facility
+            last_facility = facility
         for col, (key, number_format) in enumerate(_DATA_COLUMNS, start=1):
-            value = row.get(key)
+            value = facility_value if key == "facility" else row.get(key)
             cell = ws.cell(row=excel_row, column=col, value=value)
             if number_format is not None:
                 cell.number_format = number_format
-    if sorted_rows:
-        _apply_utilization_formatting(ws, data_start, data_start + len(sorted_rows) - 1)
+
+
+def _apply_direct_utilization_fills(
+    ws: Worksheet,
+    start_row: int,
+    end_row: int,
+    util_columns: tuple[int, ...] = _UTIL_COLUMNS,
+) -> None:
+    for row in range(start_row, end_row + 1):
+        for col in util_columns:
+            cell = ws.cell(row=row, column=col)
+            fill_color = utilization_led_fill(cell.value)
+            if fill_color is not None:
+                cell.fill = PatternFill("solid", fgColor=fill_color)
 
 
 def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
