@@ -1,8 +1,8 @@
 # HPE Array Capacity + CPG Toggle — Design
 
 **Date:** 2026-08-04  
-**Status:** Approved  
-**App version target:** 1.6.108+  
+**Status:** Superseded by `docs/superpowers/specs/2026-08-05-capacity-layers-array-pools-raw-design.md` (adds IBM pools + Raw layer; HPE array/CPG rules below remain authoritative within that doc)  
+**App version target:** 1.6.108+ (see superseding doc for current target)  
 **Depends on:**
 - Capacity Report (`launchpad/capacity_report.py`) — existing **Show pool storage** toggle / `localStorage`
 - HPE capacity commands (`showsys -d`, `showcpg`) via `ensure_hpe_capacity_commands` / interactive shell
