@@ -15,7 +15,7 @@ from launchpad.dell_report_export import (
     bytes_to_gib,
     workbook_to_bytes,
 )
-from launchpad.dell_report_leds import AMBER_FILL, GREEN_FILL, RED_FILL
+from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
 
 
 def _minimal_row(**overrides) -> dict:
@@ -106,7 +106,7 @@ def test_rows_sorted_by_facility_then_array_name():
     assert arrays == ["A-array", "B-array", "Z-array"]
 
 
-def test_utilization_cells_have_direct_led_fills():
+def test_utilization_icon_set_leds():
     wb = build_dell_report_workbook(
         ibm_rows=[
             _minimal_row(array_name="Cold", curr_util=0.5, prior_util=0.75),
@@ -116,10 +116,31 @@ def test_utilization_cells_have_direct_led_fills():
     )
     ws = wb["IBM Report"]
     start = _data_start_row(ws)
-    # prior util col 8, curr util col 11
-    assert ws.cell(start, 8).fill.fgColor.rgb[-6:].upper() == AMBER_FILL
-    assert ws.cell(start, 11).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
-    assert ws.cell(start + 1, 11).fill.fgColor.rgb[-6:].upper() == RED_FILL
+    end = ws.max_row
+    rules = [rule for group in ws.conditional_formatting for rule in group.rules]
+    icon_rules = [rule for rule in rules if getattr(rule, "type", None) == "iconSet"]
+    assert icon_rules
+    icon_set = icon_rules[0].iconSet
+    assert icon_set is not None
+    assert icon_set.iconSet == "3TrafficLights1"
+    assert icon_set.reverse is True
+    vals = [float(cfvo.val) for cfvo in icon_set.cfvo]
+    assert UTIL_YELLOW_THRESHOLD in vals
+    # Values still written (icon + value); fills are not the primary LED.
+    assert ws.cell(start, 11).value == 0.5
+    assert ws.cell(start + 1, 11).value == 0.95
+    assert end >= start
+
+
+def test_banner_has_sheet_title_and_logos():
+    wb = build_dell_report_workbook(ibm_rows=[_minimal_row()], hp_rows=[])
+    ws = wb["IBM Report"]
+    assert any(
+        cell.value == "IBM Report"
+        for row in ws.iter_rows(min_row=1, max_row=6, max_col=12)
+        for cell in row
+    )
+    assert len(ws._images) >= 2
 
 
 def test_facility_shown_only_on_first_row_of_group():
@@ -175,7 +196,7 @@ def test_report_embeds_logos_when_assets_present():
     assert len(wb["HP Forecast"]._images) >= 1
 
 
-def test_utilization_conditional_formatting():
+def test_utilization_conditional_formatting_uses_icon_set():
     wb = build_dell_report_workbook(
         ibm_rows=[_minimal_row()],
         hp_rows=[_minimal_row()],
@@ -183,19 +204,9 @@ def test_utilization_conditional_formatting():
     for sheet_name in ("IBM Report", "HP Report"):
         ws = wb[sheet_name]
         rules = [rule for group in ws.conditional_formatting for rule in group.rules]
-        cell_is_rules = [rule for rule in rules if getattr(rule, "type", None) == "cellIs"]
-        assert len(cell_is_rules) >= 3
-        fills = {
-            rule.dxf.fill.fgColor.rgb[-6:].upper()
-            for rule in cell_is_rules
-            if rule.dxf is not None
-            and rule.dxf.fill is not None
-            and rule.dxf.fill.fgColor is not None
-            and rule.dxf.fill.fgColor.rgb is not None
-        }
-        assert GREEN_FILL in fills
-        assert AMBER_FILL in fills
-        assert RED_FILL in fills
+        icon_rules = [rule for rule in rules if getattr(rule, "type", None) == "iconSet"]
+        assert icon_rules
+        assert icon_rules[0].iconSet.iconSet == "3TrafficLights1"
 
 
 def test_workbook_to_bytes_roundtrip():
@@ -238,7 +249,8 @@ def test_workbook_includes_ibm_and_hp_forecast_sheets():
     start = _forecast_data_start_row(ibm_f)
     for col in (6, 7, 8, 9, 10):
         assert ibm_f.cell(start, col).value == 0.61
-    assert ibm_f.cell(start, 6).fill.fgColor.rgb[-6:].upper() == GREEN_FILL
+    rules = [rule for group in ibm_f.conditional_formatting for rule in group.rules]
+    assert any(getattr(rule, "type", None) == "iconSet" for rule in rules)
 
 
 def test_home_lists_forecast_sheets():

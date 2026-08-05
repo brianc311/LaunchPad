@@ -1,6 +1,11 @@
 from launchpad.dell_report_facility import facility_from_name
 from launchpad.dell_report_family import dell_report_family
-from launchpad.dell_report_leds import utilization_led_fill
+from launchpad.dell_report_leds import (
+    AMBER_FILL,
+    GREEN_FILL,
+    UTIL_YELLOW_THRESHOLD,
+    utilization_led_fill,
+)
 
 
 def test_facility_wag_and_other():
@@ -33,10 +38,10 @@ def test_family_manufacturer_hint():
 
 
 def test_led_bands():
-    assert utilization_led_fill(0.69) == "22C55E"
-    assert utilization_led_fill(0.70) == "F59E0B"
-    assert utilization_led_fill(0.89) == "F59E0B"
-    assert utilization_led_fill(0.90) == "EF4444"
+    assert UTIL_YELLOW_THRESHOLD == 0.80
+    assert utilization_led_fill(0.79) == GREEN_FILL
+    assert utilization_led_fill(0.80) == AMBER_FILL
+    assert utilization_led_fill(0.95) == AMBER_FILL
 
 
 def test_led_invalid():

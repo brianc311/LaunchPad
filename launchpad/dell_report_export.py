@@ -9,7 +9,7 @@ from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.formatting.rule import CellIsRule
+from openpyxl.formatting.rule import IconSetRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -17,7 +17,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from launchpad.capacity_export import ExportSite
 from launchpad.dell_report_facility import facility_from_name
 from launchpad.dell_report_family import dell_report_family
-from launchpad.dell_report_leds import AMBER_FILL, GREEN_FILL, RED_FILL, utilization_led_fill
+from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
 from launchpad.dell_report_snapshots import (
     has_week_snapshot,
     iso_week_key,
@@ -84,7 +84,8 @@ STUB_SHEET_NAMES: list[str] = [
 ]
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "dell_report"
-_LOGO_FILES = ("logo_1.png", "logo_4.png")
+_DELL_LOGO_FILE = "logo_1.png"
+_WALGREENS_LOGO_FILE = "logo_3.png"
 
 # Excel columns: A blank, B Home link, data from C (Facility) through L.
 _FIRST_DATA_COL = 3
@@ -92,10 +93,12 @@ _HEADER_ROW = 9
 _FORECAST_HEADER_ROW = 9
 _META_ROW = 7
 _DATE_ROW = 8
+_BANNER_TITLE_ROW = 3
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _TITLE_FONT = Font(bold=True, size=14, color="1F4E79")
+_SHEET_TITLE_FONT = Font(bold=True, size=18, color="5B9BD5")
 
 _DATA_COLUMNS = (
     ("facility", None),
@@ -401,7 +404,7 @@ def _build_forecast_sheet(
     _write_forecast_grouped_rows(ws, rows, data_start=data_start)
     if rows:
         end_row = data_start + len(rows) - 1
-        _apply_direct_utilization_fills(
+        _apply_utilization_icon_leds(
             ws, data_start, end_row, util_columns=_FORECAST_UTIL_COLUMNS
         )
 
@@ -417,29 +420,54 @@ def _build_data_sheet(
     _write_grouped_facility_rows(ws, rows, data_start=data_start)
     if rows:
         end_row = data_start + len(rows) - 1
-        _apply_direct_utilization_fills(ws, data_start, end_row)
-        _apply_utilization_formatting(ws, data_start, end_row)
+        _apply_utilization_icon_leds(ws, data_start, end_row)
+        ws.auto_filter.ref = (
+            f"{get_column_letter(_FIRST_DATA_COL)}{_HEADER_ROW}:"
+            f"{get_column_letter(_FIRST_DATA_COL + len(_DATA_COLUMNS) - 1)}"
+            f"{end_row}"
+        )
 
 
-def _add_logos(ws: Worksheet) -> None:
-    """Embed bundled Dell header logos when assets exist; never fail export."""
-    col_anchor = "A1"
-    for name in _LOGO_FILES:
-        path = _ASSETS_DIR / name
-        if not path.is_file():
-            continue
+def _scale_logo(img: XLImage, *, max_height: int) -> XLImage:
+    if img.height and img.height > max_height:
+        scale = max_height / float(img.height)
+        img.height = int(img.height * scale)
+        img.width = int(img.width * scale)
+    return img
+
+
+def _add_logos(ws: Worksheet, *, sheet_title: str = "") -> None:
+    """Dell left, optional centered sheet title, Walgreens right."""
+    title = (sheet_title or ws.title or "").strip()
+    dell = _ASSETS_DIR / _DELL_LOGO_FILE
+    wag = _ASSETS_DIR / _WALGREENS_LOGO_FILE
+    if dell.is_file():
         try:
-            img = XLImage(str(path))
+            img = _scale_logo(XLImage(str(dell)), max_height=52)
+            img.anchor = "A1"
+            ws.add_image(img)
         except Exception:
-            continue
-        max_height = 48
-        if img.height and img.height > max_height:
-            scale = max_height / float(img.height)
-            img.height = int(img.height * scale)
-            img.width = int(img.width * scale)
-        img.anchor = col_anchor
-        ws.add_image(img)
-        col_anchor = "E1"
+            pass
+    if title:
+        cell = ws.cell(row=_BANNER_TITLE_ROW, column=5, value=title)
+        cell.font = _SHEET_TITLE_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        try:
+            ws.merge_cells(
+                start_row=_BANNER_TITLE_ROW,
+                start_column=5,
+                end_row=_BANNER_TITLE_ROW + 1,
+                end_column=8,
+            )
+        except ValueError:
+            pass
+    if wag.is_file():
+        try:
+            img = _scale_logo(XLImage(str(wag)), max_height=48)
+            img.anchor = "J1"
+            ws.add_image(img)
+        except Exception:
+            pass
 
 
 def _style_header_cell(cell) -> None:
@@ -515,16 +543,41 @@ def _apply_direct_utilization_fills(
     end_row: int,
     util_columns: tuple[int, ...] = _UTIL_COLUMNS,
 ) -> None:
-    for row in range(start_row, end_row + 1):
-        for col in util_columns:
-            cell = ws.cell(row=row, column=col)
-            fill_color = utilization_led_fill(cell.value)
-            if fill_color is not None:
-                cell.fill = PatternFill("solid", fgColor=fill_color)
+    """Deprecated path kept for callers; prefer icon-set LEDs."""
+    _apply_utilization_icon_leds(ws, start_row, end_row, util_columns=util_columns)
+
+
+def _apply_utilization_icon_leds(
+    ws: Worksheet,
+    start_row: int,
+    end_row: int,
+    util_columns: tuple[int, ...] = _UTIL_COLUMNS,
+) -> None:
+    """Circular traffic-light icons: green below 80%, yellow at/above 80%.
+
+    reverse=True with thresholds [0, 0.8, 1.01] maps util in [0, 1] to green/yellow
+    only (red threshold sits above 100%).
+    """
+    if end_row < start_row:
+        return
+    for col in util_columns:
+        column = get_column_letter(col)
+        cell_range = f"{column}{start_row}:{column}{end_row}"
+        ws.conditional_formatting.add(
+            cell_range,
+            IconSetRule(
+                "3TrafficLights1",
+                "num",
+                [0, UTIL_YELLOW_THRESHOLD, 1.01],
+                showValue=True,
+                percent=False,
+                reverse=True,
+            ),
+        )
 
 
 def _write_forecast_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
-    _add_logos(ws)
+    _add_logos(ws, sheet_title=ws.title)
     ws.cell(row=_META_ROW, column=2, value="Home")
     ws.cell(row=_META_ROW, column=3, value="Sum of Utilization %")
     ws.cell(row=_META_ROW, column=6, value="Date")
@@ -540,7 +593,7 @@ def _write_forecast_sheet_header(ws: Worksheet, *, report_date: datetime) -> int
 
 
 def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
-    _add_logos(ws)
+    _add_logos(ws, sheet_title=ws.title)
     ws.cell(row=_META_ROW, column=2, value="Home")
     ws.cell(row=_META_ROW, column=6, value="Date")
     ws.cell(row=_META_ROW, column=7, value="Values")
@@ -556,38 +609,3 @@ def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.row_dimensions[_HEADER_ROW].height = 32
     return _HEADER_ROW
-
-
-def _apply_utilization_formatting(
-    ws: Worksheet,
-    start_row: int,
-    end_row: int,
-) -> None:
-    green = PatternFill("solid", fgColor=GREEN_FILL)
-    amber = PatternFill("solid", fgColor=AMBER_FILL)
-    red = PatternFill("solid", fgColor=RED_FILL)
-    for col in _UTIL_COLUMNS:
-        column = get_column_letter(col)
-        cell_range = f"{column}{start_row}:{column}{end_row}"
-        ws.conditional_formatting.add(
-            cell_range,
-            CellIsRule(operator="lessThan", formula=["0.7"], fill=green, stopIfTrue=True),
-        )
-        ws.conditional_formatting.add(
-            cell_range,
-            CellIsRule(
-                operator="between",
-                formula=["0.7", "0.8999999999"],
-                fill=amber,
-                stopIfTrue=True,
-            ),
-        )
-        ws.conditional_formatting.add(
-            cell_range,
-            CellIsRule(
-                operator="greaterThanOrEqual",
-                formula=["0.9"],
-                fill=red,
-                stopIfTrue=True,
-            ),
-        )
