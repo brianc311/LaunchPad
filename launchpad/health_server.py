@@ -2947,11 +2947,23 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "true",
                 "yes",
             }
+            include_pools = (query.get("include_pools") or ["1"])[0].strip().lower() not in {
+                "0",
+                "false",
+                "no",
+            }
+            show_raw = (query.get("show_raw") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
             try:
                 server.sync_from_app()
                 body, filename = server.export_capacity_excel_bytes(
                     include_monitor_off=include_off,
                     card_id=card_id,
+                    include_pools=include_pools,
+                    show_raw=show_raw,
                 )
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
@@ -3013,11 +3025,17 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "true",
                 "yes",
             }
+            include_pools = (query.get("include_pools") or ["1"])[0].strip().lower() not in {
+                "0",
+                "false",
+                "no",
+            }
             try:
                 server.sync_from_app()
                 body, filename = server.export_dell_report_excel_bytes(
                     include_monitor_off=include_off,
                     card_id=card_id,
+                    include_pools=include_pools,
                 )
             except DellReportEmptyError as exc:
                 self._send_json({"error": str(exc)}, status=400)
@@ -6319,7 +6337,12 @@ class HealthServer:
         return body, filename
 
     def export_capacity_excel_bytes(
-        self, *, include_monitor_off: bool = False, card_id: int | None = None
+        self,
+        *,
+        include_monitor_off: bool = False,
+        card_id: int | None = None,
+        include_pools: bool = True,
+        show_raw: bool = False,
     ) -> tuple[bytes, str]:
         """Build the browser-facing Storage Capacity workbook from registered cards.
 
@@ -6358,7 +6381,9 @@ class HealthServer:
             try:
                 # Capacity-only suite — full health refresh on every monitored site
                 # made Export Excel hang the Capacity Report UI for minutes.
-                card = self.refresh_card(site_id, focus="capacity")
+                card = self.refresh_card(
+                    site_id, focus="capacity", include_pools=include_pools
+                )
                 error = card.error
             except Exception as exc:
                 error = str(exc)
@@ -6375,6 +6400,7 @@ class HealthServer:
                     capacity_summary=analysis.get("capacity_summary"),
                     pools=pools,
                     error=error,
+                    raw_capacity_summary=analysis.get("raw_capacity_summary"),
                 )
             )
 
@@ -6387,6 +6413,8 @@ class HealthServer:
                 tmp_path,
                 include_monitor_off=include_monitor_off,
                 monitor_enabled=monitor_enabled,
+                include_pools=include_pools,
+                show_raw=show_raw,
             )
             body = tmp_path.read_bytes()
         return body, filename
@@ -6407,7 +6435,11 @@ class HealthServer:
             _log(f"Dell Report snapshot capture failed (ignored): {exc}")
 
     def export_dell_report_excel_bytes(
-        self, *, include_monitor_off: bool = False, card_id: int | None = None
+        self,
+        *,
+        include_monitor_off: bool = False,
+        card_id: int | None = None,
+        include_pools: bool = True,
     ) -> tuple[bytes, str]:
         """Build the Dell Managed Services capacity workbook from registered cards.
 
@@ -6465,7 +6497,9 @@ class HealthServer:
             try:
                 # Capacity-only suite — full health (checkhealth/showalert/…) is too
                 # slow for Dell Report and left the Capacity Report UI spinning.
-                card = self.refresh_card(site_id, focus="capacity")
+                card = self.refresh_card(
+                    site_id, focus="capacity", include_pools=include_pools
+                )
                 error = card.error
             except Exception as exc:
                 error = str(exc)
@@ -6482,6 +6516,7 @@ class HealthServer:
                     capacity_summary=analysis.get("capacity_summary"),
                     pools=pools,
                     error=error,
+                    raw_capacity_summary=analysis.get("raw_capacity_summary"),
                 )
             )
 

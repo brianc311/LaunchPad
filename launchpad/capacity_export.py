@@ -117,6 +117,7 @@ class ExportSite:
     capacity_summary: dict[str, Any] | None
     pools: list[dict[str, Any]]
     error: str | None
+    raw_capacity_summary: dict[str, Any] | None = None
 
 
 def card_ids_included_for_export(
@@ -178,6 +179,24 @@ def format_capacity_text(
             return f"{label}: {pct:.1f}% used"
     if error:
         return f"Error: {error[:160]}"
+    return ""
+
+
+def format_raw_capacity_text(raw_capacity_summary: dict[str, Any] | None) -> str:
+    """One-line raw/physical capacity for Excel when show_raw is on."""
+    if not raw_capacity_summary:
+        return ""
+    pct = float(raw_capacity_summary.get("used_pct") or 0)
+    used = int(raw_capacity_summary.get("used_bytes") or 0)
+    total = int(raw_capacity_summary.get("total_bytes") or 0)
+    label = raw_capacity_summary.get("name") or "Raw"
+    if total > 0:
+        return (
+            f"{label}: {pct:.1f}% used "
+            f"({_format_bytes(used)} / {_format_bytes(total)})"
+        )
+    if pct > 0:
+        return f"{label}: {pct:.1f}% used"
     return ""
 
 
@@ -641,6 +660,8 @@ def export_storage_capacity_excel_from_sites(
     include_monitor_off: bool,
     monitor_enabled: Mapping[int, bool],
     card_id: int | None = None,
+    include_pools: bool = True,
+    show_raw: bool = False,
 ) -> ExportResult:
     included = card_ids_included_for_export(
         [site.card_id for site in sites],
@@ -656,14 +677,21 @@ def export_storage_capacity_excel_from_sites(
     error_count = 0
 
     for card_id, site in sites_by_id.items():
+        pools_for_text = site.pools if include_pools else []
         text = format_capacity_text(
             site.capacity_summary,
             error=site.error,
-            pools=site.pools,
+            pools=pools_for_text,
         )
+        if show_raw:
+            raw_text = format_raw_capacity_text(site.raw_capacity_summary)
+            if raw_text:
+                text = f"{text}\n{raw_text}" if text else raw_text
         capacity_by_card_id[card_id] = text
-        pools_by_card_id[card_id] = site.pools
-        if site.error and not site.capacity_summary and not site.pools:
+        pools_by_card_id[card_id] = site.pools if include_pools else []
+        if site.error and not site.capacity_summary and not (
+            include_pools and site.pools
+        ):
             error_count += 1
 
     matched_card_ids: set[int] = set()
@@ -694,10 +722,11 @@ def export_storage_capacity_excel_from_sites(
             matched_card_ids.add(card_id)
             capacity_text = capacity_by_card_id.get(card_id, "")
             pools = pools_by_card_id.get(card_id, [])
-            pool_stats_text = format_pool_stats_text(pools)
-            pool_detail_rows.extend(
-                _pool_detail_rows_for_site(location, device_sn, ip_addr, pools)
-            )
+            pool_stats_text = format_pool_stats_text(pools) if include_pools else ""
+            if include_pools:
+                pool_detail_rows.extend(
+                    _pool_detail_rows_for_site(location, device_sn, ip_addr, pools)
+                )
             if capacity_text and not capacity_text.startswith("Error:"):
                 filled_count += 1
             if pool_stats_text:
@@ -711,16 +740,17 @@ def export_storage_capacity_excel_from_sites(
             continue
         capacity_text = capacity_by_card_id.get(card_id, "")
         pools = pools_by_card_id.get(card_id, [])
-        pool_stats_text = format_pool_stats_text(pools)
+        pool_stats_text = format_pool_stats_text(pools) if include_pools else ""
         extra_rows.append(_site_to_extra_row(site, capacity_text, pool_stats_text))
-        pool_detail_rows.extend(
-            _pool_detail_rows_for_site(
-                site.category or site.name,
-                site.name,
-                site.host,
-                pools,
+        if include_pools:
+            pool_detail_rows.extend(
+                _pool_detail_rows_for_site(
+                    site.category or site.name,
+                    site.name,
+                    site.host,
+                    pools,
+                )
             )
-        )
         if capacity_text and not capacity_text.startswith("Error:"):
             filled_count += 1
         if pool_stats_text:

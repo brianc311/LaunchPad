@@ -157,7 +157,7 @@ def test_dell_report_export_sends_xlsx_when_enabled(monkeypatch):
     monkeypatch.setattr(
         server,
         "refresh_card",
-        lambda card_id, focus="": server._cards[card_id],
+        lambda card_id, focus="", include_pools=True: server._cards[card_id],
     )
     monkeypatch.setattr(
         "launchpad.health_server.analyze_health",
@@ -205,7 +205,7 @@ def test_export_raises_when_no_ibm_hp_rows(monkeypatch):
     monkeypatch.setattr(
         server,
         "refresh_card",
-        lambda card_id, focus="": server._cards[card_id],
+        lambda card_id, focus="", include_pools=True: server._cards[card_id],
     )
     monkeypatch.setattr(
         "launchpad.dell_report_snapshots.load_dell_snapshots",
@@ -223,7 +223,7 @@ def test_export_raises_when_no_ibm_hp_rows(monkeypatch):
 def test_api_returns_400_when_dell_report_empty(monkeypatch):
     server = HealthServer()
 
-    def _raise_empty(*, include_monitor_off=False, card_id=None):
+    def _raise_empty(*, include_monitor_off=False, card_id=None, include_pools=True):
         raise DellReportEmptyError(
             "No Dell Report capacity data for monitored IBM/HPE sites after refresh."
         )
@@ -258,7 +258,7 @@ def test_export_skips_refresh_for_non_ibm_hp(monkeypatch):
     refreshed: list[int] = []
     refresh_focus: list[str] = []
 
-    def _fake_refresh(card_id: int, focus: str = ""):
+    def _fake_refresh(card_id: int, *, focus: str = "", include_pools: bool = True):
         refreshed.append(card_id)
         refresh_focus.append(focus)
         return server._cards[card_id]
@@ -305,7 +305,7 @@ def test_dell_report_export_uses_capacity_focus_refresh(monkeypatch):
     )
     calls: list[tuple[int, str]] = []
 
-    def _fake_refresh(card_id: int, focus: str = ""):
+    def _fake_refresh(card_id: int, *, focus: str = "", include_pools: bool = True):
         calls.append((card_id, focus))
         return server._cards[card_id]
 

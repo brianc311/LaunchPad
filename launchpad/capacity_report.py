@@ -353,6 +353,9 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     body.hide-pool-storage .capacity-pools-wrap {
       display: none;
     }
+    body.hide-raw-capacity .capacity-raw-wrap {
+      display: none;
+    }
     .capacity-pools-wrap {
       margin-top: 8px;
     }
@@ -474,9 +477,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           <input type="checkbox" id="one-page-toggle" checked>
           One site per page
         </label>
-        <label class="toggle-row" for="show-pools-toggle">
+        <label class="toggle-row" for="show-pools-toggle" title="HPE CPGs and IBM pools">
           <input type="checkbox" id="show-pools-toggle" checked>
-          Show pool storage
+          Include CPG / pools
+        </label>
+        <label class="toggle-row" for="show-raw-toggle">
+          <input type="checkbox" id="show-raw-toggle">
+          Show raw capacity
         </label>
         <label class="toggle-row" for="show-title-toggle">
           <input type="checkbox" id="show-title-toggle" checked>
@@ -508,6 +515,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const showDetailsToggle = document.getElementById("show-details-toggle");
     const onePageToggle = document.getElementById("one-page-toggle");
     const showPoolsToggle = document.getElementById("show-pools-toggle");
+    const showRawToggle = document.getElementById("show-raw-toggle");
     const showTitleToggle = document.getElementById("show-title-toggle");
     const includeOffToggle = document.getElementById("include-off-toggle");
     const capacitySiteSelectEl = document.getElementById("capacity-site-select");
@@ -518,6 +526,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
     const ONE_PAGE_PREF_KEY = "launchpad.capacityReport.oneSitePerPage";
     const POOLS_PREF_KEY = "launchpad.capacityReport.showPools";
+    const RAW_PREF_KEY = "launchpad.capacityReport.showRaw";
     const TITLE_PREF_KEY = "launchpad.capacityReport.title";
     const SUBTITLE_PREF_KEY = "launchpad.capacityReport.subtitle";
     const SHOW_TITLE_PRINT_KEY = "launchpad.capacityReport.showTitlePrint";
@@ -774,6 +783,18 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
+    function applyRawCapacityVisibility(showRaw) {
+      document.body.classList.toggle("hide-raw-capacity", !showRaw);
+      if (showRawToggle) {
+        showRawToggle.checked = showRaw;
+      }
+      try {
+        localStorage.setItem(RAW_PREF_KEY, showRaw ? "1" : "0");
+      } catch (_err) {
+        /* ignore storage errors */
+      }
+    }
+
     function initDetailsToggle() {
       let showDetails = true;
       try {
@@ -818,6 +839,22 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (showPoolsToggle) {
         showPoolsToggle.addEventListener("change", () => {
           applyPoolStorageVisibility(showPoolsToggle.checked);
+        });
+      }
+    }
+
+    function initRawCapacityToggle() {
+      let showRaw = false;
+      try {
+        const saved = localStorage.getItem(RAW_PREF_KEY);
+        if (saved === "1") showRaw = true;
+      } catch (_err) {
+        /* ignore storage errors */
+      }
+      applyRawCapacityVisibility(showRaw);
+      if (showRawToggle) {
+        showRawToggle.addEventListener("change", () => {
+          applyRawCapacityVisibility(showRawToggle.checked);
         });
       }
     }
@@ -1051,9 +1088,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Excel workbook…";
       try {
         const includeOff = includeOffToggle ? includeOffToggle.checked : false;
+        const includePools = showPoolsToggle ? showPoolsToggle.checked : true;
+        const showRaw = showRawToggle ? showRawToggle.checked : false;
         const siteId = selectedCapacitySiteId();
         let exportUrl =
-          `/api/capacity-export?include_off=${includeOff ? 1 : 0}&open=1`;
+          `/api/capacity-export?include_off=${includeOff ? 1 : 0}` +
+          `&include_pools=${includePools ? 1 : 0}` +
+          `&show_raw=${showRaw ? 1 : 0}&open=1`;
         if (siteId != null) {
           exportUrl += `&card_id=${siteId}`;
         }
@@ -1094,9 +1135,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Dell Report workbook…";
       try {
         const includeOff = includeOffToggle ? includeOffToggle.checked : false;
+        const includePools = showPoolsToggle ? showPoolsToggle.checked : true;
+        const showRaw = showRawToggle ? showRawToggle.checked : false;
         const siteId = selectedCapacitySiteId();
         let exportUrl =
-          `/api/dell-report-export?include_off=${includeOff ? 1 : 0}&open=1`;
+          `/api/dell-report-export?include_off=${includeOff ? 1 : 0}` +
+          `&include_pools=${includePools ? 1 : 0}` +
+          `&show_raw=${showRaw ? 1 : 0}&open=1`;
         if (siteId != null) {
           exportUrl += `&card_id=${siteId}`;
         }
@@ -1146,7 +1191,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
       if (section) section.classList.add("loading");
       try {
-        const res = await fetch(`/api/refresh/${cardId}?focus=capacity`, { method: "POST" });
+        const includePools = showPoolsToggle ? showPoolsToggle.checked : true;
+        const res = await fetch(
+          `/api/refresh/${cardId}?focus=capacity&include_pools=${includePools ? 1 : 0}`,
+          { method: "POST" }
+        );
         const card = await res.json();
         if (!res.ok) throw new Error(card.error || "Refresh failed");
         return card;
@@ -1288,6 +1337,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     initDetailsToggle();
     initPageLayoutToggle();
     initPoolStorageToggle();
+    initRawCapacityToggle();
     loadSiteNameOverrides();
     initReportHeader();
     initDellReportButton();
