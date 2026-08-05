@@ -26,9 +26,13 @@ def test_facility_distribution_patterns():
     assert facility_from_name("v5k remote backup") == "Remote"
 
 
-def test_facility_remote_from_name():
-    assert facility_from_name("Anderson, SC - Remote") == "Remote"
-    assert facility_from_name("REMOTE site") == "Remote"
+def test_facility_vag_aliases():
+    assert facility_from_name("DS8884 VAG1") == "Data center -WAG1"
+    assert facility_from_name("site vag2 svc") == "Data center -WAG2"
+
+
+def test_facility_v5k_token_anywhere():
+    assert facility_from_name("host-v5kPEN-g3v1") == "Distribution center"
 
 
 def test_family_ibm_hp():

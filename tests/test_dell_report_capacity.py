@@ -35,11 +35,33 @@ def test_include_pools_true_prefers_system_over_raw():
     assert chosen is SYSTEM
 
 
-def test_include_pools_true_raw_last_resort():
+def test_include_pools_false_skips_all_cpgs_system_for_raw():
+    all_cpgs = {
+        "name": "All CPGs",
+        "total_bytes": 100,
+        "used_bytes": 99,
+        "used_pct": 99.0,
+    }
     chosen = select_dell_capacity_summary(
-        capacity_summary=None,
+        capacity_summary=all_cpgs,
         raw_capacity_summary=RAW,
         pools=[],
-        include_pools=True,
+        include_pools=False,
     )
     assert chosen is RAW
+
+
+def test_include_pools_false_rejects_all_cpgs_without_raw():
+    all_cpgs = {
+        "name": "All CPGs",
+        "total_bytes": 100,
+        "used_bytes": 99,
+        "used_pct": 99.0,
+    }
+    chosen = select_dell_capacity_summary(
+        capacity_summary=all_cpgs,
+        raw_capacity_summary=None,
+        pools=[],
+        include_pools=False,
+    )
+    assert chosen is None

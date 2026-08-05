@@ -219,19 +219,20 @@ def collect_dell_report_rows(
         model = ident["model"]
         array_name = ident["array_name"]
 
-        if not has_week_snapshot(store, card_id, week):
-            store = upsert_week_snapshot(
-                store,
-                card_id=card_id,
-                week=week,
-                usable_bytes=total_bytes,
-                used_bytes=used_bytes,
-                model=model,
-                facility=facility,
-                family=family,
-                array_name=array_name,
-                captured_at=captured_at,
-            )
+        # Always refresh the current ISO week from live capacity so CPG-off
+        # raw (and identity) replace a stale same-week CPG / All-CPGs snapshot.
+        store = upsert_week_snapshot(
+            store,
+            card_id=card_id,
+            week=week,
+            usable_bytes=total_bytes,
+            used_bytes=used_bytes,
+            model=model,
+            facility=facility,
+            family=family,
+            array_name=array_name,
+            captured_at=captured_at,
+        )
 
         prior, current = prior_and_current_for_card(
             store, card_id, current_week=week

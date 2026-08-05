@@ -98,6 +98,51 @@ def test_collect_uses_raw_when_include_pools_false():
     assert has_week(store, 5, "2026-W32")
 
 
+def test_collect_refreshes_stale_cpg_snapshot_with_raw():
+    store = upsert_week_snapshot(
+        {},
+        card_id=5,
+        week="2026-W32",
+        usable_bytes=10 * 1024**3,
+        used_bytes=9 * 1024**3,
+        model="All CPGs",
+        facility="Other",
+        family="hp",
+        array_name="old",
+        captured_at="2026-08-05T01:00:00+00:00",
+    )
+    sites = [
+        {
+            "card_id": 5,
+            "name": "HPE - VDIPRIMERA101 - WAG2",
+            "device_profile": "hpe_primera_600",
+            "capacity_summary": {
+                "name": "All CPGs",
+                "total_bytes": 10 * 1024**3,
+                "used_bytes": 9 * 1024**3,
+            },
+            "raw_capacity_summary": {
+                "name": "Vdiprimera101",
+                "total_bytes": 200 * 1024**3,
+                "used_bytes": 50 * 1024**3,
+            },
+            "pools": [],
+        }
+    ]
+    _, hp, updated = collect_dell_report_rows(
+        sites,
+        snapshot_store=store,
+        include_pools=False,
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    assert len(hp) == 1
+    assert hp[0]["model"] == "HPE Primera 600 4-way"
+    assert hp[0]["array_name"] == "Vdiprimera101"
+    assert hp[0]["facility"] == "Data center -WAG2"
+    assert hp[0]["curr_usable_gib"] == pytest.approx(200.0)
+    assert updated["5"]["2026-W32"]["model"] == "HPE Primera 600 4-way"
+
+
 def has_week(store, card_id, week):
     return week in store.get(str(card_id), {})
 
