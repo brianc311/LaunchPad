@@ -6442,7 +6442,9 @@ class HealthServer:
             if card is None:
                 continue
             try:
-                card = self.refresh_card(site_id)
+                # Capacity-only suite — full health (checkhealth/showalert/…) is too
+                # slow for Dell Report and left the Capacity Report UI spinning.
+                card = self.refresh_card(site_id, focus="capacity")
                 error = card.error
             except Exception as exc:
                 error = str(exc)

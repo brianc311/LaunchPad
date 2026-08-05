@@ -157,7 +157,7 @@ def test_dell_report_export_sends_xlsx_when_enabled(monkeypatch):
     monkeypatch.setattr(
         server,
         "refresh_card",
-        lambda card_id: server._cards[card_id],
+        lambda card_id, focus="": server._cards[card_id],
     )
     monkeypatch.setattr(
         "launchpad.health_server.analyze_health",
@@ -202,7 +202,11 @@ def test_export_raises_when_no_ibm_hp_rows(monkeypatch):
         monitor_on=True,
         device_profile="linux",
     )
-    monkeypatch.setattr(server, "refresh_card", lambda card_id: server._cards[card_id])
+    monkeypatch.setattr(
+        server,
+        "refresh_card",
+        lambda card_id, focus="": server._cards[card_id],
+    )
     monkeypatch.setattr(
         "launchpad.dell_report_snapshots.load_dell_snapshots",
         lambda: {},
@@ -252,9 +256,11 @@ def test_export_skips_refresh_for_non_ibm_hp(monkeypatch):
         device_profile="linux",
     )
     refreshed: list[int] = []
+    refresh_focus: list[str] = []
 
-    def _fake_refresh(card_id: int):
+    def _fake_refresh(card_id: int, focus: str = ""):
         refreshed.append(card_id)
+        refresh_focus.append(focus)
         return server._cards[card_id]
 
     monkeypatch.setattr(server, "refresh_card", _fake_refresh)
@@ -285,3 +291,48 @@ def test_export_skips_refresh_for_non_ibm_hp(monkeypatch):
 
     assert 2 not in refreshed
     assert refreshed == [1]
+    assert refresh_focus == ["capacity"]
+
+
+def test_dell_report_export_uses_capacity_focus_refresh(monkeypatch):
+    server = HealthServer()
+    _register_profile(
+        server,
+        1,
+        "WAG1_FS9200_1",
+        monitor_on=True,
+        device_profile="flashsystem_9500",
+    )
+    calls: list[tuple[int, str]] = []
+
+    def _fake_refresh(card_id: int, focus: str = ""):
+        calls.append((card_id, focus))
+        return server._cards[card_id]
+
+    monkeypatch.setattr(server, "refresh_card", _fake_refresh)
+    monkeypatch.setattr(
+        "launchpad.health_server.analyze_health",
+        lambda name, command_results, metrics: {
+            "health_issues": [],
+            "capacity_summary": {
+                "name": "FlashSystem 9200",
+                "used_bytes": 60 * 1024**3,
+                "total_bytes": 100 * 1024**3,
+                "free_bytes": 40 * 1024**3,
+                "used_pct": 60.0,
+            },
+            "pools": [],
+        },
+    )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.load_dell_snapshots",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "launchpad.dell_report_snapshots.save_dell_snapshots",
+        lambda store: None,
+    )
+
+    server.export_dell_report_excel_bytes()
+
+    assert calls == [(1, "capacity")]
