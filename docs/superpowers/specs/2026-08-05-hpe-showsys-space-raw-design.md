@@ -1,7 +1,7 @@
 # HPE System + Raw via `showsys -space` — Design
 
 **Date:** 2026-08-05  
-**Status:** Approved (chat); pending file review  
+**Status:** Approved  
 **App version target:** 1.6.116+  
 **Extends:** `docs/superpowers/specs/2026-08-05-capacity-layers-array-pools-raw-design.md`  
 **Problem context:** Capacity Report HPE cards show “All CPGs” as System utilization and omit Raw; IBM FlashSystem cards correctly show System + Raw. SSMC Raw Capacity (Total / Allocated / Free) matches `showsys -space`.
