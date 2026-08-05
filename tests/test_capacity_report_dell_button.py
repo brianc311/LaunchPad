@@ -21,6 +21,8 @@ def test_admin_view_has_show_dell_report_checkbox():
     assert "save_dell_report_settings" in source
     assert "load_dell_report_settings" in source
     assert "_save_dell_report_form" in source
+    assert "dell_report_overrides_text" in source
+    assert "Card overrides" in source
 
 
 def test_dashboard_export_menu_has_dell_report_label():

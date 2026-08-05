@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import json
 import queue
 import threading
 import time
@@ -555,6 +556,22 @@ class AdminView(ctk.CTkFrame):
         self.dell_report_enabled_check.grid(row=row, column=0, columnspan=2, padx=20, pady=8, sticky="w")
         row += 1
 
+        ctk.CTkLabel(
+            panel,
+            text="Card overrides (JSON object keyed by card_id: facility, array_name, model)",
+            font=ctk.CTkFont(size=12),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 4), sticky="w")
+        row += 1
+
+        self.dell_report_overrides_text = ctk.CTkTextbox(panel, height=120, width=520)
+        self.dell_report_overrides_text.grid(
+            row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="ew"
+        )
+        row += 1
+
         ctk.CTkButton(
             panel,
             text="Save Dell Report Settings",
@@ -1029,12 +1046,42 @@ class AdminView(ctk.CTkFrame):
         settings = load_dell_report_settings(self.db)
         self._dell_report_settings = settings
         self.dell_report_enabled_var.set(bool(settings.get("enabled", True)))
+        overrides = settings.get("card_overrides") or {}
+        if hasattr(self, "dell_report_overrides_text"):
+            self.dell_report_overrides_text.delete("1.0", "end")
+            self.dell_report_overrides_text.insert(
+                "1.0", json.dumps(overrides, indent=2)
+            )
 
     def _save_dell_report_form(self) -> None:
-        raw = {"enabled": bool(self.dell_report_enabled_var.get())}
+        overrides_raw = {}
+        if hasattr(self, "dell_report_overrides_text"):
+            text = self.dell_report_overrides_text.get("1.0", "end").strip() or "{}"
+            try:
+                overrides_raw = json.loads(text)
+            except json.JSONDecodeError:
+                messagebox.showerror(
+                    "Dell Report", "Card overrides must be a valid JSON object."
+                )
+                return
+            if not isinstance(overrides_raw, dict):
+                messagebox.showerror(
+                    "Dell Report", "Card overrides must be a JSON object."
+                )
+                return
+        raw = {
+            "enabled": bool(self.dell_report_enabled_var.get()),
+            "card_overrides": overrides_raw,
+        }
         saved = save_dell_report_settings(self.db, raw)
         self._dell_report_settings = saved
         self.dell_report_enabled_var.set(bool(saved.get("enabled", True)))
+        if hasattr(self, "dell_report_overrides_text"):
+            self.dell_report_overrides_text.delete("1.0", "end")
+            self.dell_report_overrides_text.insert(
+                "1.0",
+                json.dumps(saved.get("card_overrides") or {}, indent=2),
+            )
         if hasattr(self, "admin_status"):
             self.admin_status.configure(
                 text="Dell Report settings saved.", text_color=self.theme["accent"]
