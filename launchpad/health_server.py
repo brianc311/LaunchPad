@@ -6547,7 +6547,9 @@ class HealthServer:
         save_dell_snapshots(store)
         ensure_dell_report_has_rows(ibm_rows, hp_rows)
 
-        wb = build_dell_report_workbook(ibm_rows=ibm_rows, hp_rows=hp_rows)
+        wb = build_dell_report_workbook(
+            ibm_rows=ibm_rows, hp_rows=hp_rows, snapshot_store=store
+        )
         body = workbook_to_bytes(wb)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         filename = f"Dell_Capacity_Report_{stamp}.xlsx"

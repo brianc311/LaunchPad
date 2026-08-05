@@ -80,6 +80,19 @@ def _trim_card_weeks(weeks: dict[str, dict]) -> dict[str, dict]:
     return {week: weeks[week] for week in ordered if week in keep}
 
 
+def ordered_weeks_for_cards(store: dict, card_ids: list[int | str]) -> list[str]:
+    """Union of ISO weeks across cards, oldest→newest, capped by retention."""
+    weeks: set[str] = set()
+    normalized = _normalize_store(store)
+    for card_id in card_ids:
+        card_weeks = normalized.get(_card_key(card_id)) or {}
+        weeks.update(card_weeks.keys())
+    ordered = sorted(weeks, key=_week_sort_key)
+    if len(ordered) > DELL_SNAPSHOT_RETENTION_WEEKS:
+        ordered = ordered[-DELL_SNAPSHOT_RETENTION_WEEKS:]
+    return ordered
+
+
 def upsert_week_snapshot(
     store: dict,
     *,

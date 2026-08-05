@@ -22,6 +22,7 @@ from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
 from launchpad.dell_report_snapshots import (
     has_week_snapshot,
     iso_week_key,
+    ordered_weeks_for_cards,
     prior_and_current_for_card,
     upsert_week_snapshot,
     weekly_growth_fraction,
@@ -31,13 +32,15 @@ REPORT_TITLE = "Dell Technologies Managed Services - Capacity Management Report"
 HOME_SHEET_NAME = "Home"
 IBM_SHEET_NAME = "IBM Report"
 HP_SHEET_NAME = "HP Report"
+IBM_REPORT_WKLY_SHEET_NAME = "IBM Report - Wkly"
+HP_REPORT_WKLY_SHEET_NAME = "HP Report - Wkly"
 IBM_FORECAST_SHEET_NAME = "IBM Forecast"
 HP_FORECAST_SHEET_NAME = "HP Forecast"
 IBM_FORECAST_WKLY_SHEET_NAME = "IBM Forecast - Wkly"
 HP_FORECAST_WKLY_SHEET_NAME = "HP Forecast - Wkly"
 
 # Walgreens-style order: vendor Report / Forecast / Forecast - Wkly families.
-# Live IBM/HP Report+Forecast are filled; all others are empty header shells.
+# Live IBM/HP Report+Forecast(+Wkly) are filled; all others are empty header shells.
 ORDERED_SHEET_NAMES: list[str] = [
     "PowerMax Report",
     "PowerMax Forecast",
@@ -52,9 +55,11 @@ ORDERED_SHEET_NAMES: list[str] = [
     "NetApp Forecast",
     "NetApp Forecast - Wkly",
     IBM_SHEET_NAME,
+    IBM_REPORT_WKLY_SHEET_NAME,
     IBM_FORECAST_SHEET_NAME,
     IBM_FORECAST_WKLY_SHEET_NAME,
     HP_SHEET_NAME,
+    HP_REPORT_WKLY_SHEET_NAME,
     HP_FORECAST_SHEET_NAME,
     HP_FORECAST_WKLY_SHEET_NAME,
     "Data Domain Report",
@@ -70,17 +75,22 @@ ORDERED_SHEET_NAMES: list[str] = [
     "ECS Forecast - Wkly",
 ]
 
-# Back-compat for tests that import STUB_SHEET_NAMES.
-STUB_SHEET_NAMES: list[str] = [
-    name
-    for name in ORDERED_SHEET_NAMES
-    if name
-    not in {
+_LIVE_SHEET_NAMES = frozenset(
+    {
         IBM_SHEET_NAME,
         HP_SHEET_NAME,
+        IBM_REPORT_WKLY_SHEET_NAME,
+        HP_REPORT_WKLY_SHEET_NAME,
         IBM_FORECAST_SHEET_NAME,
         HP_FORECAST_SHEET_NAME,
+        IBM_FORECAST_WKLY_SHEET_NAME,
+        HP_FORECAST_WKLY_SHEET_NAME,
     }
+)
+
+# Back-compat for tests that import STUB_SHEET_NAMES.
+STUB_SHEET_NAMES: list[str] = [
+    name for name in ORDERED_SHEET_NAMES if name not in _LIVE_SHEET_NAMES
 ]
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "dell_report"
@@ -307,8 +317,10 @@ def build_dell_report_workbook(
     ibm_rows: list[dict],
     hp_rows: list[dict],
     report_date: datetime | None = None,
+    snapshot_store: dict | None = None,
 ) -> Workbook:
     when = _coerce_utc(report_date)
+    store = snapshot_store or {}
     wb = Workbook()
     _build_home_sheet(wb.active, report_date=when)
     for name in ORDERED_SHEET_NAMES:
@@ -317,10 +329,22 @@ def build_dell_report_workbook(
             _build_data_sheet(ws, ibm_rows, report_date=when)
         elif name == HP_SHEET_NAME:
             _build_data_sheet(ws, hp_rows, report_date=when)
+        elif name == IBM_REPORT_WKLY_SHEET_NAME:
+            _build_report_wkly_sheet(
+                ws, ibm_rows, report_date=when, snapshot_store=store
+            )
+        elif name == HP_REPORT_WKLY_SHEET_NAME:
+            _build_report_wkly_sheet(
+                ws, hp_rows, report_date=when, snapshot_store=store
+            )
         elif name == IBM_FORECAST_SHEET_NAME:
             _build_forecast_sheet(ws, ibm_rows, report_date=when)
         elif name == HP_FORECAST_SHEET_NAME:
             _build_forecast_sheet(ws, hp_rows, report_date=when)
+        elif name == IBM_FORECAST_WKLY_SHEET_NAME:
+            _build_forecast_wkly_sheet(ws, ibm_rows, report_date=when)
+        elif name == HP_FORECAST_WKLY_SHEET_NAME:
+            _build_forecast_wkly_sheet(ws, hp_rows, report_date=when)
         elif "Forecast" in name:
             _build_forecast_sheet(ws, [], report_date=when)
         else:
@@ -407,8 +431,176 @@ def _build_home_sheet(ws: Worksheet, *, report_date: datetime) -> None:
     ws.column_dimensions["B"].width = 48
 
 
+_FORECAST_WKLY_HORIZONS = (1, 4, 8, 12)
+_FORECAST_WKLY_HEADER_LABELS = (
+    "Facility",
+    "Storage Array",
+    "Model Number",
+    "Date",
+    "+1 Week",
+    "+4 Week",
+    "+8 Week",
+    "+12 Week",
+)
+# Facility..Model + Date + four horizons → util cols F–J (6–10) when data starts at C.
+_FORECAST_WKLY_UTIL_COLUMNS = (6, 7, 8, 9, 10)
+
+
 def _build_stub_sheet(ws: Worksheet, *, report_date: datetime) -> None:
     _write_sheet_header(ws, report_date=report_date)
+
+
+def _iso_week_display_date(week: str) -> str:
+    try:
+        year_str, week_str = week.split("-W", 1)
+        monday = datetime.fromisocalendar(int(year_str), int(week_str), 1)
+        return monday.strftime("%B %d, %Y")
+    except (ValueError, TypeError):
+        return week
+
+
+def _weeks_for_report_wkly(rows: list[dict], snapshot_store: dict) -> list[str]:
+    card_ids = [row.get("card_id") for row in rows if row.get("card_id") is not None]
+    weeks = ordered_weeks_for_cards(snapshot_store, card_ids)
+    if weeks:
+        return weeks
+    # No store weeks yet — still show current ISO week header chrome.
+    return [iso_week_key()]
+
+
+def _build_report_wkly_sheet(
+    ws: Worksheet,
+    rows: list[dict],
+    *,
+    report_date: datetime,
+    snapshot_store: dict,
+) -> None:
+    weeks = _weeks_for_report_wkly(rows, snapshot_store)
+    _add_logos(ws, sheet_title=ws.title)
+    ws.cell(row=_META_ROW, column=2, value="Home")
+    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL, value="Date")
+    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL + 3, value="Values")
+
+    identity_headers = ("Facility", "Storage Array", "Model Number")
+    for offset, label in enumerate(identity_headers):
+        cell = ws.cell(row=_HEADER_ROW, column=_FIRST_DATA_COL + offset, value=label)
+        _style_header_cell(cell)
+
+    util_columns: list[int] = []
+    for week_i, week in enumerate(weeks):
+        base = _FIRST_DATA_COL + 3 + week_i * 3
+        date_cell = ws.cell(row=_DATE_ROW, column=base, value=_iso_week_display_date(week))
+        date_cell.alignment = Alignment(horizontal="center")
+        for j, label in enumerate(
+            ("Useable Capacity (GiB)", "Used Capacity (GiB)", "Utilization % ")
+        ):
+            cell = ws.cell(row=_HEADER_ROW, column=base + j, value=label)
+            _style_header_cell(cell)
+        util_columns.append(base + 2)
+
+    ws.row_dimensions[_HEADER_ROW].height = 30
+    data_start = _HEADER_ROW + 1
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("facility") or "").lower(),
+            str(row.get("array_name") or "").lower(),
+        ),
+    )
+    last_facility: str | None = None
+    for offset, row in enumerate(sorted_rows):
+        excel_row = data_start + offset
+        facility = row.get("facility")
+        facility_value = None if facility == last_facility else facility
+        if facility != last_facility:
+            last_facility = facility
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL, value=facility_value)
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL + 1, value=row.get("array_name"))
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL + 2, value=row.get("model"))
+        card_id = row.get("card_id")
+        card_weeks = (snapshot_store or {}).get(str(card_id), {}) if card_id is not None else {}
+        for week_i, week in enumerate(weeks):
+            base = _FIRST_DATA_COL + 3 + week_i * 3
+            snap = card_weeks.get(week) if isinstance(card_weeks, dict) else None
+            if not isinstance(snap, dict):
+                continue
+            usable = float(snap.get("usable_bytes") or 0)
+            used = float(snap.get("used_bytes") or 0)
+            usable_cell = ws.cell(row=excel_row, column=base, value=bytes_to_gib(usable))
+            usable_cell.number_format = "0.00"
+            used_cell = ws.cell(row=excel_row, column=base + 1, value=bytes_to_gib(used))
+            used_cell.number_format = "0.00"
+            util = _util_fraction(used, usable)
+            util_cell = ws.cell(row=excel_row, column=base + 2, value=util)
+            util_cell.number_format = "0.0%"
+
+    if sorted_rows and util_columns:
+        end_row = data_start + len(sorted_rows) - 1
+        _apply_utilization_icon_leds(
+            ws, data_start, end_row, util_columns=tuple(util_columns)
+        )
+
+
+def _project_util(
+    curr_util: float | None, weekly_growth: float | None, weeks_ahead: int
+) -> float | None:
+    if curr_util is None:
+        return None
+    if weekly_growth is None:
+        return float(curr_util)
+    projected = float(curr_util) * ((1.0 + float(weekly_growth)) ** weeks_ahead)
+    return max(0.0, projected)
+
+
+def _build_forecast_wkly_sheet(
+    ws: Worksheet,
+    rows: list[dict],
+    *,
+    report_date: datetime,
+) -> None:
+    _add_logos(ws, sheet_title=ws.title)
+    ws.cell(row=_META_ROW, column=2, value="Home")
+    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL, value="Sum of Utilization %")
+    for col, label in enumerate(_FORECAST_WKLY_HEADER_LABELS, start=_FIRST_DATA_COL):
+        cell = ws.cell(row=_FORECAST_HEADER_ROW, column=col, value=label)
+        _style_header_cell(cell)
+    ws.cell(
+        row=_DATE_ROW,
+        column=_FIRST_DATA_COL + 3,
+        value=_format_report_date(report_date),
+    )
+    ws.row_dimensions[_FORECAST_HEADER_ROW].height = 30
+    data_start = _FORECAST_HEADER_ROW + 1
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("facility") or "").lower(),
+            str(row.get("array_name") or "").lower(),
+        ),
+    )
+    last_facility: str | None = None
+    for offset, row in enumerate(sorted_rows):
+        excel_row = data_start + offset
+        facility = row.get("facility")
+        facility_value = None if facility == last_facility else facility
+        if facility != last_facility:
+            last_facility = facility
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL, value=facility_value)
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL + 1, value=row.get("array_name"))
+        ws.cell(row=excel_row, column=_FIRST_DATA_COL + 2, value=row.get("model"))
+        curr_util = row.get("curr_util")
+        growth = row.get("weekly_growth")
+        values = [curr_util] + [
+            _project_util(curr_util, growth, weeks) for weeks in _FORECAST_WKLY_HORIZONS
+        ]
+        for col, value in zip(_FORECAST_WKLY_UTIL_COLUMNS, values):
+            cell = ws.cell(row=excel_row, column=col, value=value)
+            cell.number_format = "0.0%"
+    if sorted_rows:
+        end_row = data_start + len(sorted_rows) - 1
+        _apply_utilization_icon_leds(
+            ws, data_start, end_row, util_columns=_FORECAST_WKLY_UTIL_COLUMNS
+        )
 
 
 def _build_forecast_sheet(

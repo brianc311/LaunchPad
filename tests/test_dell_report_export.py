@@ -51,10 +51,80 @@ def test_ordered_sheets_place_ibm_hp_after_netapp():
     assert ORDERED_SHEET_NAMES.index("NetApp Forecast - Wkly") < ORDERED_SHEET_NAMES.index(
         "IBM Report"
     )
-    assert ORDERED_SHEET_NAMES.index("IBM Report") < ORDERED_SHEET_NAMES.index("HP Report")
+    assert ORDERED_SHEET_NAMES.index("IBM Report") < ORDERED_SHEET_NAMES.index(
+        "IBM Report - Wkly"
+    )
+    assert ORDERED_SHEET_NAMES.index("IBM Report - Wkly") < ORDERED_SHEET_NAMES.index(
+        "IBM Forecast"
+    )
     assert ORDERED_SHEET_NAMES.index("IBM Forecast") < ORDERED_SHEET_NAMES.index(
         "IBM Forecast - Wkly"
     )
+    assert ORDERED_SHEET_NAMES.index("IBM Report") < ORDERED_SHEET_NAMES.index("HP Report")
+    assert ORDERED_SHEET_NAMES.index("HP Report") < ORDERED_SHEET_NAMES.index(
+        "HP Report - Wkly"
+    )
+
+
+def test_workbook_has_report_wkly_sheets_with_week_columns():
+    from launchpad.dell_report_snapshots import upsert_week_snapshot
+
+    store = {}
+    store = upsert_week_snapshot(
+        store,
+        card_id=1,
+        week="2026-W31",
+        usable_bytes=100 * 1024**3,
+        used_bytes=40 * 1024**3,
+        model="M1",
+        facility="Remote",
+        family="ibm",
+        array_name="A1",
+        captured_at="2026-07-28T00:00:00+00:00",
+    )
+    store = upsert_week_snapshot(
+        store,
+        card_id=1,
+        week="2026-W32",
+        usable_bytes=100 * 1024**3,
+        used_bytes=60 * 1024**3,
+        model="M1",
+        facility="Remote",
+        family="ibm",
+        array_name="A1",
+        captured_at="2026-08-04T00:00:00+00:00",
+    )
+    rows = [
+        _minimal_row(
+            card_id=1, facility="Remote", array_name="A1", model="M1", curr_util=0.6
+        )
+    ]
+    wb = build_dell_report_workbook(
+        ibm_rows=rows,
+        hp_rows=[],
+        snapshot_store=store,
+        report_date=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    assert "IBM Report - Wkly" in wb.sheetnames
+    assert "HP Report - Wkly" in wb.sheetnames
+    ws = wb["IBM Report - Wkly"]
+    headers = [ws.cell(row=9, column=c).value for c in range(3, 20)]
+    assert "Facility" in headers
+    assert sum(1 for h in headers if h and "Utilization" in str(h)) >= 2
+    assert ws.cell(row=10, column=3).value == "Remote"
+    assert ws.cell(row=10, column=5).value == "M1"
+
+
+def test_hp_forecast_wkly_has_data_rows():
+    wb = build_dell_report_workbook(
+        ibm_rows=[],
+        hp_rows=[_minimal_row(curr_util=0.25, weekly_growth=None)],
+    )
+    ws = wb["HP Forecast - Wkly"]
+    assert ws.cell(row=10, column=4).value  # array
+    assert ws.cell(row=10, column=6).value == 0.25
+    assert ws.cell(row=10, column=7).value == 0.25
+    assert ws.cell(row=10, column=10).value == 0.25
 
 
 def test_workbook_has_ibm_hp_and_stub():
