@@ -27,6 +27,140 @@ def _card(**kwargs):
     return HealthCard(**defaults)
 
 
+def test_refresh_site_lookup_persists_offline_snapshot(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card()
+    store: dict[str, str] = {}
+
+    def get_setting(key: str, default: str = "") -> str:
+        return store.get(key, default)
+
+    def set_setting(key: str, value: str) -> None:
+        store[key] = value
+
+    server.set_settings_backend(get_setting, set_setting)
+
+    def fake_refresh(self, card_id, **kwargs):
+        card = self._cards[card_id]
+        card.command_results = [
+            {
+                "label": "FC - Hosts",
+                "command": "svcinfo lshost -delim :",
+                "output": "id:name:status:port_count\n1:h1:online:2\n",
+                "error": None,
+            },
+            {
+                "label": "Memory - Volumes %",
+                "command": "svcinfo lsvdisk -delim :",
+                "output": (
+                    "id:name:capacity:mdisk_grp_name:vdisk_UID:status\n"
+                    "1:v1:10GB:P0:U1:online\n"
+                ),
+                "error": None,
+            },
+        ]
+        card.error = None
+        return card
+
+    monkeypatch.setattr(HealthServer, "refresh_card", fake_refresh)
+    monkeypatch.setattr(
+        HealthServer,
+        "_lun_run_command",
+        staticmethod(lambda card: (lambda command: "id:name:status\n")),
+    )
+    monkeypatch.setattr(server, "get_contingency_groups", lambda: [])
+
+    server.refresh_site_lookup(1)
+    server._cards[1].command_results = None
+    server._cards[1].metrics = None
+
+    payload = server.site_lookup_cache(1)
+    assert payload["source"] == "offline"
+    assert payload["hosts"][0]["host_name"] == "h1"
+
+
+def test_failed_refresh_does_not_clobber_offline_snapshot(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card()
+    store: dict[str, str] = {}
+    server.set_settings_backend(
+        lambda key, default="": store.get(key, default),
+        lambda key, value: store.__setitem__(key, value),
+    )
+
+    good_results = [
+        {
+            "label": "FC - Hosts",
+            "command": "svcinfo lshost -delim :",
+            "output": "id:name:status:port_count\n1:kept:online:1\n",
+            "error": None,
+        }
+    ]
+
+    def fake_refresh(self, card_id, **kwargs):
+        card = self._cards[card_id]
+        if getattr(self, "_fail_next", False):
+            card.command_results = []
+            card.metrics = None
+            card.error = "SSH down"
+            return card
+        card.command_results = good_results
+        card.error = None
+        return card
+
+    monkeypatch.setattr(HealthServer, "refresh_card", fake_refresh)
+    monkeypatch.setattr(
+        HealthServer,
+        "_lun_run_command",
+        staticmethod(lambda card: (lambda command: "id:name:status\n")),
+    )
+    monkeypatch.setattr(server, "get_contingency_groups", lambda: [])
+
+    server.refresh_site_lookup(1)
+    server._fail_next = True
+    try:
+        server.refresh_site_lookup(1)
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
+
+    server._cards[1].command_results = None
+    payload = server.site_lookup_cache(1)
+    assert payload["source"] == "offline"
+    assert payload["hosts"][0]["host_name"] == "kept"
+
+
+def test_site_lookup_cache_falls_back_to_lun_offline(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(name="site-a")
+    store: dict[str, str] = {}
+    server.set_settings_backend(
+        lambda key, default="": store.get(key, default),
+        lambda key, value: store.__setitem__(key, value),
+    )
+    monkeypatch.setattr(server, "get_contingency_groups", lambda: [])
+    from launchpad.lun_offline_inventory import LUN_OFFLINE_INVENTORY_SETTING
+    import json
+
+    store[LUN_OFFLINE_INVENTORY_SETTING] = json.dumps(
+        {
+            "1": {
+                "card_id": 1,
+                "site_name": "site-a",
+                "host": "10.0.0.1",
+                "device_profile": "flashsystem_5200",
+                "updated_at": "2026-08-01T00:00:00Z",
+                "hosts": [{"name": "lun-host"}],
+                "volumes": [{"name": "lun-vol"}],
+            }
+        }
+    )
+
+    payload = server.site_lookup_cache(1)
+    assert payload["source"] == "offline_lun"
+    assert payload["hosts"][0]["name"] == "lun-host"
+
+
 def test_refresh_site_lookup_success(monkeypatch):
     server = HealthServer()
     server._cards[1] = _card()

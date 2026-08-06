@@ -21,6 +21,9 @@ def test_site_lookup_page_contracts():
     assert 'method: "POST"' in html
     assert "refreshBtn.disabled = true" in html
     assert "Last updated:" in html
+    assert "Offline" in html
+    assert "Offline LUN" in html
+    assert "sourceBadge" in html
     assert "fc_hosts" in html
     assert "fc_mappings" in html
     assert "V7KTMP-G2V1" not in html

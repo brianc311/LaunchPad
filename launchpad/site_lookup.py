@@ -491,11 +491,31 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       }).join("");
     }
 
+    function sourceBadge(source) {
+      const value = String(source || "");
+      if (value === "cache") return "Cached";
+      if (value === "offline") return "Offline";
+      if (value === "offline_lun") return "Offline LUN";
+      return "Live";
+    }
+
     function statusText(data) {
       if (data.refreshed_at) {
         const parsed = new Date(data.refreshed_at);
         const display = Number.isNaN(parsed.getTime()) ? data.refreshed_at : parsed.toLocaleString();
+        if (data.source === "offline") {
+          return "Offline snapshot · last updated: " + display;
+        }
+        if (data.source === "offline_lun") {
+          return "Offline LUN inventory · last updated: " + display;
+        }
         return "Last updated: " + display + " · " + (data.source || "live");
+      }
+      if (data.source === "offline") {
+        return "Showing offline Site Lookup snapshot · use Live Refresh when online.";
+      }
+      if (data.source === "offline_lun") {
+        return "Showing LUN offline inventory · use Live Refresh for full Site Lookup data.";
       }
       return data.has_cache
         ? "Showing cached card data · use Live Refresh for full inventory."
@@ -523,7 +543,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         + '<div class="site-sub">' + escapeHtml(card.model || card.device_profile || "Storage system")
         + (card.host ? (" · " + escapeHtml(card.host)) : "")
         + (card.serial ? (" · Serial " + escapeHtml(card.serial)) : "") + "</div></div>"
-        + '<span class="badge">' + escapeHtml(data.source === "cache" ? "Cached" : "Live") + "</span></div>"
+        + '<span class="badge">' + escapeHtml(sourceBadge(data.source)) + "</span></div>"
         + '<div class="stat-row"><div class="stat"><b>' + escapeHtml(stats.hosts == null ? data.hosts.length : stats.hosts) + "</b>Hosts</div>"
         + '<div class="stat"><b>' + escapeHtml(stats.volumes == null ? data.volumes.length : stats.volumes) + "</b>Volumes</div>"
         + '<div class="stat"><b>' + escapeHtml(stats.consistency_groups == null ? data.consistency_groups.length : stats.consistency_groups) + "</b>Consistency Groups</div>"

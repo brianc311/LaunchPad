@@ -137,6 +137,63 @@ def _build_payload(
     }
 
 
+def payload_has_inventory(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key in ("hosts", "volumes", "mappings", "pools", "consistency_groups"):
+        rows = payload.get(key)
+        if isinstance(rows, list) and rows:
+            return True
+    return False
+
+
+def payload_from_offline_snapshot(snapshot: dict) -> dict[str, Any]:
+    card = snapshot.get("card") if isinstance(snapshot.get("card"), dict) else {}
+    hosts = list(snapshot.get("hosts") or [])
+    volumes = list(snapshot.get("volumes") or [])
+    maps = list(snapshot.get("mappings") or [])
+    cgs = list(snapshot.get("consistency_groups") or [])
+    pools = _shape_pools(snapshot.get("pools") if isinstance(snapshot.get("pools"), list) else [])
+    return _build_payload(
+        card=card,
+        hosts=hosts,
+        volumes=volumes,
+        maps=maps,
+        consistency_groups=cgs,
+        pools=pools,
+        source="offline",
+        refreshed_at=snapshot.get("refreshed_at"),
+    )
+
+
+def payload_from_lun_offline(
+    snapshot: dict,
+    *,
+    card: dict | None = None,
+) -> dict[str, Any]:
+    meta = dict(card or {})
+    if not meta.get("id"):
+        meta["id"] = snapshot.get("card_id")
+    if not meta.get("name"):
+        meta["name"] = snapshot.get("site_name") or ""
+    if not meta.get("host"):
+        meta["host"] = snapshot.get("host") or ""
+    if not meta.get("device_profile"):
+        meta["device_profile"] = snapshot.get("device_profile") or ""
+    hosts = list(snapshot.get("hosts") or []) if isinstance(snapshot.get("hosts"), list) else []
+    volumes = list(snapshot.get("volumes") or []) if isinstance(snapshot.get("volumes"), list) else []
+    return _build_payload(
+        card=meta,
+        hosts=hosts,
+        volumes=volumes,
+        maps=[],
+        consistency_groups=[],
+        pools=[],
+        source="offline_lun",
+        refreshed_at=str(snapshot.get("updated_at") or "").strip() or None,
+    )
+
+
 def payload_from_card_cache(
     card: dict,
     *,

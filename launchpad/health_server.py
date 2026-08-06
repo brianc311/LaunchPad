@@ -153,7 +153,19 @@ from launchpad.lun_builder_data import (
 from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
-from launchpad.site_lookup_data import payload_from_card_cache, payload_from_live
+from launchpad.site_lookup_data import (
+    payload_from_card_cache,
+    payload_from_live,
+    payload_from_lun_offline,
+    payload_from_offline_snapshot,
+    payload_has_inventory,
+)
+from launchpad.site_lookup_offline import (
+    SITE_LOOKUP_OFFLINE_SETTING,
+    normalize_store as normalize_site_lookup_offline_store,
+    snapshot_from_live_payload,
+    upsert_snapshot as upsert_site_lookup_offline_snapshot,
+)
 from launchpad.lun_builder_export import (
     export_lun_build_csv_zip,
     export_lun_build_xlsx,
@@ -3774,6 +3786,42 @@ class HealthServer:
         setter(LUN_OFFLINE_INVENTORY_SETTING, json.dumps(cleaned))
         return cleaned
 
+    def get_site_lookup_offline_inventory(self) -> dict[str, dict]:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return {}
+        raw = getter(SITE_LOOKUP_OFFLINE_SETTING, "{}") or "{}"
+        try:
+            return normalize_site_lookup_offline_store(json.loads(raw))
+        except json.JSONDecodeError:
+            return {}
+
+    def set_site_lookup_offline_inventory(self, store: dict[str, dict]) -> dict[str, dict]:
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError(
+                "LaunchPad must be unlocked to save Site Lookup offline inventory."
+            )
+        cleaned = normalize_site_lookup_offline_store(store)
+        setter(SITE_LOOKUP_OFFLINE_SETTING, json.dumps(cleaned))
+        return cleaned
+
+    def _persist_site_lookup_offline(self, payload: dict) -> None:
+        with self._lock:
+            if self._set_setting is None:
+                return
+        snap = snapshot_from_live_payload(payload)
+        if snap is None:
+            return
+        try:
+            store = self.get_site_lookup_offline_inventory()
+            store = upsert_site_lookup_offline_snapshot(store, snap)
+            self.set_site_lookup_offline_inventory(store)
+        except Exception as exc:
+            _log(f"Site Lookup offline persist skipped: {exc}")
+
     def upsert_lun_offline_inventory_from_card(
         self,
         card: HealthCard,
@@ -6386,7 +6434,7 @@ class HealthServer:
                 except Exception:
                     consist_groups = []
 
-            return payload_from_live(
+            payload = payload_from_live(
                 card=meta,
                 hosts=hosts,
                 volumes=volumes,
@@ -6398,6 +6446,8 @@ class HealthServer:
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
             )
+            self._persist_site_lookup_offline(payload)
+            return payload
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
 
@@ -6408,10 +6458,27 @@ class HealthServer:
             if card is None:
                 raise KeyError(cid)
             meta = card.to_api()
-        return payload_from_card_cache(
+        memory = payload_from_card_cache(
             meta,
             contingency_groups=self.get_contingency_groups(),
         )
+        if payload_has_inventory(memory):
+            return memory
+
+        offline_store = self.get_site_lookup_offline_inventory()
+        offline = offline_store.get(str(cid))
+        if offline:
+            return payload_from_offline_snapshot(offline)
+
+        lun_store = self.get_lun_offline_inventory()
+        lun_snap = lun_store.get(str(cid))
+        if isinstance(lun_snap, dict) and (
+            (isinstance(lun_snap.get("hosts"), list) and lun_snap.get("hosts"))
+            or (isinstance(lun_snap.get("volumes"), list) and lun_snap.get("volumes"))
+        ):
+            return payload_from_lun_offline(lun_snap, card=meta)
+
+        return memory
 
     def update_card_live_data(
         self,
