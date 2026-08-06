@@ -76,3 +76,17 @@ Additional verification:
   tests/test_site_lookup_api.py tests/test_site_lookup_data.py -v` produced
   **16 passed in 1.05s**.
 - IDE lint diagnostics reported no errors in the changed Python files.
+
+### A→B→A Stale Refresh Fix
+
+- Replaced card-ID-only stale guard with monotonic `refreshGeneration` counter.
+- Generation bumps on every `selectCard` and at each Live Refresh start; responses
+  apply only when captured `gen === refreshGeneration`.
+- Fixes A→B→A race where returning to the same card re-matched the stale ID check.
+- Contract test asserts generation guard identifiers in embedded JavaScript.
+
+#### Stale-Guard Fix TDD Evidence
+
+- GREEN: `py -3.13 -m pytest tests/test_site_lookup_page.py
+  tests/test_site_lookup_api.py tests/test_site_lookup_data.py -v` produced
+  **16 passed in 0.85s**.

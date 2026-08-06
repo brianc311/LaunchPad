@@ -34,10 +34,13 @@ def test_consistency_groups_are_rendered_regardless_of_device_profile():
     assert "const groups = data.consistency_groups" in render_function
 
 
-def test_live_refresh_discards_responses_for_a_different_selected_card():
+def test_live_refresh_discards_stale_responses_via_generation_guard():
     html = SITE_LOOKUP_HTML
 
+    assert "let refreshGeneration = 0;" in html
+    assert "refreshGeneration += 1;" in html
+    assert "const gen = refreshGeneration;" in html
+    assert "if (gen !== refreshGeneration) return;" in html
     assert "const requestedCardId = currentCard.id;" in html
     assert "refreshingCardIds.add(requestedCardId);" in html
-    assert "String(currentCard.id) !== String(requestedCardId)" in html
     assert "refreshingCardIds.has(currentCard.id)" in html

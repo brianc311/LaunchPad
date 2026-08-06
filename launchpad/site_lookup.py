@@ -234,6 +234,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     let currentPayload = null;
     let activeTab = "hosts";
     let rowFilter = "";
+    let refreshGeneration = 0;
     const refreshingCardIds = new Set();
 
     function escapeHtml(value) {
@@ -536,6 +537,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     }
 
     function selectCard(card) {
+      refreshGeneration += 1;
       currentCard = card;
       currentPayload = cachePayload(card);
       activeTab = "hosts";
@@ -566,6 +568,8 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       if (!currentCard) return;
       const requestedCardId = currentCard.id;
       if (refreshingCardIds.has(requestedCardId)) return;
+      refreshGeneration += 1;
+      const gen = refreshGeneration;
       refreshingCardIds.add(requestedCardId);
       refreshBtn.disabled = true;
       setError("");
@@ -578,14 +582,14 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
           body: JSON.stringify({ card_id: requestedCardId }),
         });
         const payload = await response.json().catch(() => ({}));
-        if (!currentCard || String(currentCard.id) !== String(requestedCardId)) return;
+        if (gen !== refreshGeneration) return;
         if (!response.ok || payload.error) {
           throw new Error(payload.error || ("Live Refresh failed (" + response.status + ")"));
         }
         currentPayload = normalizePayload(payload);
         renderPayload();
       } catch (error) {
-        if (!currentCard || String(currentCard.id) !== String(requestedCardId)) return;
+        if (gen !== refreshGeneration) return;
         setError(String(error && error.message ? error.message : error));
         const preservedStatus = document.getElementById("lookup-status");
         if (preservedStatus) preservedStatus.textContent = "Live Refresh failed · showing previous data.";
