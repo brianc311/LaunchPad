@@ -23,3 +23,21 @@ def test_site_lookup_page_contracts():
     assert "fc_hosts" in html
     assert "fc_mappings" in html
     assert "V7KTMP-G2V1" not in html
+
+
+def test_consistency_groups_are_rendered_regardless_of_device_profile():
+    render_function = SITE_LOOKUP_HTML.split(
+        "function renderConsistencyGroups(data) {", 1
+    )[1].split("function numberValue", 1)[0]
+
+    assert "consistency_groups_available" not in render_function
+    assert "const groups = data.consistency_groups" in render_function
+
+
+def test_live_refresh_discards_responses_for_a_different_selected_card():
+    html = SITE_LOOKUP_HTML
+
+    assert "const requestedCardId = currentCard.id;" in html
+    assert "refreshingCardIds.add(requestedCardId);" in html
+    assert "String(currentCard.id) !== String(requestedCardId)" in html
+    assert "refreshingCardIds.has(currentCard.id)" in html

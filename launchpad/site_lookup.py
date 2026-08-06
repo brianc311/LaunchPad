@@ -234,6 +234,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     let currentPayload = null;
     let activeTab = "hosts";
     let rowFilter = "";
+    const refreshingCardIds = new Set();
 
     function escapeHtml(value) {
       return String(value == null ? "" : value)
@@ -415,7 +416,6 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     }
 
     function renderConsistencyGroups(data) {
-      if (!data.consistency_groups_available) return emptyMessage(true);
       const groups = data.consistency_groups.filter((group) => matchesFilter(group));
       const mappings = data.mappings.filter((mapping) => matchesFilter(mapping));
       if (!groups.length && !mappings.length) return emptyMessage(false);
@@ -541,7 +541,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       activeTab = "hosts";
       rowFilter = "";
       queryEl.value = card.name || String(card.id);
-      refreshBtn.disabled = false;
+      refreshBtn.disabled = refreshingCardIds.has(card.id);
       hideSuggestions();
       setError("");
       renderPayload();
@@ -564,6 +564,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
 
     async function liveRefresh() {
       if (!currentCard) return;
+      const requestedCardId = currentCard.id;
+      if (refreshingCardIds.has(requestedCardId)) return;
+      refreshingCardIds.add(requestedCardId);
       refreshBtn.disabled = true;
       setError("");
       const statusEl = document.getElementById("lookup-status");
@@ -572,20 +575,23 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         const response = await fetch("/api/site-lookup/refresh", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ card_id: currentCard.id }),
+          body: JSON.stringify({ card_id: requestedCardId }),
         });
         const payload = await response.json().catch(() => ({}));
+        if (!currentCard || String(currentCard.id) !== String(requestedCardId)) return;
         if (!response.ok || payload.error) {
           throw new Error(payload.error || ("Live Refresh failed (" + response.status + ")"));
         }
         currentPayload = normalizePayload(payload);
         renderPayload();
       } catch (error) {
+        if (!currentCard || String(currentCard.id) !== String(requestedCardId)) return;
         setError(String(error && error.message ? error.message : error));
         const preservedStatus = document.getElementById("lookup-status");
         if (preservedStatus) preservedStatus.textContent = "Live Refresh failed · showing previous data.";
       } finally {
-        refreshBtn.disabled = false;
+        refreshingCardIds.delete(requestedCardId);
+        refreshBtn.disabled = Boolean(currentCard && refreshingCardIds.has(currentCard.id));
       }
     }
 
