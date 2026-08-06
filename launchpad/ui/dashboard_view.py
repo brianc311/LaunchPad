@@ -38,6 +38,7 @@ from launchpad.monitor import (
     get_monitor_states,
     open_capacity_report_for_cards,
     open_fc_wwpn_report_for_cards,
+    open_site_lookup_for_cards,
     open_health_dashboard,
     open_health_dashboard_for_cards,
     set_all_monitor_enabled,
@@ -270,6 +271,7 @@ class DashboardView(ctk.CTkFrame):
             ("Health Dashboard", self._open_health_dashboard_all, None),
             ("Capacity Report", self._open_capacity_report_all, None),
             ("FC WWPN", self._open_fc_wwpn_report_all, None),
+            ("Site Lookup", self._open_site_lookup_all, None),
             ("Consistency Groups", self._open_contingency_groups, None),
             ("FlashCopy CGs", self._open_fc_consistgrp, None),
             ("LUN Builder", self._open_lun_builder, None),
@@ -1657,6 +1659,59 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self._set_status(f"FC WWPN report failed: {exc}"),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_site_lookup_all(self) -> None:
+        from launchpad.ssh_launcher import _log
+
+        cards = self._health_ssh_cards()
+        if not cards:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
+        entries: list[HealthDashboardEntry] = []
+        for card in cards:
+            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
+            entries.append(
+                HealthDashboardEntry(
+                    card_id=card.id,
+                    name=card.name,
+                    host=card.host,
+                    port=card.port,
+                    username=card.username,
+                    auth=auth,
+                    device_profile=card.device_profile,
+                    custom_commands=card.custom_commands,
+                    serial_number=getattr(card, "serial_number", "") or "",
+                    category=card.category or "",
+                )
+            )
+
+        self.status_label.configure(text=f"Opening Site Lookup for {len(entries)} site(s)...")
+        self.update_idletasks()
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Site Lookup register failed: {exc}")
+
+        def worker() -> None:
+            try:
+                url = open_site_lookup_for_cards(entries)
+                summary = (
+                    f"Site Lookup opened — {len(entries)} site(s). "
+                    "Pick a site, then Live Refresh to load hosts, volumes, and pools."
+                )
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+            except Exception as exc:
+                _log(f"Site Lookup failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self._set_status(f"Site Lookup failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()
