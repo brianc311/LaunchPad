@@ -118,6 +118,7 @@ from launchpad.flashsystem_fc import (
     parse_host_lun_maps,
     parse_lsvdisk_volumes,
 )
+from launchpad.capacity_pool_family import capacity_pool_family
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
 from launchpad.health_excel_export import (
@@ -224,6 +225,9 @@ class HealthCard:
             "username": self.username,
             "device_profile": self.device_profile,
             "dell_report_family": dell_report_family_for_site(
+                self.device_profile, site_name=self.name
+            ),
+            "pool_family": capacity_pool_family(
                 self.device_profile, site_name=self.name
             ),
             "model": model,
@@ -6318,6 +6322,9 @@ class HealthServer:
                         "port": card.port,
                         "username": card.username,
                         "device_profile": card.device_profile,
+                        "pool_family": capacity_pool_family(
+                            card.device_profile, site_name=card.name
+                        ),
                         "command_mode": False,
                         "metrics": card.metrics,
                         "command_results": card.command_results,
