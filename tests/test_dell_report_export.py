@@ -108,11 +108,13 @@ def test_workbook_has_report_wkly_sheets_with_week_columns():
     assert "IBM Report - Wkly" in wb.sheetnames
     assert "HP Report - Wkly" in wb.sheetnames
     ws = wb["IBM Report - Wkly"]
-    headers = [ws.cell(row=9, column=c).value for c in range(3, 20)]
+    headers = [ws.cell(row=9, column=c).value for c in range(_FIRST_DATA_COL, 20)]
     assert "Facility" in headers
     assert sum(1 for h in headers if h and "Utilization" in str(h)) >= 2
-    assert ws.cell(row=10, column=3).value == "Remote"
-    assert ws.cell(row=10, column=5).value == "M1"
+    assert ws.cell(row=10, column=_FIRST_DATA_COL).value == "Remote"
+    assert ws.cell(row=10, column=_FIRST_DATA_COL + 2).value == "M1"
+    assert ws.column_dimensions["B"].width >= 20
+    assert ws.column_dimensions["E"].width >= 14
 
 
 def test_hp_forecast_wkly_has_data_rows():
@@ -121,10 +123,11 @@ def test_hp_forecast_wkly_has_data_rows():
         hp_rows=[_minimal_row(curr_util=0.25, weekly_growth=None)],
     )
     ws = wb["HP Forecast - Wkly"]
-    assert ws.cell(row=10, column=4).value  # array
+    assert ws.cell(row=10, column=_FIRST_DATA_COL + 1).value  # array
+    assert ws.cell(row=10, column=5).value == 0.25
     assert ws.cell(row=10, column=6).value == 0.25
-    assert ws.cell(row=10, column=7).value == 0.25
-    assert ws.cell(row=10, column=10).value == 0.25
+    assert ws.cell(row=10, column=9).value == 0.25
+    assert ws.column_dimensions["C"].width >= 30
 
 
 def test_workbook_has_ibm_hp_and_stub():
@@ -197,9 +200,12 @@ def test_utilization_icon_set_leds():
     vals = [float(cfvo.val) for cfvo in icon_set.cfvo]
     assert UTIL_YELLOW_THRESHOLD in vals
     # Values still written (icon + value); fills are not the primary LED.
-    assert ws.cell(start, 11).value == 0.5
-    assert ws.cell(start + 1, 11).value == 0.95
+    curr_util_col = _FIRST_DATA_COL + 8
+    assert ws.cell(start, curr_util_col).value == 0.5
+    assert ws.cell(start + 1, curr_util_col).value == 0.95
     assert end >= start
+    assert ws.column_dimensions["B"].width >= 20
+    assert ws.column_dimensions["C"].width >= 30
 
 
 def test_banner_has_sheet_title_and_logos():
@@ -317,7 +323,7 @@ def test_workbook_includes_ibm_and_hp_forecast_sheets():
     assert "HP Forecast" in wb.sheetnames
     ibm_f = wb["IBM Forecast"]
     start = _forecast_data_start_row(ibm_f)
-    for col in (6, 7, 8, 9, 10):
+    for col in (5, 6, 7, 8, 9):
         assert ibm_f.cell(start, col).value == 0.61
     rules = [rule for group in ibm_f.conditional_formatting for rule in group.rules]
     assert any(getattr(rule, "type", None) == "iconSet" for rule in rules)

@@ -97,8 +97,8 @@ _ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "dell_report"
 _DELL_LOGO_FILE = "logo_1.png"
 _WALGREENS_LOGO_FILE = "logo_3.png"
 
-# Excel columns: A blank, B Home link, data from C (Facility) through L.
-_FIRST_DATA_COL = 3
+# Excel columns: A blank gutter; B Home link + Facility (Walgreens-style); data through K+.
+_FIRST_DATA_COL = 2
 _HEADER_ROW = 9
 _FORECAST_HEADER_ROW = 9
 _META_ROW = 7
@@ -147,11 +147,40 @@ _FORECAST_HEADER_LABELS = (
     "12 Month",
 )
 
-# Utilization % columns (1-based Excel): prior H=8, current K=11.
-_UTIL_COLUMNS = (8, 11)
-# Forecast util columns: Date F=6 through 12 Month J=10.
-_FORECAST_UTIL_COLUMNS = (6, 7, 8, 9, 10)
+# Utilization % columns (1-based Excel) when Facility starts at B:
+# prior util = G (7), current util = J (10).
+_UTIL_COLUMNS = (7, 10)
+# Forecast util columns: Date E=5 through 12 Month I=9.
+_FORECAST_UTIL_COLUMNS = (5, 6, 7, 8, 9)
 _GIB = 1024**3
+
+# Spread identity + metric columns so headers/values are readable (avoid ######).
+_REPORT_COL_WIDTHS = (
+    3.0,   # A gutter
+    28.0,  # B Facility / Home
+    42.0,  # C Storage Array
+    28.0,  # D Model Number
+    18.0,  # E prior usable
+    16.0,  # F prior used
+    14.0,  # G prior util
+    18.0,  # H current usable
+    16.0,  # I current used
+    14.0,  # J current util
+    15.0,  # K weekly growth
+)
+_FORECAST_COL_WIDTHS = (
+    3.0,
+    28.0,
+    42.0,
+    28.0,
+    14.0,  # Date (current util)
+    12.0,
+    12.0,
+    12.0,
+    12.0,
+)
+_WKLY_METRIC_WIDTHS = (18.0, 16.0, 14.0)  # usable, used, util per week
+_HEADER_ROW_HEIGHT = 48
 
 
 class DellReportEmptyError(ValueError):
@@ -468,8 +497,23 @@ _FORECAST_WKLY_HEADER_LABELS = (
     "+8 Week",
     "+12 Week",
 )
-# Facility..Model + Date + four horizons → util cols F–J (6–10) when data starts at C.
-_FORECAST_WKLY_UTIL_COLUMNS = (6, 7, 8, 9, 10)
+# Facility..Model + Date + four horizons → util cols E–I (5–9) when data starts at B.
+_FORECAST_WKLY_UTIL_COLUMNS = (5, 6, 7, 8, 9)
+
+
+def _apply_column_widths(ws: Worksheet, widths: tuple[float, ...] | list[float]) -> None:
+    for col, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = float(width)
+
+
+def _apply_report_wkly_column_widths(ws: Worksheet, week_count: int) -> None:
+    widths: list[float] = [3.0, 28.0, 42.0, 28.0]
+    for week_i in range(max(week_count, 1)):
+        widths.extend(_WKLY_METRIC_WIDTHS)
+    # Ensure trailing weeks still readable if Excel shows extra cols.
+    while len(widths) < 4 + max(week_count, 1) * 3:
+        widths.extend(_WKLY_METRIC_WIDTHS)
+    _apply_column_widths(ws, widths)
 
 
 def _build_stub_sheet(ws: Worksheet, *, report_date: datetime) -> None:
@@ -504,8 +548,9 @@ def _build_report_wkly_sheet(
     weeks = _weeks_for_report_wkly(rows, snapshot_store)
     _add_logos(ws, sheet_title=ws.title)
     ws.cell(row=_META_ROW, column=2, value="Home")
-    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL, value="Date")
-    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL + 3, value="Values")
+    first_week_col = _FIRST_DATA_COL + 3
+    ws.cell(row=_META_ROW, column=first_week_col, value="Date")
+    ws.cell(row=_META_ROW, column=first_week_col + 1, value="Values")
 
     identity_headers = ("Facility", "Storage Array", "Model Number")
     for offset, label in enumerate(identity_headers):
@@ -524,7 +569,8 @@ def _build_report_wkly_sheet(
             _style_header_cell(cell)
         util_columns.append(base + 2)
 
-    ws.row_dimensions[_HEADER_ROW].height = 30
+    ws.row_dimensions[_HEADER_ROW].height = _HEADER_ROW_HEIGHT
+    _apply_report_wkly_column_widths(ws, len(weeks))
     data_start = _HEADER_ROW + 1
     sorted_rows = sorted(
         rows,
@@ -595,7 +641,8 @@ def _build_forecast_wkly_sheet(
         column=_FIRST_DATA_COL + 3,
         value=_format_report_date(report_date),
     )
-    ws.row_dimensions[_FORECAST_HEADER_ROW].height = 30
+    ws.row_dimensions[_FORECAST_HEADER_ROW].height = _HEADER_ROW_HEIGHT
+    _apply_column_widths(ws, _FORECAST_COL_WIDTHS)
     data_start = _FORECAST_HEADER_ROW + 1
     sorted_rows = sorted(
         rows,
@@ -815,33 +862,31 @@ def _apply_utilization_icon_leds(
 def _write_forecast_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
     _add_logos(ws, sheet_title=ws.title)
     ws.cell(row=_META_ROW, column=2, value="Home")
-    ws.cell(row=_META_ROW, column=3, value="Sum of Utilization %")
-    ws.cell(row=_META_ROW, column=6, value="Date")
+    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL, value="Sum of Utilization %")
+    ws.cell(row=_META_ROW, column=_FIRST_DATA_COL + 3, value="Date")
     for col, label in enumerate(_FORECAST_HEADER_LABELS, start=_FIRST_DATA_COL):
         cell = ws.cell(row=_FORECAST_HEADER_ROW, column=col, value=label)
         _style_header_cell(cell)
     ws.cell(row=_DATE_ROW, column=_FIRST_DATA_COL + 3, value=_format_report_date(report_date))
-    widths = (4, 10, 22, 24, 20, 14, 12, 12, 12, 12)
-    for col, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(col)].width = width
-    ws.row_dimensions[_FORECAST_HEADER_ROW].height = 30
+    _apply_column_widths(ws, _FORECAST_COL_WIDTHS)
+    ws.row_dimensions[_FORECAST_HEADER_ROW].height = _HEADER_ROW_HEIGHT
     return _FORECAST_HEADER_ROW
 
 
 def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
     _add_logos(ws, sheet_title=ws.title)
     ws.cell(row=_META_ROW, column=2, value="Home")
-    ws.cell(row=_META_ROW, column=6, value="Date")
-    ws.cell(row=_META_ROW, column=7, value="Values")
-    prior = ws.cell(row=_DATE_ROW, column=6, value=_prior_week_date(report_date))
-    current = ws.cell(row=_DATE_ROW, column=9, value=_format_report_date(report_date))
+    prior_col = _FIRST_DATA_COL + 3
+    curr_col = _FIRST_DATA_COL + 6
+    ws.cell(row=_META_ROW, column=prior_col, value="Date")
+    ws.cell(row=_META_ROW, column=curr_col, value="Values")
+    prior = ws.cell(row=_DATE_ROW, column=prior_col, value=_prior_week_date(report_date))
+    current = ws.cell(row=_DATE_ROW, column=curr_col, value=_format_report_date(report_date))
     prior.alignment = Alignment(horizontal="center")
     current.alignment = Alignment(horizontal="center")
     for col, label in enumerate(_HEADER_LABELS, start=_FIRST_DATA_COL):
         cell = ws.cell(row=_HEADER_ROW, column=col, value=label)
         _style_header_cell(cell)
-    widths = (4, 10, 22, 24, 22, 16, 16, 14, 16, 16, 14, 16)
-    for col, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(col)].width = width
-    ws.row_dimensions[_HEADER_ROW].height = 32
+    _apply_column_widths(ws, _REPORT_COL_WIDTHS)
+    ws.row_dimensions[_HEADER_ROW].height = _HEADER_ROW_HEIGHT
     return _HEADER_ROW
