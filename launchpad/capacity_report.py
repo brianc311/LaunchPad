@@ -349,6 +349,39 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       accent-color: var(--accent);
       cursor: pointer;
     }
+    .options-menu {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    .options-menu-panel {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 40;
+      min-width: 280px;
+      max-width: min(420px, 92vw);
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: #121821;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .options-menu.open .options-menu-panel { display: flex; }
+    .options-menu-panel .toggle-row {
+      width: 100%;
+      justify-content: flex-start;
+      height: auto;
+      min-height: 36px;
+      padding: 8px 12px;
+    }
+    #options-menu-btn[aria-expanded="true"] {
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
     body.hide-capacity-details .capacity-detail-section {
       display: none;
     }
@@ -455,11 +488,47 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       </div>
       <p class="rename-hint no-print">Click the report title, subtitle, or any site name below to rename for this report and printout.</p>
       <div class="hero-actions no-print">
+        <div class="options-menu" id="options-menu">
+          <button type="button" id="options-menu-btn" class="secondary" aria-expanded="false" aria-controls="options-menu-panel" title="Choose one or more display and monitoring options.">View options</button>
+          <div id="options-menu-panel" class="options-menu-panel" role="group" aria-label="View options">
+            <label class="toggle-row" for="monitor-all-toggle" title="Connect over SSH only for sites you turn on.">
+              <input type="checkbox" id="monitor-all-toggle">
+              All monitoring on
+            </label>
+            <label class="toggle-row" for="show-details-toggle">
+              <input type="checkbox" id="show-details-toggle" checked>
+              Show system details
+            </label>
+            <label class="toggle-row" for="one-page-toggle">
+              <input type="checkbox" id="one-page-toggle" checked>
+              One site per page
+            </label>
+            <label class="toggle-row" for="show-pools-toggle" title="HPE CPGs and IBM pools">
+              <input type="checkbox" id="show-pools-toggle" checked>
+              Include CPG / pools
+            </label>
+            <label class="toggle-row" for="show-raw-toggle">
+              <input type="checkbox" id="show-raw-toggle">
+              Show raw capacity
+            </label>
+            <label class="toggle-row" for="show-title-toggle">
+              <input type="checkbox" id="show-title-toggle" checked>
+              Show report title on print
+            </label>
+            <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel. Does not add no-capacity sites to Dell Report — use the Dell Report checkbox on each site card for that.">
+              <input type="checkbox" id="include-off-toggle">
+              Include monitoring-off sites
+            </label>
+          </div>
+        </div>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <button type="button" id="excel-btn" class="secondary">Export Excel</button>
         <button type="button" id="dell-report-btn" class="secondary" style="display:none">Dell Report</button>
-        <button type="button" id="dell-include-noss-btn" class="secondary" style="display:none" title="Check Dell Report on every IBM/HPE site that has no live capacity / SSH failure so they appear on the Dell workbook with blank capacity.">Include no-SSH on Dell Report</button>
+        <label class="toggle-row" id="dell-include-noss-wrap" for="dell-include-noss-toggle" style="display:none" title="When checked, every IBM/HPE site without live capacity / with SSH failure is included on Dell Report (blank capacity cells). Uncheck to clear those includes.">
+          <input type="checkbox" id="dell-include-noss-toggle">
+          Include no-SSH on Dell Report
+        </label>
         <label>Site <select id="capacity-site-select"><option value="">All servers</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
@@ -468,34 +537,6 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
-        <label class="toggle-row" for="monitor-all-toggle" title="Connect over SSH only for sites you turn on.">
-          <input type="checkbox" id="monitor-all-toggle">
-          All monitoring on
-        </label>
-        <label class="toggle-row" for="show-details-toggle">
-          <input type="checkbox" id="show-details-toggle" checked>
-          Show system details
-        </label>
-        <label class="toggle-row" for="one-page-toggle">
-          <input type="checkbox" id="one-page-toggle" checked>
-          One site per page
-        </label>
-        <label class="toggle-row" for="show-pools-toggle" title="HPE CPGs and IBM pools">
-          <input type="checkbox" id="show-pools-toggle" checked>
-          Include CPG / pools
-        </label>
-        <label class="toggle-row" for="show-raw-toggle">
-          <input type="checkbox" id="show-raw-toggle">
-          Show raw capacity
-        </label>
-        <label class="toggle-row" for="show-title-toggle">
-          <input type="checkbox" id="show-title-toggle" checked>
-          Show report title on print
-        </label>
-        <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel. Does not add no-capacity sites to Dell Report — use the Dell Report checkbox on each site card for that.">
-          <input type="checkbox" id="include-off-toggle">
-          Include monitoring-off sites
-        </label>
         <span id="refresh-status" class="refresh-status"></span>
       </div>
       <p id="print-meta" class="print-meta"></p>
@@ -524,7 +565,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const capacitySiteSelectEl = document.getElementById("capacity-site-select");
     const excelBtn = document.getElementById("excel-btn");
     const dellReportBtn = document.getElementById("dell-report-btn");
-    const dellIncludeNoSshBtn = document.getElementById("dell-include-noss-btn");
+    const dellIncludeNoSshToggle = document.getElementById("dell-include-noss-toggle");
+    const dellIncludeNoSshWrap = document.getElementById("dell-include-noss-wrap");
+    const optionsMenu = document.getElementById("options-menu");
+    const optionsMenuBtn = document.getElementById("options-menu-btn");
+    const optionsMenuPanel = document.getElementById("options-menu-panel");
     const reportTitleInput = document.getElementById("report-title-input");
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
@@ -603,6 +648,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           const input = section.querySelector(".dell-include-switch");
           if (toggle) toggle.classList.toggle("on", isDellIncludeOn(cardId));
           if (input) input.checked = isDellIncludeOn(cardId);
+          syncNoSshDellToggle();
         })
         .catch((err) => {
           if (refreshStatusEl) {
@@ -611,6 +657,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
           const input = section && section.querySelector(".dell-include-switch");
           if (input) input.checked = isDellIncludeOn(cardId);
+          syncNoSshDellToggle();
         });
     }
 
@@ -627,38 +674,71 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       });
     }
 
-    async function includeNoSshOnDellReport() {
-      if (!dellIncludeNoSshBtn) return;
+    async function setNoSshDellInclude(on) {
+      if (!dellIncludeNoSshToggle) return;
       const candidates = noSshDellCandidates(cardsCache);
       if (!candidates.length) {
+        dellIncludeNoSshToggle.checked = false;
         if (refreshStatusEl) {
           refreshStatusEl.textContent =
-            "No IBM/HPE sites without capacity found to add to Dell Report.";
+            "No IBM/HPE sites without capacity found for Dell Report include.";
         }
         return;
       }
-      dellIncludeNoSshBtn.disabled = true;
+      dellIncludeNoSshToggle.disabled = true;
       if (refreshStatusEl) {
-        refreshStatusEl.textContent = `Adding ${candidates.length} no-SSH site(s) to Dell Report…`;
+        refreshStatusEl.textContent = on
+          ? `Adding ${candidates.length} no-SSH site(s) to Dell Report…`
+          : `Clearing Dell Report include on ${candidates.length} no-SSH site(s)…`;
       }
       let ok = 0;
       let failed = 0;
       for (const card of candidates) {
         try {
-          await persistDellInclude(card.id, true);
+          await persistDellInclude(card.id, on);
           ok += 1;
         } catch (_err) {
           failed += 1;
         }
       }
       renderAll(cardsCache);
+      syncNoSshDellToggle();
       if (refreshStatusEl) {
-        refreshStatusEl.textContent =
-          `Dell Report include: ${ok} site(s) checked` +
-          (failed ? `, ${failed} failed` : "") +
-          ". Click Dell Report to export (capacity blank for those rows).";
+        refreshStatusEl.textContent = on
+          ? `Dell Report include: ${ok} site(s) checked` +
+            (failed ? `, ${failed} failed` : "") +
+            ". Click Dell Report to export (capacity blank for those rows)."
+          : `Dell Report include cleared on ${ok} no-SSH site(s)` +
+            (failed ? `, ${failed} failed` : "") +
+            ".";
       }
-      dellIncludeNoSshBtn.disabled = false;
+      dellIncludeNoSshToggle.disabled = false;
+    }
+
+    function syncNoSshDellToggle() {
+      if (!dellIncludeNoSshToggle) return;
+      const candidates = noSshDellCandidates(cardsCache);
+      if (!candidates.length) {
+        dellIncludeNoSshToggle.checked = false;
+        return;
+      }
+      dellIncludeNoSshToggle.checked = candidates.every((card) =>
+        isDellIncludeOn(card.id)
+      );
+    }
+
+    function updateViewOptionsButton() {
+      if (!optionsMenuBtn || !optionsMenuPanel) return;
+      const boxes = optionsMenuPanel.querySelectorAll('input[type="checkbox"]');
+      const onCount = Array.from(boxes).filter((box) => box.checked).length;
+      optionsMenuBtn.textContent =
+        onCount > 0 ? `View options (${onCount})` : "View options";
+    }
+
+    function setOptionsMenuOpen(open) {
+      if (!optionsMenu || !optionsMenuBtn) return;
+      optionsMenu.classList.toggle("open", open);
+      optionsMenuBtn.setAttribute("aria-expanded", open ? "true" : "false");
     }
 
     function isMonitorOn(cardId) {
@@ -1322,12 +1402,12 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         const settings = await res.json();
         const show = settings && settings.enabled;
         dellReportBtn.style.display = show ? "" : "none";
-        if (dellIncludeNoSshBtn) {
-          dellIncludeNoSshBtn.style.display = show ? "" : "none";
+        if (dellIncludeNoSshWrap) {
+          dellIncludeNoSshWrap.style.display = show ? "" : "none";
         }
       } catch (_err) {
         dellReportBtn.style.display = "none";
-        if (dellIncludeNoSshBtn) dellIncludeNoSshBtn.style.display = "none";
+        if (dellIncludeNoSshWrap) dellIncludeNoSshWrap.style.display = "none";
       }
     }
 
@@ -1431,6 +1511,8 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         const cards = await res.json();
         cardsCache = Array.isArray(cards) ? cards : [];
         renderAll(cardsCache);
+        syncNoSshDellToggle();
+        updateViewOptionsButton();
         updatePrintMeta(cardsCache);
       } catch (err) {
         sitesEl.innerHTML =
@@ -1478,9 +1560,29 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     if (dellReportBtn) {
       dellReportBtn.addEventListener("click", downloadDellReport);
     }
-    if (dellIncludeNoSshBtn) {
-      dellIncludeNoSshBtn.addEventListener("click", () => {
-        void includeNoSshOnDellReport();
+    if (dellIncludeNoSshToggle) {
+      dellIncludeNoSshToggle.addEventListener("change", () => {
+        void setNoSshDellInclude(dellIncludeNoSshToggle.checked);
+      });
+    }
+    if (optionsMenuBtn && optionsMenu) {
+      optionsMenuBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setOptionsMenuOpen(!optionsMenu.classList.contains("open"));
+      });
+      if (optionsMenuPanel) {
+        optionsMenuPanel.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        optionsMenuPanel.addEventListener("change", () => {
+          updateViewOptionsButton();
+        });
+      }
+      document.addEventListener("click", () => {
+        setOptionsMenuOpen(false);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") setOptionsMenuOpen(false);
       });
     }
 
@@ -1491,6 +1593,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     loadSiteNameOverrides();
     initReportHeader();
     initDellReportButton();
+    updateViewOptionsButton();
     loadCards();
     setInterval(loadCards, 15000);
   </script>
