@@ -90,3 +90,7 @@ Additional verification:
 - GREEN: `py -3.13 -m pytest tests/test_site_lookup_page.py
   tests/test_site_lookup_api.py tests/test_site_lookup_data.py -v` produced
   **16 passed in 0.85s**.
+
+#### Stale-Guard Fix Commit
+
+`21c913b` — Fix Site Lookup A→B→A stale refresh guard.
