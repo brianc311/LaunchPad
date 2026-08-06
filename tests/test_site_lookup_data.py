@@ -1,9 +1,17 @@
+from launchpad.flashsystem_fc import parse_lsconsistgrp
 from launchpad.site_lookup_data import (
     filter_lookup_cards,
     match_contingency_groups,
     payload_from_card_cache,
     payload_from_live,
 )
+
+
+def test_parse_lsconsistgrp_colon_table():
+    out = "id:name:status\n1:cg_live:empty\n2:cg_b:stopped\n"
+    rows = parse_lsconsistgrp(out)
+    assert [r["name"] for r in rows] == ["cg_live", "cg_b"]
+    assert rows[0]["status"] == "empty"
 
 
 def test_filter_lookup_cards_keeps_all_named_ssh_cards():
