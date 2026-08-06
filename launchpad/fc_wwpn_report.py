@@ -194,7 +194,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         <button type="button" id="fc-search-btn" class="btn secondary">Find</button>
         <label for="site-select" class="status">Site</label>
         <select id="site-select" class="group-filter" aria-label="Site">
-          <option value="">None</option>
+          <option value="">All servers</option>
         </select>
         <span id="status" class="status"></span>
       </div>
@@ -509,7 +509,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       const selected = svcCards.some((card) => String(card.id) === String(activeSiteId))
         ? String(activeSiteId) : "";
       activeSiteId = selected;
-      siteSelect.innerHTML = '<option value="">None</option>' + svcCards.map((card) =>
+      siteSelect.innerHTML = '<option value="">All servers</option>' + svcCards.map((card) =>
         `<option value="${escapeHtml(card.id)}">${escapeHtml(card.name || card.id)}</option>`
       ).join("");
       siteSelect.value = selected;

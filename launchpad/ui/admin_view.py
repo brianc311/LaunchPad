@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import json
 import queue
 import threading
 import time
@@ -21,6 +22,10 @@ from launchpad.capacity_email_settings import (
     save_capacity_email_settings,
     set_gmail_password,
     validate_for_send,
+)
+from launchpad.dell_report_settings import (
+    load_dell_report_settings,
+    save_dell_report_settings,
 )
 from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, DEFAULT_SSH_PORT, APP_VERSION
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
@@ -73,6 +78,7 @@ class AdminView(ctk.CTkFrame):
         self._admin_ssh_status_timer: str | None = None
         self._capacity_email_settings: dict | None = None
         self._capacity_email_send_in_flight = False
+        self._dell_report_settings: dict | None = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -521,8 +527,61 @@ class AdminView(ctk.CTkFrame):
             justify="left",
         )
         self.email_last_error_label.grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
+        row += 1
+
+        ctk.CTkLabel(
+            panel,
+            text="Dell Report",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=self.theme["text"],
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 4), sticky="w")
+        row += 1
+
+        ctk.CTkLabel(
+            panel,
+            text="Show or hide the Dell Report export button on the Capacity Report page and dashboard.",
+            font=ctk.CTkFont(size=12),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+        row += 1
+
+        self.dell_report_enabled_var = ctk.BooleanVar(value=True)
+        self.dell_report_enabled_check = ctk.CTkCheckBox(
+            panel,
+            text="Show Dell Report button",
+            variable=self.dell_report_enabled_var,
+        )
+        self.dell_report_enabled_check.grid(row=row, column=0, columnspan=2, padx=20, pady=8, sticky="w")
+        row += 1
+
+        ctk.CTkLabel(
+            panel,
+            text="Card overrides (JSON object keyed by card_id: facility, array_name, model)",
+            font=ctk.CTkFont(size=12),
+            text_color=self.theme["muted"],
+            wraplength=520,
+            justify="left",
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(8, 4), sticky="w")
+        row += 1
+
+        self.dell_report_overrides_text = ctk.CTkTextbox(panel, height=120, width=520)
+        self.dell_report_overrides_text.grid(
+            row=row, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="ew"
+        )
+        row += 1
+
+        ctk.CTkButton(
+            panel,
+            text="Save Dell Report Settings",
+            fg_color=self.theme["accent"],
+            hover_color=self.theme["accent_soft"],
+            command=self._save_dell_report_form,
+        ).grid(row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="w")
 
         self._load_capacity_email_form()
+        self._load_dell_report_form()
 
     def _build_firmware_catalog_panel(self, parent) -> None:
         panel = ctk.CTkFrame(parent, fg_color=self.theme["surface_alt"], corner_radius=16)
@@ -982,6 +1041,53 @@ class AdminView(ctk.CTkFrame):
                     text=f"Capacity email failed: {result.get('error', '')}",
                     text_color=self.theme["danger"],
                 )
+
+    def _load_dell_report_form(self) -> None:
+        settings = load_dell_report_settings(self.db)
+        self._dell_report_settings = settings
+        self.dell_report_enabled_var.set(bool(settings.get("enabled", True)))
+        overrides = settings.get("card_overrides") or {}
+        if hasattr(self, "dell_report_overrides_text"):
+            self.dell_report_overrides_text.delete("1.0", "end")
+            self.dell_report_overrides_text.insert(
+                "1.0", json.dumps(overrides, indent=2)
+            )
+
+    def _save_dell_report_form(self) -> None:
+        overrides_raw = {}
+        if hasattr(self, "dell_report_overrides_text"):
+            text = self.dell_report_overrides_text.get("1.0", "end").strip() or "{}"
+            try:
+                overrides_raw = json.loads(text)
+            except json.JSONDecodeError:
+                messagebox.showerror(
+                    "Dell Report", "Card overrides must be a valid JSON object."
+                )
+                return
+            if not isinstance(overrides_raw, dict):
+                messagebox.showerror(
+                    "Dell Report", "Card overrides must be a JSON object."
+                )
+                return
+        existing = load_dell_report_settings(self.db)
+        raw = {
+            "enabled": bool(self.dell_report_enabled_var.get()),
+            "card_overrides": overrides_raw,
+            "include_card_ids": list(existing.get("include_card_ids") or []),
+        }
+        saved = save_dell_report_settings(self.db, raw)
+        self._dell_report_settings = saved
+        self.dell_report_enabled_var.set(bool(saved.get("enabled", True)))
+        if hasattr(self, "dell_report_overrides_text"):
+            self.dell_report_overrides_text.delete("1.0", "end")
+            self.dell_report_overrides_text.insert(
+                "1.0",
+                json.dumps(saved.get("card_overrides") or {}, indent=2),
+            )
+        if hasattr(self, "admin_status"):
+            self.admin_status.configure(
+                text="Dell Report settings saved.", text_color=self.theme["accent"]
+            )
 
     def _build_card_list(self, parent) -> None:
         list_panel = ctk.CTkFrame(parent, fg_color=self.theme["surface"], corner_radius=16)

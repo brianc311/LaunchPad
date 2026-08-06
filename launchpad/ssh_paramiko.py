@@ -226,6 +226,9 @@ def run_ssh_commands(
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9?]*[ -/]*[@-~]")
+# Bare ``cli%`` / ``user%``. Real arrays often show ``HOSTNAME cli%``.
+_HPE_PROMPT_RE = re.compile(r"^(?:cli|[A-Za-z0-9][\w.@\\-]*)\s*%\s*$")
+_HPE_HOST_CLI_PROMPT_RE = re.compile(r"(?:^|\s)cli\s*%\s*$", re.IGNORECASE)
 
 
 def _clean_shell_text(raw: str) -> str:
@@ -252,6 +255,117 @@ def _recv_shell(channel, *, timeout: float, idle_seconds: float = 0.35) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+def _looks_like_hpe_prompt(line: str) -> bool:
+    """True for ``cli%`` / ``HOST cli%`` — false for capacity percents like ``98.5%``."""
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+    # Reject numeric percents: "98.5%", "50%", "Used 12.0%"
+    if re.search(r"[\d.]\s*%\s*$", stripped):
+        return False
+    lowered = stripped.lower()
+    if lowered in {"warn%", "used%", "use%", "%"}:
+        return False
+    # Most common production prompt: "ARRAYNAME cli%"
+    if _HPE_HOST_CLI_PROMPT_RE.search(stripped):
+        return True
+    if _HPE_PROMPT_RE.match(stripped):
+        return True
+    if stripped == ">":
+        return True
+    return bool(re.match(r"^[\w.@\\-]+>\s*$", stripped)) and len(stripped) < 40
+
+
+def _recv_until_hpe_prompt(channel, *, timeout: float, idle_seconds: float = 0.5) -> str:
+    """Drain shell output until a real CLI prompt (used after login / setclienv)."""
+    deadline = time.monotonic() + timeout
+    chunks: list[bytes] = []
+    last_data = time.monotonic()
+    while time.monotonic() < deadline:
+        if channel.recv_ready():
+            chunk = channel.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            last_data = time.monotonic()
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            lines = [line for line in text.split("\n") if line.strip()]
+            if lines and _looks_like_hpe_prompt(lines[-1]) and (
+                time.monotonic() - last_data
+            ) >= 0.12:
+                break
+            continue
+        if chunks and (time.monotonic() - last_data) >= idle_seconds:
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            lines = [line for line in text.split("\n") if line.strip()]
+            if lines and _looks_like_hpe_prompt(lines[-1]):
+                break
+            # Login banners can end without a matched prompt — stop on long idle.
+            if (time.monotonic() - last_data) >= max(idle_seconds, 2.0):
+                break
+        if channel.exit_status_ready() and not channel.recv_ready():
+            break
+        time.sleep(0.02)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _hpe_allows_idle_exit_without_prompt(command: str) -> bool:
+    """checkhealth prints 'Checking …' with multi-second gaps; idle exit truncates it."""
+    return "checkhealth" not in (command or "").lower()
+
+
+def _recv_hpe_command_output(
+    channel,
+    command: str,
+    *,
+    timeout: float,
+    idle_seconds: float = 0.6,
+) -> str:
+    """Read until the CLI prompt returns after ``command``."""
+    channel.send(f"{command}\r\n")
+    deadline = time.monotonic() + timeout
+    chunks: list[bytes] = []
+    last_data = time.monotonic()
+    cmd = command.strip()
+    saw_echo = False
+    allow_idle_exit = _hpe_allows_idle_exit_without_prompt(cmd)
+    while time.monotonic() < deadline:
+        if channel.recv_ready():
+            chunk = channel.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            last_data = time.monotonic()
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            if cmd and cmd in text:
+                saw_echo = True
+            lines = [line for line in text.split("\n") if line.strip()]
+            if saw_echo and lines and _looks_like_hpe_prompt(lines[-1]):
+                if (time.monotonic() - last_data) >= 0.15:
+                    break
+            continue
+        if chunks and (time.monotonic() - last_data) >= idle_seconds:
+            text = _clean_shell_text(b"".join(chunks).decode("utf-8", errors="replace"))
+            lines = [line for line in text.split("\n") if line.strip()]
+            if saw_echo and lines and _looks_like_hpe_prompt(lines[-1]):
+                break
+            # Safety: after echo + sustained idle, accept output even if prompt
+            # matching fails (some builds use unusual prompt text).
+            # Never do this for checkhealth — pauses between "Checking X" lines
+            # routinely exceed 2.5s and would truncate mid-run.
+            if (
+                allow_idle_exit
+                and saw_echo
+                and (time.monotonic() - last_data) >= max(idle_seconds, 2.5)
+            ):
+                break
+            continue
+        if channel.exit_status_ready() and not channel.recv_ready():
+            break
+        time.sleep(0.02)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
 def _extract_hpe_command_output(raw: str, command: str) -> str:
     lines = _clean_shell_text(raw).split("\n")
     cmd = command.strip()
@@ -266,7 +380,11 @@ def _extract_hpe_command_output(raw: str, command: str) -> str:
                 start = idx + 1
                 break
     if start is None:
-        start = min(5, max(0, len(lines) - 2))
+        start = 0
+        for idx, line in enumerate(lines):
+            lowered = line.strip().lower()
+            if lowered.startswith("checking ") or lowered in {"ok", "passed"}:
+                start = idx + 1
 
     end = len(lines)
     for idx in range(len(lines) - 1, start - 1, -1):
@@ -274,7 +392,7 @@ def _extract_hpe_command_output(raw: str, command: str) -> str:
         if not stripped:
             end = idx
             continue
-        if stripped == "exit" or stripped.endswith("%") or stripped.endswith(">"):
+        if stripped == "exit" or _looks_like_hpe_prompt(stripped):
             end = idx
             continue
         break
@@ -294,9 +412,12 @@ def run_ssh_auth_hpe_commands(
     key_passphrase: str = "",
     timeout: int = COMMAND_TIMEOUT,
 ) -> list[str]:
+    """Run HPE CLI over an interactive shell (3PAR/Primera reject bare SSH exec)."""
     if not commands:
         return []
 
+    # checkhealth and large show* tables often exceed the default exec timeout.
+    shell_timeout = max(float(timeout), 90.0)
     outputs: list[str] = []
     with _acquire_hpe_cli_lock(host, port):
         with ssh_auth_client(
@@ -310,13 +431,20 @@ def run_ssh_auth_hpe_commands(
             channel = client.invoke_shell(term="vt100", width=220, height=48)
             channel.settimeout(0.1)
             try:
-                _recv_shell(channel, timeout=8)
+                _recv_until_hpe_prompt(channel, timeout=20)
                 channel.send("setclienv csvtable 1\r\n")
-                _recv_shell(channel, timeout=8)
+                _recv_until_hpe_prompt(channel, timeout=15)
 
                 for command in commands:
-                    channel.send(f"{command}\r\n")
-                    raw = _recv_shell(channel, timeout=float(timeout))
+                    cmd_timeout = shell_timeout
+                    if "checkhealth" in command.lower():
+                        # Full checkhealth can take several minutes on large arrays.
+                        cmd_timeout = max(shell_timeout, 300.0)
+                    raw = _recv_hpe_command_output(
+                        channel,
+                        command,
+                        timeout=cmd_timeout,
+                    )
                     outputs.append(_extract_hpe_command_output(raw, command))
 
                 channel.send("exit\r\n")

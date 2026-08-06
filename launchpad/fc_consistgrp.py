@@ -134,11 +134,11 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         <div class="section-head"><h2>CG Status</h2></div>
         <div class="actions">
           <label>Site
-            <select id="fc-status-site-select" aria-label="Status site filter"><option value="">None</option></select>
+            <select id="fc-status-site-select" aria-label="Status site filter"><option value="">All servers</option></select>
           </label>
           <button type="button" id="fc-status-refresh-btn">Refresh live</button>
           <button type="button" class="secondary" id="fc-status-export-btn" disabled>Export Excel</button>
-          <span class="status" id="fc-status-msg" aria-live="polite">Pick a site (or None for all), then Refresh live.</span>
+          <span class="status" id="fc-status-msg" aria-live="polite">Pick a site (or All servers), then Refresh live.</span>
         </div>
         <div class="errors" id="fc-status-errors"></div>
         <div class="tabs" role="tablist" aria-label="Status buckets">
@@ -644,7 +644,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         const data = await res.json();
         const cards = data.cards || [];
         const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-        statusSiteSelect.innerHTML = '<option value="">None</option>' + sorted.map(
+        statusSiteSelect.innerHTML = '<option value="">All servers</option>' + sorted.map(
           (card) => `<option value="${escapeAttr(card.id)}">${escapeHtml(card.name || card.id)}</option>`
         ).join("");
       } catch (_err) {

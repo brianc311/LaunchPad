@@ -58,6 +58,7 @@ def test_enrich_firmware_row_behind_count():
     assert out["current"] == "8.6.0"
     assert out["latest"] == "8.6.1"
     assert out["versions_behind"] == "1"
+    assert out["behind_versions"] == ["8.6.1"]
 
 
 def test_enrich_firmware_unknown_when_current_missing_from_catalog():
@@ -68,6 +69,7 @@ def test_enrich_firmware_unknown_when_current_missing_from_catalog():
         row, current="9.0.0", catalog=["8.5.0", "8.6.0"], configured="yes"
     )
     assert out["versions_behind"] == "unknown"
+    assert out["behind_versions"] == []
     assert out["latest"] == "8.6.0"
 
 
@@ -76,6 +78,21 @@ def test_parse_hpe_showversion_firmware():
     configured, status, details, current = parse_hpe_showversion_firmware(output)
     assert configured == "yes"
     assert current == "4.1.2"
+
+
+def test_parse_hpe_showversion_release_version_no_colon():
+    """Live 3PAR/Primera CLI uses 'Release version X' without a colon."""
+    output = (
+        "Release version 3.3.1.648 (MU5)\n"
+        "Patches: P126,P132\n"
+        "Component Name Version\n"
+        "CLI Server 3.3.1.648 (MU5)\n"
+    )
+    configured, status, details, current = parse_hpe_showversion_firmware(output)
+    assert configured == "yes"
+    assert status == "configured"
+    assert current == "3.3.1.648 (MU5)"
+    assert "version=" in details
 
 
 def test_hpe_showversion_normalizes_patch_suffix():

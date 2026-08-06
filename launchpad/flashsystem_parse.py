@@ -146,6 +146,57 @@ def _parse_colon_table(output: str) -> tuple[list[str], list[list[str]]]:
     return [], []
 
 
+def _parse_csv_table(output: str) -> tuple[list[str], list[list[str]]]:
+    """Parse simple CSV tables (e.g. HPE ``setclienv csvtable 1`` output).
+
+    Skips preamble lines such as ``---------------(MiB)---------------``.
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return [], []
+
+    header_idx = None
+    for idx, line in enumerate(lines):
+        if line.count(",") < 2:
+            continue
+        cells = [part.strip() for part in line.split(",")]
+        if len(cells) < 3:
+            continue
+        lowered = [cell.lower() for cell in cells]
+        # Prefer a real header row over a data row that also has commas.
+        if any(token in lowered for token in ("name", "id", "warn%", "rawfree", "usablefree")):
+            header_idx = idx
+            break
+        if header_idx is None and not cells[0].isdigit():
+            header_idx = idx
+    if header_idx is None:
+        return [], []
+
+    raw_headers = [part.strip() for part in lines[header_idx].split(",")]
+    # Deduplicate blank/duplicate headers (HPE sometimes repeats Snp).
+    headers: list[str] = []
+    seen: dict[str, int] = {}
+    for header in raw_headers:
+        key = header or "field"
+        count = seen.get(key.lower(), 0)
+        seen[key.lower()] = count + 1
+        headers.append(key if count == 0 else f"{key}_{count + 1}")
+
+    rows: list[list[str]] = []
+    for line in lines[header_idx + 1 :]:
+        if "," not in line:
+            continue
+        cells = [part.strip() for part in line.split(",")]
+        if len(cells) < 2:
+            continue
+        if len(cells) < len(headers):
+            cells = cells + [""] * (len(headers) - len(cells))
+        elif len(cells) > len(headers):
+            cells = cells[: len(headers)]
+        rows.append(cells)
+    return headers, rows
+
+
 def _parse_space_table(output: str) -> tuple[list[str], list[list[str]]]:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if len(lines) < 2:
@@ -153,6 +204,76 @@ def _parse_space_table(output: str) -> tuple[list[str], list[list[str]]]:
     headers = lines[0].split()
     rows = [line.split() for line in lines[1:] if line.split()]
     return headers, rows
+
+
+def _parse_any_table(output: str) -> tuple[list[str], list[list[str]]]:
+    headers, rows = _parse_csv_table(output)
+    if rows:
+        return headers, rows
+    headers, rows = _parse_colon_table(output)
+    if rows:
+        return headers, rows
+    return _parse_space_table(output)
+
+
+def _output_size_unit_hint(output: str) -> str:
+    """Return MB when CLI text indicates megabyte/mebibyte columns."""
+    lowered = (output or "").lower()
+    if "(mib)" in lowered or "(mb)" in lowered or "estimated(mib)" in lowered:
+        return "MB"
+    if "usr_total_mb" in lowered or "usr_used_mb" in lowered:
+        return "MB"
+    return ""
+
+
+def _record_get(record: dict[str, str], *keys: str) -> str:
+    lowered = {key.lower(): value for key, value in record.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _record_find_header(record: dict[str, str], *keys: str) -> str | None:
+    lowered = {key.lower(): key for key in record}
+    for key in keys:
+        header = lowered.get(key.lower())
+        if header is not None:
+            return header
+    return None
+
+
+def _parse_sized_field(
+    record: dict[str, str],
+    *keys: str,
+    default_unit: str = "",
+) -> float | None:
+    """Parse a size cell; ``_MB`` headers and ``default_unit`` treat bare ints as MB."""
+    mb_headers = {"free", "total", "base", "rawfree", "usablefree"}
+    for key in keys:
+        header = _record_find_header(record, key)
+        if header is None:
+            continue
+        value = str(record.get(header, "")).strip()
+        if not value or value in {"-", "--"}:
+            continue
+        header_lower = header.lower()
+        unit_hint = default_unit
+        if header_lower.endswith("_mb") or header_lower.endswith("(mb)"):
+            unit_hint = "MB"
+        elif header_lower in mb_headers and default_unit:
+            unit_hint = default_unit
+        elif header_lower in mb_headers and not re.search(r"[A-Za-z]", value):
+            # HPE showcpg CSV uses Free/Total in MiB without a unit suffix.
+            unit_hint = "MB"
+        if unit_hint and not re.search(r"[A-Za-z]", value):
+            parsed = _parse_size_bytes(f"{value}{unit_hint}")
+        else:
+            parsed = _parse_size_bytes(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _parse_key_values(output: str) -> dict[str, str]:
@@ -224,6 +345,9 @@ def _summarize_showspace(output: str) -> str:
             f"{name}: {_format_bytes(used)} used / {_format_bytes(total)} "
             f"({pct:.1f}% used, {_format_bytes(capacity['free_bytes'])} free)"
         )
+    pool_summary = _summarize_mdisk_pools(output)
+    if pool_summary and not pool_summary.lower().startswith("no "):
+        return pool_summary
     return _summarize_table("Capacity", output, "CPG(s)")
 
 
@@ -305,40 +429,263 @@ def _summarize_lssi(output: str) -> str:
     return "DS8000 system info returned"
 
 
-def parse_capacity_summary(output: str) -> dict[str, Any] | None:
-    """Best-effort capacity parse for SVC, 3PAR, XIV, and DS8000 CLI output."""
+_MB_CAPACITY_KEYS = frozenset(
+    {
+        "total_capacity",
+        "allocated_capacity",
+        "free_capacity",
+        "failed_capacity",
+        "raw_capacity",
+        "raw_free_capacity",
+        "raw_used_capacity",
+        "total_raw_capacity",
+        "free_raw_capacity",
+        "allocated_raw_capacity",
+        "totalcap",
+        "alloccap",
+        "freecap",
+        "failedcap",
+    }
+)
+
+
+def _capacity_context(text: str) -> tuple[dict[str, str], dict[str, str], str, str]:
+    kv = _parse_key_values(text)
+    lowered = {key.lower().replace(" ", "_"): value for key, value in kv.items()}
+    text_lower = text.lower()
+    default_unit = ""
+    if "(mb)" in text_lower or "capacity (mb)" in text_lower:
+        default_unit = "MB"
+    elif "(mib)" in text_lower or "estimated(mib)" in text_lower:
+        default_unit = "MB"
+    name = kv.get("name") or kv.get("System Name") or kv.get("id") or "System"
+    return kv, lowered, default_unit, name
+
+
+def _pick_capacity_bytes(
+    lowered: dict[str, str],
+    *keys: str,
+    default_unit: str = "",
+    mb_keys: frozenset[str] | None = None,
+    exclude_prefixes: frozenset[str] = frozenset(),
+) -> float | None:
+    """Pick the first matching capacity value using exact key names only."""
+    mb_keys = mb_keys or _MB_CAPACITY_KEYS
+    for key in keys:
+        if exclude_prefixes and any(key.startswith(prefix) for prefix in exclude_prefixes):
+            continue
+        if key not in lowered:
+            continue
+        raw = str(lowered[key]).strip()
+        if not raw:
+            continue
+        unit_hint = default_unit
+        if key in mb_keys or key.endswith("_mb"):
+            unit_hint = "MB"
+        if unit_hint and not re.search(r"[A-Za-z]", raw):
+            parsed = _parse_size_bytes(f"{raw}{unit_hint}")
+        else:
+            parsed = _parse_size_bytes(raw)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+_RAW_CAPACITY_KEYS = frozenset(
+    {
+        "raw_capacity",
+        "raw_free_capacity",
+        "raw_used_capacity",
+        "total_raw_capacity",
+        "free_raw_capacity",
+        "allocated_raw_capacity",
+        "physical_capacity",
+        "physical_free_capacity",
+        "physical_used_capacity",
+    }
+)
+
+
+def _has_raw_capacity_fields(lowered: dict[str, str]) -> bool:
+    return any(key in _RAW_CAPACITY_KEYS for key in lowered)
+
+
+def parse_raw_capacity_summary(output: str) -> dict[str, Any] | None:
+    """From showsys -d / lssystem text: physical/raw total/free/used + used_pct.
+
+    Return None if physical/raw fields absent.
+    Keys mirror capacity_summary: name, used_bytes, total_bytes, free_bytes, used_pct, raw.
+    """
     text = (output or "").strip()
     if not text:
         return None
 
-    kv = _parse_key_values(text)
-    lowered = {key.lower().replace(" ", "_"): value for key, value in kv.items()}
-
-    def pick_size(*keys: str) -> float | None:
-        for key in keys:
-            for candidate, value in lowered.items():
-                if key in candidate:
-                    parsed = _parse_size_bytes(value)
-                    if parsed is not None:
-                        return parsed
+    kv, lowered, default_unit, name = _capacity_context(text)
+    if not _has_raw_capacity_fields(lowered):
         return None
 
-    total = pick_size(
+    total = _pick_capacity_bytes(
+        lowered,
+        "total_raw_capacity",
+        "raw_capacity",
         "physical_capacity",
+        default_unit=default_unit,
+    )
+    free = _pick_capacity_bytes(
+        lowered,
+        "free_raw_capacity",
+        "raw_free_capacity",
+        "physical_free_capacity",
+        default_unit=default_unit,
+    )
+
+    if total and free is not None:
+        used = max(0.0, total - free)
+        allocated = _pick_capacity_bytes(
+            lowered,
+            "allocated_raw_capacity",
+            "raw_used_capacity",
+            "physical_used_capacity",
+            default_unit=default_unit,
+        )
+        if allocated is not None and total:
+            used = allocated
+            free = max(0.0, total - used)
+    else:
+        used = _pick_capacity_bytes(
+            lowered,
+            "allocated_raw_capacity",
+            "raw_used_capacity",
+            "physical_used_capacity",
+            default_unit=default_unit,
+        )
+        if total and used is None and free is not None:
+            used = max(0.0, total - free)
+        elif total and free is None and used is not None:
+            free = max(0.0, total - used)
+        elif used is not None and free is not None and not total:
+            total = used + free
+
+    if not total or used is None or free is None:
+        return None
+
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": kv,
+    }
+
+
+def parse_showsys_space_raw(output: str) -> dict[str, Any] | None:
+    """Raw capacity from ``showsys -space`` (SSMC Total/Allocated/Free, MB).
+
+    Same key names as ``showsys -d`` System Capacity; callers must only pass
+    ``showsys -space`` output here so System and Raw stay distinct.
+    """
+    text = (output or "").strip()
+    if not text:
+        return None
+
+    kv, lowered, default_unit, name = _capacity_context(text)
+    if not default_unit:
+        default_unit = "MB"
+
+    total = _pick_capacity_bytes(
+        lowered,
+        "total_capacity",
+        "total",
+        default_unit=default_unit,
+    )
+    free = _pick_capacity_bytes(
+        lowered,
+        "free_capacity",
+        "free",
+        default_unit=default_unit,
+    )
+    allocated = _pick_capacity_bytes(
+        lowered,
+        "allocated_capacity",
+        "allocated",
+        default_unit=default_unit,
+    )
+
+    if total and allocated is not None:
+        used = allocated
+        free = free if free is not None else max(0.0, total - used)
+    elif total and free is not None:
+        used = max(0.0, total - free)
+    elif allocated is not None and free is not None:
+        used = allocated
+        total = used + free
+    else:
+        return None
+
+    if not total or used is None or free is None:
+        return None
+
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": kv,
+    }
+
+
+def parse_capacity_summary(output: str) -> dict[str, Any] | None:
+    """Normal/usable summary. Prefer allocated + total_capacity (HPE) or usable
+    mdisk capacity (IBM). Do NOT use physical_capacity as total when allocated
+    + total_capacity are present (physical belongs in parse_raw_capacity_summary).
+    """
+    text = (output or "").strip()
+    if not text:
+        return None
+
+    kv, lowered, default_unit, name = _capacity_context(text)
+
+    _USABLE_EXCLUDE = frozenset({"physical_", "raw_"})
+
+    def pick_size(*keys: str) -> float | None:
+        return _pick_capacity_bytes(
+            lowered,
+            *keys,
+            default_unit=default_unit,
+            exclude_prefixes=_USABLE_EXCLUDE,
+        )
+
+    total = pick_size(
         "total_capacity",
         "total_mdisk_capacity",
         "total_usable",
         "total",
     )
+    if total is None:
+        total = _pick_capacity_bytes(
+            lowered,
+            "physical_capacity",
+            default_unit=default_unit,
+        )
     free = pick_size(
-        "physical_free_capacity",
         "free_capacity",
         "total_free_space",
+        "rawfree",
+        "usablefree",
         "free",
     )
 
     if total and free is not None:
         used = max(0.0, total - free)
+        # Prefer allocated when both free and allocated are present (showsys -d).
+        allocated = pick_size("allocated_capacity", "allocated")
+        if allocated is not None and total:
+            used = allocated
+            free = max(0.0, total - used)
     else:
         used = pick_size(
             "used_capacity_after_reduction",
@@ -354,12 +701,14 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
         elif used is not None and free is not None and not total:
             total = used + free
 
-    headers, rows = _parse_space_table(text)
+    headers, rows = _parse_any_table(text)
     if not rows:
-        headers, rows = _parse_colon_table(text)
+        headers, rows = _parse_space_table(text)
+        if not rows:
+            headers, rows = _parse_colon_table(text)
 
-    name = kv.get("name") or kv.get("id") or "System"
-    if rows and headers:
+    name = kv.get("name") or kv.get("System Name") or kv.get("id") or "System"
+    if rows and headers and (not total or free is None):
         pct_idx = next(
             (idx for idx, header in enumerate(headers) if "usedpct" in header.lower().replace(" ", "")),
             None,
@@ -369,61 +718,117 @@ def parse_capacity_summary(output: str) -> dict[str, Any] | None:
                 (idx for idx, header in enumerate(headers) if "used" in header.lower() and "%" in header),
                 None,
             )
+        def _header_key(header: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", header.lower())
+
         total_idx = next(
-            (idx for idx, header in enumerate(headers) if header.lower() in {"total", "capacity", "totalcapacity"}),
+            (
+                idx
+                for idx, header in enumerate(headers)
+                if _header_key(header)
+                in {
+                    "total",
+                    "capacity",
+                    "totalcapacity",
+                    "totalcap",
+                    "usr_total_mb",
+                    "usrtotalmb",
+                }
+            ),
             None,
         )
         used_idx = next(
-            (idx for idx, header in enumerate(headers) if header.lower() in {"used", "usedcapacity", "allocated"}),
+            (
+                idx
+                for idx, header in enumerate(headers)
+                if _header_key(header)
+                in {
+                    "used",
+                    "usedcapacity",
+                    "allocated",
+                    "alloccap",
+                    "usr_used_mb",
+                    "usrusedmb",
+                }
+            ),
             None,
         )
-        if pct_idx is not None and rows:
+        free_idx = next(
+            (
+                idx
+                for idx, header in enumerate(headers)
+                if _header_key(header)
+                in {
+                    "free",
+                    "rawfree",
+                    "usablefree",
+                    "free_capacity",
+                    "freecapacity",
+                    "freecap",
+                }
+            ),
+            None,
+        )
+        if rows and (total_idx is not None or free_idx is not None or used_idx is not None):
             best_row = rows[0]
-            try:
-                pct = float(best_row[pct_idx].replace("%", "").strip())
-            except ValueError:
-                pct = None
-            row_total = (
-                _parse_size_bytes(best_row[total_idx])
-                if total_idx is not None and total_idx < len(best_row)
-                else None
+            showsys_table = any(
+                _header_key(header) in {"totalcap", "alloccap", "freecap"}
+                for header in headers
             )
-            row_used = (
-                _parse_size_bytes(best_row[used_idx])
-                if used_idx is not None and used_idx < len(best_row)
-                else None
-            )
-            if pct is not None and row_total:
-                used_bytes = row_total * pct / 100.0
-                return {
-                    "name": best_row[0] if best_row else name,
-                    "total_bytes": row_total,
-                    "used_bytes": used_bytes,
-                    "free_bytes": max(0.0, row_total - used_bytes),
-                    "used_pct": round(pct, 1),
-                    "raw": kv,
-                }
-            if pct is not None and row_used and row_total:
-                return {
-                    "name": name,
-                    "total_bytes": row_total,
-                    "used_bytes": row_used,
-                    "free_bytes": max(0.0, row_total - row_used),
-                    "used_pct": round(pct, 1),
-                    "raw": kv,
-                }
 
-    if total and used is not None:
-        used_pct = (used / total * 100.0) if total else 0.0
-        return {
-            "name": name,
-            "total_bytes": total,
-            "used_bytes": used,
-            "free_bytes": free if free is not None else max(0.0, total - used),
-            "used_pct": round(used_pct, 1),
-            "raw": kv,
-        }
-    return None
+            def cell_size(idx: int | None) -> float | None:
+                if idx is None or idx >= len(best_row):
+                    return None
+                raw = best_row[idx].strip()
+                header = headers[idx] if idx < len(headers) else ""
+                header_l = header.lower()
+                if (
+                    header_l.endswith("_mb")
+                    or "(mib)" in text.lower()
+                    or default_unit == "MB"
+                    or showsys_table
+                    or _header_key(header) in {"totalcap", "alloccap", "freecap", "failedcap"}
+                ):
+                    if raw and not re.search(r"[A-Za-z]", raw):
+                        return _parse_size_bytes(f"{raw}MB")
+                return _parse_size_bytes(raw)
+
+            row_total = cell_size(total_idx)
+            row_used = cell_size(used_idx)
+            row_free = cell_size(free_idx)
+            if row_total and row_free is not None and used is None:
+                total = total or row_total
+                free = free if free is not None else row_free
+                used = max(0.0, total - free)
+            elif row_total and row_used is not None:
+                total = total or row_total
+                used = used if used is not None else row_used
+                free = free if free is not None else max(0.0, total - used)
+            elif row_free is not None and row_total:
+                total = total or row_total
+                free = free if free is not None else row_free
+                used = used if used is not None else max(0.0, total - free)
+
+            if pct_idx is not None and used is None and total:
+                try:
+                    pct = float(best_row[pct_idx].replace("%", "").strip())
+                    used = total * (pct / 100.0)
+                    free = max(0.0, total - used)
+                except ValueError:
+                    pass
+
+    if not total or used is None or free is None:
+        return None
+
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": kv,
+    }
 
 
 def _summarize_lssystem(output: str) -> str:
@@ -492,23 +897,50 @@ def _pool_capacity_lines(headers: list[str], rows: list[list[str]]) -> list[str]
 
 
 def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
-    """Parse lsmdiskgrp / pool table output into capacity dicts like parse_capacity_summary."""
-    headers, rows = _parse_colon_table(output)
-    if not rows:
-        headers, rows = _parse_space_table(output)
+    """Parse lsmdiskgrp / pool / HPE CPG table output into capacity dicts."""
+    headers, rows = _parse_any_table(output)
     if not headers or not rows:
         return []
 
+    unit_hint = _output_size_unit_hint(output)
     pools: list[dict[str, Any]] = []
     for row in rows:
         record: dict[str, str] = {}
         for index, header in enumerate(headers):
             record[header] = row[index] if index < len(row) else ""
 
-        name = record.get("name") or record.get("CPG") or record.get("PoolName") or "Pool"
-        cap_bytes = _parse_size_bytes(record.get("capacity", "") or record.get("Total", ""))
-        free_bytes = _parse_size_bytes(record.get("free_capacity", "") or record.get("Free", ""))
-        used_bytes = _parse_size_bytes(record.get("used_capacity", ""))
+        name = (
+            _record_get(record, "name", "CPG", "PoolName", "Name")
+            or "Pool"
+        )
+        if name.strip().lower() in {"total", "totals", "sum"}:
+            continue
+        cap_bytes = _parse_sized_field(
+            record,
+            "capacity",
+            "Total",
+            "Usr_Total_MB",
+            "total_mb",
+            "Size",
+            default_unit=unit_hint,
+        )
+        free_bytes = _parse_sized_field(
+            record,
+            "free_capacity",
+            "Free",
+            "Usr_Free_MB",
+            "free_mb",
+            default_unit=unit_hint,
+        )
+        # Do not use bare "Usr" — on showcpg it is often a VV count, not capacity.
+        used_bytes = _parse_sized_field(
+            record,
+            "used_capacity",
+            "Usr_Used_MB",
+            "used_mb",
+            "Used",
+            default_unit=unit_hint,
+        )
 
         if cap_bytes and free_bytes is not None:
             used_bytes = used_bytes if used_bytes is not None else max(0.0, cap_bytes - free_bytes)
@@ -521,6 +953,12 @@ def parse_pool_capacity_rows(output: str) -> list[dict[str, Any]]:
             continue
 
         used_pct = (used_bytes / cap_bytes * 100.0) if cap_bytes else 0.0
+        pct_raw = _record_get(record, "Usr_Used_Perc", "Used%", "use%", "used_pct")
+        if pct_raw:
+            try:
+                used_pct = float(pct_raw.replace("%", "").strip())
+            except ValueError:
+                pass
         pools.append(
             {
                 "name": name,
@@ -646,9 +1084,7 @@ def _summarize_alerts(output: str) -> str:
 
 
 def _summarize_table(label: str, output: str, item_name: str) -> str:
-    headers, rows = _parse_colon_table(output)
-    if not rows:
-        headers, rows = _parse_space_table(output)
+    headers, rows = _parse_any_table(output)
     if rows:
         return f"{len(rows)} {item_name}, {_count_status(rows, headers)}"
     first = output.splitlines()[0].strip() if output else ""
@@ -736,7 +1172,7 @@ def summarize_command_output(label: str, command: str, output: str) -> str:
     if "showspace" in command_lower or "showsys" in command_lower:
         return _summarize_showspace(text)
     if "showcpg" in command_lower or "capacity - cpg" in label_lower:
-        return _summarize_showspace(text)
+        return _summarize_mdisk_pools(text)
     if "lsnode" in command_lower and (
         "health - nodes" in label_lower
         or "health - controllers" in label_lower
@@ -757,6 +1193,19 @@ def summarize_command_output(label: str, command: str, output: str) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return "checkhealth returned"
+        checking_only = all(line.lower().startswith("checking ") for line in lines)
+        if checking_only:
+            return f"checkhealth incomplete ({len(lines)} checks…)"[:72]
+        # Prefer a final status line over the first "Checking …" progress line.
+        for line in reversed(lines):
+            lowered = line.lower()
+            if lowered.startswith("checking "):
+                continue
+            summary = line
+            extras = len(lines) - 1
+            if extras > 0:
+                summary += f" (+{extras} more)"
+            return summary[:72]
         summary = lines[0]
         if len(lines) > 1:
             summary += f" (+{len(lines) - 1} more)"
@@ -952,9 +1401,16 @@ def format_command_output_html(label: str, command: str, output: str) -> str:
             normalized_rows.append(row)
         return summary_html + _html_table(headers, normalized_rows, family)
 
-    headers, rows = _parse_space_table(text)
+    headers, rows = _parse_any_table(text)
     if headers and rows:
-        return summary_html + _html_table(headers, rows, family)
+        normalized_rows = []
+        for row in rows:
+            if len(row) < len(headers):
+                row = row + [""] * (len(headers) - len(row))
+            elif len(row) > len(headers):
+                row = row[: len(headers)]
+            normalized_rows.append(row)
+        return summary_html + _html_table(headers, normalized_rows, family)
 
     if kv:
         return summary_html + _html_key_value_table(kv, family)

@@ -116,9 +116,17 @@ from launchpad.flashsystem_fc import (
     parse_fabric_logins,
     parse_fc_hosts,
     parse_host_lun_maps,
+    parse_lsconsistgrp,
     parse_lsvdisk_volumes,
 )
+from launchpad.capacity_pool_family import capacity_pool_family
+from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.health_excel_export import (
+    HealthExcelSections,
+    build_health_workbook,
+    parse_health_excel_sections,
+)
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.inventory_sync import build_inventory_sync
 from launchpad.lun_builder import LUN_BUILDER_HTML, LUN_BUILDER_PATH
@@ -144,6 +152,20 @@ from launchpad.lun_builder_data import (
 )
 from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
+from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
+from launchpad.site_lookup_data import (
+    payload_from_card_cache,
+    payload_from_live,
+    payload_from_lun_offline,
+    payload_from_offline_snapshot,
+    payload_has_inventory,
+)
+from launchpad.site_lookup_offline import (
+    SITE_LOOKUP_OFFLINE_SETTING,
+    normalize_store as normalize_site_lookup_offline_store,
+    snapshot_from_live_payload,
+    upsert_snapshot as upsert_site_lookup_offline_snapshot,
+)
 from launchpad.lun_builder_export import (
     export_lun_build_csv_zip,
     export_lun_build_xlsx,
@@ -217,7 +239,14 @@ class HealthCard:
             "port": self.port,
             "username": self.username,
             "device_profile": self.device_profile,
+            "dell_report_family": dell_report_family_for_site(
+                self.device_profile, site_name=self.name
+            ),
+            "pool_family": capacity_pool_family(
+                self.device_profile, site_name=self.name
+            ),
             "model": model,
+            "serial_number": self.serial_number,
             "category": self.category,
             "command_mode": bool(
                 resolve_card_commands(
@@ -232,6 +261,7 @@ class HealthCard:
             "updated_at": self.updated_at,
             "health_issues": analysis["health_issues"],
             "capacity_summary": analysis["capacity_summary"],
+            "raw_capacity_summary": analysis.get("raw_capacity_summary"),
             "capacity_popup_html": analysis["capacity_popup_html"],
             "pools": analysis.get("pools") or [],
             "fc_ports": fc.get("fc_ports") or [],
@@ -810,6 +840,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <input type="checkbox" id="monitor-all-toggle">
           All monitoring on
         </label>
+        <label class="toggle-row" for="include-off-toggle" title="When unchecked, only Monitor-on sites are shown. Check to show monitoring-off sites again.">
+          <input type="checkbox" id="include-off-toggle">
+          Include monitoring-off sites
+        </label>
         <label class="toggle-row" for="show-alerts-toggle">
           <input type="checkbox" id="show-alerts-toggle" checked>
           Show alerts
@@ -818,13 +852,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <span id="jiggler-status" class="refresh-status">Mouse jiggler: Off</span>
       </div>
       <div class="filter-bar no-print">
-        <label>Site <select id="health-site-select"><option value="">None</option></select></label>
+        <label>Site <select id="health-site-select"><option value="">All servers</option></select></label>
         <input type="search" id="health-search" placeholder="Find sites for PDF (all sites stay visible)" aria-label="Search servers">
         <button type="button" id="select-visible-btn" class="secondary">Select matches</button>
         <button type="button" id="clear-selection-btn" class="secondary">Clear selection</button>
         <span id="selection-count" class="selection-count"></span>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="health-excel-btn" class="secondary">Export Excel</button>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-summary" checked> Summary</label>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-issues" checked> Issues</label>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-cmd-summaries" checked> Command summaries</label>
+        <label class="toggle-row"><input type="checkbox" id="health-excel-raw"> Raw output</label>
       </div>
       <p id="print-meta" class="print-meta"></p>
       <p id="search-hint" class="search-hint no-print"></p>
@@ -859,6 +897,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalCloseEl = document.getElementById("modal-close");
     const showAlertsToggle = document.getElementById("show-alerts-toggle");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
+    const includeOffToggle = document.getElementById("include-off-toggle");
     const healthSiteSelectEl = document.getElementById("health-site-select");
     const healthSearchEl = document.getElementById("health-search");
     const selectVisibleBtn = document.getElementById("select-visible-btn");
@@ -866,10 +905,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const selectionCountEl = document.getElementById("selection-count");
     const printBtn = document.getElementById("print-btn");
     const healthExcelBtn = document.getElementById("health-excel-btn");
+    const healthExcelSummaryEl = document.getElementById("health-excel-summary");
+    const healthExcelIssuesEl = document.getElementById("health-excel-issues");
+    const healthExcelCmdSummariesEl = document.getElementById("health-excel-cmd-summaries");
+    const healthExcelRawEl = document.getElementById("health-excel-raw");
     const printMetaEl = document.getElementById("print-meta");
     const searchHintEl = document.getElementById("search-hint");
     const SHOW_ALERTS_PREF_KEY = "launchpad.healthDashboard.showAlerts";
     const MONITOR_PREF_PREFIX = "launchpad.healthDashboard.monitor-";
+    const HEALTH_EXCEL_PREF = {
+      summary: "launchpad.healthExcel.summary",
+      issues: "launchpad.healthExcel.issues",
+      commandSummaries: "launchpad.healthExcel.commandSummaries",
+      rawOutput: "launchpad.healthExcel.rawOutput",
+    };
     const autoTimers = {};
     let monitorServerState = {};
 
@@ -955,6 +1004,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           delete autoTimers[cardId];
         }
         updateMasterMonitorToggle();
+        renderAll(cardsCache);
       });
     }
 
@@ -983,6 +1033,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       });
       updateMasterMonitorToggle();
+      renderAll(cardsCache);
       if (!on) {
         if (refreshStatusEl) refreshStatusEl.textContent = "All monitoring off.";
         return;
@@ -1069,7 +1120,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
       healthSiteSelectEl.innerHTML =
-        '<option value="">None</option>' +
+        '<option value="">All servers</option>' +
         sorted
           .map(
             (card) =>
@@ -1175,14 +1226,58 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       updateSelectionCount();
     }
 
+    function loadHealthExcelPrefs() {
+      const pairs = [
+        [healthExcelSummaryEl, HEALTH_EXCEL_PREF.summary, true],
+        [healthExcelIssuesEl, HEALTH_EXCEL_PREF.issues, true],
+        [healthExcelCmdSummariesEl, HEALTH_EXCEL_PREF.commandSummaries, true],
+        [healthExcelRawEl, HEALTH_EXCEL_PREF.rawOutput, false],
+      ];
+      for (const [el, key, defaultOn] of pairs) {
+        if (!el) continue;
+        const saved = localStorage.getItem(key);
+        if (saved === null) el.checked = defaultOn;
+        else el.checked = saved === "1";
+      }
+    }
+
+    function saveHealthExcelPref(el, key) {
+      if (!el) return;
+      localStorage.setItem(key, el.checked ? "1" : "0");
+    }
+
+    function healthExcelSectionFlag(el, defaultOn) {
+      if (!el) return defaultOn ? "1" : "0";
+      return el.checked ? "1" : "0";
+    }
+
     async function downloadHealthExcel() {
       if (!healthExcelBtn) return;
+      const summaryOn = !healthExcelSummaryEl || healthExcelSummaryEl.checked;
+      const siteId = selectedSiteId();
+      const detailIds = siteId != null ? [siteId] : [...printSelectedIds];
+      if (!detailIds.length && !summaryOn) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent =
+            "Select PDF sites or pick a site, or enable Summary, before exporting.";
+        }
+        return;
+      }
       healthExcelBtn.disabled = true;
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Health Summary Excel…";
       try {
-        const siteId = selectedSiteId();
-        const cardParam = siteId != null ? `card_id=${siteId}&` : "";
-        const res = await fetch(`/api/health-export?${cardParam}open=1`);
+        const parts = [];
+        for (const id of detailIds) {
+          parts.push(`card_id=${encodeURIComponent(id)}`);
+        }
+        parts.push(`summary=${healthExcelSectionFlag(healthExcelSummaryEl, true)}`);
+        parts.push(`issues=${healthExcelSectionFlag(healthExcelIssuesEl, true)}`);
+        parts.push(
+          `command_summaries=${healthExcelSectionFlag(healthExcelCmdSummariesEl, true)}`
+        );
+        parts.push(`raw=${healthExcelSectionFlag(healthExcelRawEl, false)}`);
+        parts.push("open=1");
+        const res = await fetch(`/api/health-export?${parts.join("&")}`);
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
           try {
@@ -1776,6 +1871,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function visibleCards(cards) {
+      if (includeOffToggle && includeOffToggle.checked) {
+        return cards;
+      }
+      return cards.filter((card) => isMonitorOn(card.id));
+    }
+
     function renderAll(cards) {
       document.body.classList.remove("print-export");
       if (!cards.length) {
@@ -1785,7 +1887,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         renderIssues([]);
         return;
       }
-      const sorted = [...cards].sort((a, b) => a.id - b.id);
+      const visible = visibleCards(cards);
+      if (!visible.length) {
+        serversEl.innerHTML =
+          '<div class="empty">All sites have Monitor off. Check <strong>Include monitoring-off sites</strong> to view them, or turn on Monitor.</div>';
+        updateSummary(cards);
+        renderIssues(cards);
+        updateMasterMonitorToggle();
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `0 of ${cards.length} monitored site(s) shown`;
+        }
+        return;
+      }
+      const sorted = [...visible].sort((a, b) => a.id - b.id);
       const seen = new Set(sorted.map((card) => card.id));
 
       try {
@@ -1826,8 +1940,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
       sorted.forEach((card) => applyMonitorVisual(card.id));
       updateMasterMonitorToggle();
-      updateSummary(sorted);
-      renderIssues(sorted);
+      updateSummary(cards);
+      renderIssues(cards);
       wireInteractiveButtons();
       wirePrintCheckboxes();
       populateHealthSiteSelect(sorted);
@@ -1835,6 +1949,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       applyHealthSearch();
       syncPrintSelectionClasses();
       updateSelectionCount();
+      if (refreshStatusEl && !refreshAllRunning) {
+        const includeOff = includeOffToggle && includeOffToggle.checked;
+        refreshStatusEl.textContent = includeOff
+          ? `${sorted.length} of ${cards.length} site(s) shown`
+          : `${sorted.length} monitored site(s) shown (${cards.length} total)`;
+      }
     }
 
     function wireInteractiveButtons() {
@@ -1928,6 +2048,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         setAllMonitoring(monitorAllToggle.checked);
       });
     }
+    if (includeOffToggle) {
+      const savedIncludeOff = localStorage.getItem("launchpad.healthDashboard.includeOff");
+      if (savedIncludeOff === "1") includeOffToggle.checked = true;
+      includeOffToggle.addEventListener("change", () => {
+        localStorage.setItem(
+          "launchpad.healthDashboard.includeOff",
+          includeOffToggle.checked ? "1" : "0"
+        );
+        renderAll(cardsCache);
+      });
+    }
     if (healthSiteSelectEl) {
       healthSiteSelectEl.addEventListener("change", applySiteFilter);
     }
@@ -1946,6 +2077,30 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     if (healthExcelBtn) {
       healthExcelBtn.addEventListener("click", downloadHealthExcel);
     }
+    if (healthExcelSummaryEl) {
+      healthExcelSummaryEl.addEventListener("change", () => {
+        saveHealthExcelPref(healthExcelSummaryEl, HEALTH_EXCEL_PREF.summary);
+      });
+    }
+    if (healthExcelIssuesEl) {
+      healthExcelIssuesEl.addEventListener("change", () => {
+        saveHealthExcelPref(healthExcelIssuesEl, HEALTH_EXCEL_PREF.issues);
+      });
+    }
+    if (healthExcelCmdSummariesEl) {
+      healthExcelCmdSummariesEl.addEventListener("change", () => {
+        saveHealthExcelPref(
+          healthExcelCmdSummariesEl,
+          HEALTH_EXCEL_PREF.commandSummaries
+        );
+      });
+    }
+    if (healthExcelRawEl) {
+      healthExcelRawEl.addEventListener("change", () => {
+        saveHealthExcelPref(healthExcelRawEl, HEALTH_EXCEL_PREF.rawOutput);
+      });
+    }
+    loadHealthExcelPrefs();
     loadShowAlertsPref();
 
     loadJigglerStatus();
@@ -2033,6 +2188,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == SYSTEM_CONNECTIVITY_PATH:
             self._send_html(SYSTEM_CONNECTIVITY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
+        if path == SITE_LOOKUP_PATH:
+            self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
@@ -2214,6 +2372,21 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/cards":
             self._send_json(server.list_cards())
+            return
+        if path == "/api/site-lookup/cache":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            try:
+                card_id = int(raw_card_id)
+            except ValueError:
+                self._send_json({"error": "card_id must be an integer"}, status=400)
+                return
+            try:
+                payload = server.site_lookup_cache(card_id)
+            except KeyError:
+                self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
+                return
+            self._send_json(payload)
             return
         if path == "/api/sync":
             count = server.sync_from_app()
@@ -2736,14 +2909,27 @@ class _HealthHandler(BaseHTTPRequestHandler):
             from launchpad.config import TEMP_DIR
 
             query = parse_qs(parsed.query)
-            raw_card_id = (query.get("card_id") or [""])[0].strip()
-            card_id: int | None = None
-            if raw_card_id:
+            card_ids: list[int] = []
+            for raw_card_id in query.get("card_id") or []:
+                text = str(raw_card_id).strip()
+                if not text:
+                    continue
                 try:
-                    card_id = int(raw_card_id)
+                    card_ids.append(int(text))
                 except ValueError:
                     self._send_json({"error": "Invalid card_id"}, status=400)
                     return
+            section_keys = ("summary", "issues", "command_summaries", "raw")
+            if any(key in query for key in section_keys):
+                sections = parse_health_excel_sections(
+                    summary=(query.get("summary") or ["1"])[0],
+                    issues=(query.get("issues") or ["1"])[0],
+                    command_summaries=(query.get("command_summaries") or ["1"])[0],
+                    raw=(query.get("raw") or ["0"])[0],
+                )
+            else:
+                # No section params: preserve Summary-only backward compatibility.
+                sections = None
             open_after = (query.get("open") or ["0"])[0].strip().lower() in {
                 "1",
                 "true",
@@ -2751,7 +2937,13 @@ class _HealthHandler(BaseHTTPRequestHandler):
             }
             try:
                 server.sync_from_app()
-                body, filename = server.export_health_excel_bytes(card_id=card_id)
+                body, filename = server.export_health_excel_bytes(
+                    card_ids=card_ids or None,
+                    sections=sections,
+                )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
                 return
@@ -2796,11 +2988,23 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "true",
                 "yes",
             }
+            include_pools = (query.get("include_pools") or ["1"])[0].strip().lower() not in {
+                "0",
+                "false",
+                "no",
+            }
+            show_raw = (query.get("show_raw") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
             try:
                 server.sync_from_app()
                 body, filename = server.export_capacity_excel_bytes(
                     include_monitor_off=include_off,
                     card_id=card_id,
+                    include_pools=include_pools,
+                    show_raw=show_raw,
                 )
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
@@ -2820,6 +3024,87 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=filename,
             )
             return
+        if path == "/api/dell-report-settings":
+            from launchpad.dell_report_settings import (
+                load_dell_report_settings,
+                normalize_dell_report_settings,
+            )
+
+            settings_view = server._settings_view_for_scan()
+            if settings_view is None:
+                self._send_json(normalize_dell_report_settings({}))
+            else:
+                self._send_json(load_dell_report_settings(settings_view))
+            return
+        if path == "/api/dell-report-export":
+            # Inline: capacity_export / dell_report_export pull monitor→health_server.
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.dell_report_export import DellReportEmptyError
+            from launchpad.dell_report_settings import is_dell_report_enabled
+
+            settings_view = server._settings_view_for_scan()
+            if settings_view is not None and not is_dell_report_enabled(settings_view):
+                self._send_json(
+                    {"error": "Dell Report is disabled in Admin."},
+                    status=403,
+                )
+                return
+
+            query = parse_qs(parsed.query)
+            include_off = (query.get("include_off") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "Invalid card_id"}, status=400)
+                    return
+            open_after = (query.get("open") or ["0"])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            include_pools = (query.get("include_pools") or ["1"])[0].strip().lower() not in {
+                "0",
+                "false",
+                "no",
+            }
+            try:
+                server.sync_from_app()
+                body, filename = server.export_dell_report_excel_bytes(
+                    include_monitor_off=include_off,
+                    card_id=card_id,
+                    include_pools=include_pools,
+                )
+            except DellReportEmptyError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Dell Report Excel opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Dell Report Excel saved for download but could not open: "
+                        f"{open_exc}"
+                    )
+            self._send_bytes(
+                body,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=filename,
+            )
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -2829,6 +3114,32 @@ class _HealthHandler(BaseHTTPRequestHandler):
             count = server.sync_from_app()
             cards = server.list_cards(allow_sync=False)
             self._send_json({"synced": count, "total": len(cards)})
+            return
+        if path == "/api/site-lookup/refresh":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            try:
+                result = server.refresh_site_lookup(card_id)
+            except KeyError:
+                self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
+                return
+            except (RuntimeError, OSError) as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            self._send_json(result)
             return
         if path == "/api/monitor":
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -2849,6 +3160,35 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     return
                 server.set_monitor_enabled(card_id=card_id, enabled=enabled)
             self._send_json({"states": server.monitor_states(), "default": False})
+            return
+        if path == "/api/dell-report-settings":
+            from launchpad.dell_report_settings import set_dell_report_include_card
+
+            settings_view = server._settings_view_for_scan()
+            if settings_view is None:
+                self._send_json(
+                    {"error": "Settings backend unavailable"}, status=503
+                )
+                return
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            if "include" not in payload:
+                self._send_json({"error": "include required"}, status=400)
+                return
+            saved = set_dell_report_include_card(
+                settings_view, card_id, enabled=bool(payload.get("include"))
+            )
+            self._send_json(saved)
             return
         if path == "/api/snapshot-notes":
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -3269,14 +3609,26 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if not path.startswith("/api/refresh/"):
             self.send_error(404)
             return
-        suffix = path.removeprefix("/api/refresh/")
+        parsed = urlparse(self.path)
+        suffix = parsed.path.removeprefix("/api/refresh/")
+        query = parse_qs(parsed.query)
+        focus = (query.get("focus") or [""])[0].strip().lower()
+        include_pools = (query.get("include_pools") or ["1"])[0].strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
         try:
             card_id = int(suffix)
         except ValueError:
             self.send_error(400)
             return
         try:
-            card = server.refresh_card(card_id)
+            card = server.refresh_card(
+                card_id,
+                focus=focus,
+                include_pools=include_pools,
+            )
             self._send_json(card.to_api())
         except KeyError:
             self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
@@ -3433,6 +3785,42 @@ class HealthServer:
         cleaned = normalize_store(store)
         setter(LUN_OFFLINE_INVENTORY_SETTING, json.dumps(cleaned))
         return cleaned
+
+    def get_site_lookup_offline_inventory(self) -> dict[str, dict]:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return {}
+        raw = getter(SITE_LOOKUP_OFFLINE_SETTING, "{}") or "{}"
+        try:
+            return normalize_site_lookup_offline_store(json.loads(raw))
+        except json.JSONDecodeError:
+            return {}
+
+    def set_site_lookup_offline_inventory(self, store: dict[str, dict]) -> dict[str, dict]:
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError(
+                "LaunchPad must be unlocked to save Site Lookup offline inventory."
+            )
+        cleaned = normalize_site_lookup_offline_store(store)
+        setter(SITE_LOOKUP_OFFLINE_SETTING, json.dumps(cleaned))
+        return cleaned
+
+    def _persist_site_lookup_offline(self, payload: dict) -> None:
+        with self._lock:
+            if self._set_setting is None:
+                return
+        snap = snapshot_from_live_payload(payload)
+        if snap is None:
+            return
+        try:
+            store = self.get_site_lookup_offline_inventory()
+            store = upsert_site_lookup_offline_snapshot(store, snap)
+            self.set_site_lookup_offline_inventory(store)
+        except Exception as exc:
+            _log(f"Site Lookup offline persist skipped: {exc}")
 
     def upsert_lun_offline_inventory_from_card(
         self,
@@ -5839,6 +6227,10 @@ class HealthServer:
     def system_connectivity_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{SYSTEM_CONNECTIVITY_PATH}"
 
+    @property
+    def site_lookup_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{SITE_LOOKUP_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -5888,7 +6280,13 @@ class HealthServer:
                 updated_at=existing.updated_at if existing else None,
             )
 
-    def refresh_card(self, card_id: int) -> HealthCard:
+    def refresh_card(
+        self,
+        card_id: int,
+        *,
+        focus: str = "",
+        include_pools: bool = True,
+    ) -> HealthCard:
         with self._lock:
             if card_id not in self._cards:
                 raise KeyError(card_id)
@@ -5902,12 +6300,23 @@ class HealthServer:
             device_profile = card.device_profile
             custom_commands = card.custom_commands
             serial_number = card.serial_number
+            prior_results = list(card.command_results or [])
+
+        from launchpad.command_format import (
+            drop_pool_capacity_results,
+            filter_capacity_focus_commands,
+        )
 
         commands = resolve_card_commands(
             device_profile,
             custom_commands,
             instance_id=serial_number,
         )
+        if (focus or "").strip().lower() == "capacity":
+            commands = filter_capacity_focus_commands(
+                commands,
+                include_pools=include_pools,
+            )
         if commands:
             command_results = run_remote_command_suite(
                 host,
@@ -5919,6 +6328,17 @@ class HealthServer:
                 password,
                 device_profile=device_profile,
             )
+            if (focus or "").strip().lower() == "capacity" and prior_results:
+                # Preserve non-capacity health outputs from the last full refresh.
+                by_key = {
+                    f"{item.get('label')}|{item.get('command')}": item
+                    for item in prior_results
+                }
+                for item in command_results:
+                    by_key[f"{item.get('label')}|{item.get('command')}"] = item
+                command_results = list(by_key.values())
+                if not include_pools:
+                    command_results = drop_pool_capacity_results(command_results)
             failures = [item for item in command_results if item.get("error")]
             if failures and len(failures) == len(command_results):
                 error = failures[0]["error"]
@@ -5950,7 +6370,115 @@ class HealthServer:
             card.error = error
             card.updated_at = _utc_now()
         self.upsert_lun_offline_inventory_from_card(card)
+        if (focus or "").strip().lower() == "capacity" and error is None:
+            self._capture_dell_snapshot_best_effort(card)
         return card
+
+    def refresh_site_lookup(self, card_id: int) -> dict:
+        cid = int(card_id)
+        with self._lock:
+            if cid not in self._cards:
+                raise KeyError(cid)
+
+        try:
+            card = self.refresh_card(cid)
+        except KeyError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        results = list(card.command_results or [])
+        has_successful_command = any(not item.get("error") for item in results)
+        if card.error and not card.metrics and not has_successful_command:
+            raise RuntimeError(card.error)
+
+        try:
+            meta = card.to_api()
+            hosts = list(meta.get("fc_hosts") or [])
+            maps = list(meta.get("fc_mappings") or [])
+            pools = list(meta.get("pools") or []) or pool_capacity_from_commands(results)
+
+            volumes: list[dict] = []
+            for item in results:
+                command = str(item.get("command") or "")
+                if (
+                    "lsvdisk" in command
+                    and "lshostvdiskmap" not in command
+                    and "lsvdiskhostmap" not in command
+                ):
+                    volumes = parse_lsvdisk_volumes(str(item.get("output") or ""))
+                    break
+            if not hosts:
+                for item in results:
+                    command = str(item.get("command") or "")
+                    if "lshost" in command and "vdisk" not in command:
+                        hosts = parse_fc_hosts(str(item.get("output") or ""))
+                        break
+            if not maps:
+                for item in results:
+                    command = str(item.get("command") or "")
+                    if (
+                        "lshostvdiskmap" in command
+                        or "lsvdiskhostmap" in command
+                    ):
+                        maps = parse_host_lun_maps(str(item.get("output") or ""))
+                        break
+
+            consist_groups: list[dict] = []
+            if card.device_profile in SVC_PROFILES:
+                try:
+                    output = self._lun_run_command(card)(
+                        "svcinfo lsconsistgrp -delim :"
+                    )
+                    consist_groups = parse_lsconsistgrp(output)
+                except Exception:
+                    consist_groups = []
+
+            payload = payload_from_live(
+                card=meta,
+                hosts=hosts,
+                volumes=volumes,
+                maps=maps,
+                consist_groups=consist_groups,
+                pools=pools,
+                contingency_groups=self.get_contingency_groups(),
+                refreshed_at=datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+            )
+            self._persist_site_lookup_offline(payload)
+            return payload
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    def site_lookup_cache(self, card_id: int) -> dict:
+        cid = int(card_id)
+        with self._lock:
+            card = self._cards.get(cid)
+            if card is None:
+                raise KeyError(cid)
+            meta = card.to_api()
+        memory = payload_from_card_cache(
+            meta,
+            contingency_groups=self.get_contingency_groups(),
+        )
+        if payload_has_inventory(memory):
+            return memory
+
+        offline_store = self.get_site_lookup_offline_inventory()
+        offline = offline_store.get(str(cid))
+        if offline:
+            return payload_from_offline_snapshot(offline)
+
+        lun_store = self.get_lun_offline_inventory()
+        lun_snap = lun_store.get(str(cid))
+        if isinstance(lun_snap, dict) and (
+            (isinstance(lun_snap.get("hosts"), list) and lun_snap.get("hosts"))
+            or (isinstance(lun_snap.get("volumes"), list) and lun_snap.get("volumes"))
+        ):
+            return payload_from_lun_offline(lun_snap, card=meta)
+
+        return memory
 
     def update_card_live_data(
         self,
@@ -6000,6 +6528,9 @@ class HealthServer:
                         "port": card.port,
                         "username": card.username,
                         "device_profile": card.device_profile,
+                        "pool_family": capacity_pool_family(
+                            card.device_profile, site_name=card.name
+                        ),
                         "command_mode": False,
                         "metrics": card.metrics,
                         "command_results": card.command_results,
@@ -6025,26 +6556,46 @@ class HealthServer:
         self,
         *,
         card_id: int | None = None,
+        card_ids: list[int] | None = None,
+        sections: HealthExcelSections | None = None,
     ) -> tuple[bytes, str]:
-        from launchpad.health_excel_export import (
-            build_health_summary_workbook,
-            filter_health_summary_cards,
-        )
+        if sections is None:
+            sections = HealthExcelSections(
+                summary=True,
+                issues=False,
+                command_summaries=False,
+                raw=False,
+            )
+        if card_ids:
+            detail_card_ids: list[int] | None = [int(value) for value in card_ids]
+        elif card_id is not None:
+            detail_card_ids = [int(card_id)]
+        else:
+            detail_card_ids = None
 
         cards = self.list_cards(allow_sync=False)
-        cards = filter_health_summary_cards(cards, card_id=card_id)
         monitor_enabled = {
             int(card["id"]): self.is_monitor_enabled(int(card["id"]))
             for card in cards
             if card.get("id") is not None
         }
-        body = build_health_summary_workbook(cards, monitor_enabled=monitor_enabled)
+        body = build_health_workbook(
+            cards,
+            monitor_enabled=monitor_enabled,
+            sections=sections,
+            detail_card_ids=detail_card_ids,
+        )
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         filename = f"Health_Summary_{stamp}.xlsx"
         return body, filename
 
     def export_capacity_excel_bytes(
-        self, *, include_monitor_off: bool = False, card_id: int | None = None
+        self,
+        *,
+        include_monitor_off: bool = False,
+        card_id: int | None = None,
+        include_pools: bool = True,
+        show_raw: bool = False,
     ) -> tuple[bytes, str]:
         """Build the browser-facing Storage Capacity workbook from registered cards.
 
@@ -6081,7 +6632,11 @@ class HealthServer:
             if card is None:
                 continue
             try:
-                card = self.refresh_card(site_id)
+                # Capacity-only suite — full health refresh on every monitored site
+                # made Export Excel hang the Capacity Report UI for minutes.
+                card = self.refresh_card(
+                    site_id, focus="capacity", include_pools=include_pools
+                )
                 error = card.error
             except Exception as exc:
                 error = str(exc)
@@ -6098,6 +6653,7 @@ class HealthServer:
                     capacity_summary=analysis.get("capacity_summary"),
                     pools=pools,
                     error=error,
+                    raw_capacity_summary=analysis.get("raw_capacity_summary"),
                 )
             )
 
@@ -6110,8 +6666,166 @@ class HealthServer:
                 tmp_path,
                 include_monitor_off=include_monitor_off,
                 monitor_enabled=monitor_enabled,
+                include_pools=include_pools,
+                show_raw=show_raw,
             )
             body = tmp_path.read_bytes()
+        return body, filename
+
+    def _capture_dell_snapshot_best_effort(self, card: HealthCard) -> None:
+        try:
+            from launchpad.dell_report_export import maybe_upsert_dell_snapshot_for_card
+            from launchpad.dell_report_snapshots import (
+                load_dell_snapshots,
+                save_dell_snapshots,
+            )
+
+            store = load_dell_snapshots()
+            updated = maybe_upsert_dell_snapshot_for_card(card, snapshot_store=store)
+            if updated is not store:
+                save_dell_snapshots(updated)
+        except Exception as exc:
+            _log(f"Dell Report snapshot capture failed (ignored): {exc}")
+
+    def export_dell_report_excel_bytes(
+        self,
+        *,
+        include_monitor_off: bool = False,
+        card_id: int | None = None,
+        include_pools: bool = True,
+    ) -> tuple[bytes, str]:
+        """Build the Dell Managed Services capacity workbook from registered cards.
+
+        Always exports monitored-on cards only (`include_monitor_off` is ignored).
+        Refreshes IBM/HPE cards only; raises DellReportEmptyError when no rows.
+        """
+        # Inline: capacity_export / dell_report_export pull monitor→health_server.
+        from launchpad.capacity_export import (
+            ExportSite,
+            card_ids_included_for_export,
+            filter_capacity_entries_by_card_id,
+        )
+        from launchpad.dell_report_export import (
+            build_dell_report_workbook,
+            collect_dell_report_rows,
+            ensure_dell_report_has_rows,
+            workbook_to_bytes,
+        )
+        from launchpad.dell_report_snapshots import (
+            load_dell_snapshots,
+            save_dell_snapshots,
+        )
+
+        # Spec: monitored-on by default; include_off from Capacity Report; include_card_ids always eligible.
+        # (Do not force include_monitor_off=False — callers pass the page toggle.)
+
+        from launchpad.dell_report_settings import (
+            load_dell_report_settings,
+            normalize_dell_report_settings,
+        )
+
+        settings_view = self._settings_view_for_scan()
+        if settings_view is not None:
+            dell_settings = load_dell_report_settings(settings_view)
+        else:
+            dell_settings = normalize_dell_report_settings({})
+        overrides = dell_settings.get("card_overrides") or {}
+        include_ids = list(dell_settings.get("include_card_ids") or [])
+
+        with self._lock:
+            card_ids = sorted(self._cards.keys())
+        monitor_enabled = {
+            cid: self.is_monitor_enabled(cid) for cid in card_ids
+        }
+        included = card_ids_included_for_export(
+            card_ids,
+            include_monitor_off=include_monitor_off,
+            monitor_enabled=monitor_enabled,
+        )
+        included = filter_capacity_entries_by_card_id(included, card_id=card_id)
+        included_ids = sorted(included)
+
+        ibm_hp_ids: list[int] = []
+        for site_id in included_ids:
+            with self._lock:
+                card = self._cards.get(site_id)
+            if card is None:
+                continue
+            if dell_report_family_for_site(
+                card.device_profile, site_name=card.name
+            ) in {"ibm", "hp"}:
+                ibm_hp_ids.append(site_id)
+
+        # Forced-include IBM/HPE cards even when Monitor is off.
+        seen = set(ibm_hp_ids)
+        for cid_str in include_ids:
+            try:
+                cid = int(cid_str)
+            except (TypeError, ValueError):
+                continue
+            if card_id is not None and cid != card_id:
+                continue
+            with self._lock:
+                card = self._cards.get(cid)
+            if card is None:
+                continue
+            if dell_report_family_for_site(
+                card.device_profile, site_name=card.name
+            ) not in {"ibm", "hp"}:
+                continue
+            if cid not in seen:
+                ibm_hp_ids.append(cid)
+                seen.add(cid)
+
+        sites: list[ExportSite] = []
+        for site_id in ibm_hp_ids:
+            with self._lock:
+                card = self._cards.get(site_id)
+            if card is None:
+                continue
+            try:
+                # Capacity-only suite — full health (checkhealth/showalert/…) is too
+                # slow for Dell Report and left the Capacity Report UI spinning.
+                card = self.refresh_card(
+                    site_id, focus="capacity", include_pools=include_pools
+                )
+                error = card.error
+            except Exception as exc:
+                error = str(exc)
+            analysis = analyze_health(card.name, card.command_results, card.metrics)
+            pools = pool_capacity_from_commands(card.command_results)
+            sites.append(
+                ExportSite(
+                    card_id=site_id,
+                    name=card.name,
+                    host=card.host,
+                    serial_number=card.serial_number,
+                    category=card.category,
+                    device_profile=card.device_profile,
+                    capacity_summary=analysis.get("capacity_summary"),
+                    pools=pools,
+                    error=error,
+                    raw_capacity_summary=analysis.get("raw_capacity_summary"),
+                )
+            )
+
+        store = load_dell_snapshots()
+        ibm_rows, hp_rows, store = collect_dell_report_rows(
+            sites,
+            snapshot_store=store,
+            include_pools=include_pools,
+            card_overrides=overrides,
+            include_card_ids=include_ids,
+        )
+        save_dell_snapshots(store)
+        ensure_dell_report_has_rows(ibm_rows, hp_rows)
+
+        wb = build_dell_report_workbook(
+            ibm_rows=ibm_rows, hp_rows=hp_rows, snapshot_store=store
+        )
+        body = workbook_to_bytes(wb)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        filename = f"Dell_Capacity_Report_{stamp}.xlsx"
         return body, filename
 
     def open_browser_once(self) -> str:
@@ -6146,6 +6860,13 @@ class HealthServer:
         self._fc_browser_opened = True
         _log(f"Opened FC WWPN report in browser: {self.fc_wwpn_report_url}")
         return self.fc_wwpn_report_url
+
+    def open_site_lookup(self) -> str:
+        """Open Site Lookup in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.site_lookup_url)
+        _log(f"Opened Site Lookup in browser: {self.site_lookup_url}")
+        return self.site_lookup_url
 
     def open_contingency_groups(self) -> str:
         """Open the contingency groups reference page in the default browser."""

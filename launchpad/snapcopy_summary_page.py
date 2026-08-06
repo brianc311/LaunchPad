@@ -77,9 +77,9 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
   <div class="wrap">
     <div class="hero">
       <h1>Snapcopy Summary</h1>
-      <p>Live FlashCopy Consistency Groups across monitored sites (read-only). Unlock LaunchPad, turn on Monitor for sites in Health Dashboard, pick a site (or All sites), then Refresh. Select rows with checkboxes before Export Excel.</p>
+      <p>Live FlashCopy Consistency Groups across monitored sites (read-only). Unlock LaunchPad, turn on Monitor for sites in Health Dashboard, pick a site (or All servers), then Refresh. Select rows with checkboxes before Export Excel.</p>
       <div class="hero-actions">
-        <label>Site <select id="snapcopy-site" aria-label="Snapcopy summary site filter"><option value="">All sites</option></select></label>
+        <label>Site <select id="snapcopy-site" aria-label="Snapcopy summary site filter"><option value="">All servers</option></select></label>
         <button type="button" class="btn" id="snapcopy-refresh">Refresh</button>
         <button type="button" class="btn secondary" id="snapcopy-export">Export Excel</button>
         <a class="btn secondary" href="/contingency-groups">Consistency Groups</a>
@@ -209,7 +209,7 @@ SNAPCOPY_SUMMARY_HTML = """<!DOCTYPE html>
           return typeOk;
         });
         const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-        siteSelectEl.innerHTML = '<option value="">All sites</option>' + sorted.map((card) => {
+        siteSelectEl.innerHTML = '<option value="">All servers</option>' + sorted.map((card) => {
           const monitorOn = !!card.monitor_on;
           const label = (card.name || card.id) + (monitorOn ? "" : " (monitor off)");
           return '<option value="' + escapeAttr(card.id) + '">' + escapeHtml(label) + "</option>";

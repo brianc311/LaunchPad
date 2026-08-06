@@ -8,6 +8,12 @@ from launchpad.branding import get_app_name, load_ctk_logo
 from launchpad.capacity_email_scheduler import is_capacity_email_due
 from launchpad.capacity_email_send import send_capacity_email
 from launchpad.capacity_email_settings import load_capacity_email_settings
+from launchpad.dell_report_family import dell_report_family
+from launchpad.dell_report_settings import (
+    is_dell_report_enabled,
+    load_dell_report_settings,
+    save_dell_report_settings,
+)
 from launchpad.command_format import resolve_card_commands
 from launchpad.crypto import decrypt_text
 from launchpad.dashboard_array_rail import (
@@ -32,6 +38,7 @@ from launchpad.monitor import (
     get_monitor_states,
     open_capacity_report_for_cards,
     open_fc_wwpn_report_for_cards,
+    open_site_lookup_for_cards,
     open_health_dashboard,
     open_health_dashboard_for_cards,
     set_all_monitor_enabled,
@@ -69,6 +76,7 @@ class DashboardView(ctk.CTkFrame):
         self._stats_in_flight: set[int] = set()
         self._ssh_status_in_flight: set[int] = set()
         self._ssh_status_timer: str | None = None
+        self._capacity_alert_timer: str | None = None
         self._capacity_email_timer: str | None = None
         self._capacity_email_send_in_flight = False
         self._visible_cards: dict[int, Card] = {}
@@ -263,6 +271,7 @@ class DashboardView(ctk.CTkFrame):
             ("Health Dashboard", self._open_health_dashboard_all, None),
             ("Capacity Report", self._open_capacity_report_all, None),
             ("FC WWPN", self._open_fc_wwpn_report_all, None),
+            ("Site Lookup", self._open_site_lookup_all, None),
             ("Consistency Groups", self._open_contingency_groups, None),
             ("FlashCopy CGs", self._open_fc_consistgrp, None),
             ("LUN Builder", self._open_lun_builder, None),
@@ -286,6 +295,34 @@ class DashboardView(ctk.CTkFrame):
             btn.grid(row=row, column=col, padx=6, pady=(0, 6), sticky="w")
             if text.startswith("Export Excel"):
                 self.export_excel_btn = btn
+
+        self.capacity_alert_strip = ctk.CTkFrame(
+            header,
+            fg_color="#7f1d1d",
+            corner_radius=10,
+            border_width=1,
+            border_color="#ef4444",
+        )
+        self.capacity_alert_strip.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.capacity_alert_strip.grid_columnconfigure(0, weight=1)
+        self.capacity_alert_label = ctk.CTkLabel(
+            self.capacity_alert_strip,
+            text="",
+            text_color="#fecaca",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+        )
+        self.capacity_alert_label.grid(row=0, column=0, padx=12, pady=8, sticky="ew")
+        self.capacity_alert_btn = ctk.CTkButton(
+            self.capacity_alert_strip,
+            text="Open Capacity Report",
+            width=170,
+            fg_color="#ef4444",
+            hover_color="#dc2626",
+            command=self._open_capacity_report_all,
+        )
+        self.capacity_alert_btn.grid(row=0, column=1, padx=12, pady=8)
+        self.capacity_alert_strip.grid_remove()
 
     def _build_filters(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -508,6 +545,9 @@ class DashboardView(ctk.CTkFrame):
         if self._ssh_status_timer:
             self.after_cancel(self._ssh_status_timer)
             self._ssh_status_timer = None
+        if self._capacity_alert_timer:
+            self.after_cancel(self._capacity_alert_timer)
+            self._capacity_alert_timer = None
 
         for widget in self.cards_frame.winfo_children():
             widget.destroy()
@@ -548,9 +588,14 @@ class DashboardView(ctk.CTkFrame):
                 text_color=self.theme["muted"],
                 font=ctk.CTkFont(size=14),
             ).grid(row=0, column=0, columnspan=cols, padx=12, pady=24, sticky="w")
+            self._refresh_capacity_alerts()
+            self._schedule_capacity_alert_poll()
             return
 
         self._load_monitor_states()
+        dell_include_ids = set(
+            load_dell_report_settings(self.db).get("include_card_ids") or []
+        )
 
         visible_ids = {card.id for card in filtered}
         self._expanded_card_ids &= visible_ids
@@ -562,6 +607,11 @@ class DashboardView(ctk.CTkFrame):
             row, col = divmod(index, cols)
             subtitle = self._card_subtitle(card)
             start_collapsed = card.id not in self._expanded_card_ids
+            show_dell_include = (
+                card.card_type == "ssh"
+                and dell_report_family(getattr(card, "device_profile", "") or "")
+                in {"ibm", "hp"}
+            )
             try:
                 widget = GlowCard(
                     self.cards_frame,
@@ -588,6 +638,17 @@ class DashboardView(ctk.CTkFrame):
                     collapsed=start_collapsed,
                     on_selection_change=self._update_selection_status,
                     on_collapsed_change=self._on_card_collapsed_change,
+                    show_dell_report_include=show_dell_include,
+                    dell_report_include=str(card.id) in dell_include_ids,
+                    on_dell_report_include_change=(
+                        (
+                            lambda enabled, c=card: self._set_dell_report_include(
+                                c.id, enabled
+                            )
+                        )
+                        if show_dell_include
+                        else None
+                    ),
                 )
             except Exception as exc:
                 self.status_label.configure(text=f"Could not render card '{card.name}': {exc}")
@@ -603,8 +664,75 @@ class DashboardView(ctk.CTkFrame):
         self._update_selection_status()
         self._sync_master_monitor_switch()
         self._probe_monitored_ssh_status()
+        self._refresh_capacity_alerts()
+        self._schedule_capacity_alert_poll()
 
         # SSH stats run only when Monitor is on and you click Refresh Stats.
+
+    def _schedule_capacity_alert_poll(self) -> None:
+        if self._capacity_alert_timer:
+            self.after_cancel(self._capacity_alert_timer)
+        from launchpad.dashboard_capacity_alerts import CAPACITY_ALERT_POLL_MS
+        self._capacity_alert_timer = self.after(
+            CAPACITY_ALERT_POLL_MS, self._on_capacity_alert_timer
+        )
+
+    def _on_capacity_alert_timer(self) -> None:
+        self._capacity_alert_timer = None
+        self._refresh_capacity_alerts()
+        self._schedule_capacity_alert_poll()
+
+    def _refresh_capacity_alerts(self) -> None:
+        from launchpad.dashboard_capacity_alerts import (
+            card_capacity_severity,
+            filter_capacity_issues,
+            fleet_capacity_alert_summary,
+        )
+        from launchpad.health_server import get_health_server
+
+        try:
+            server = get_health_server()
+            cards = server.list_cards(allow_sync=False)
+        except Exception:
+            cards = []
+        monitor_states = dict(self._monitor_states)
+        summary = fleet_capacity_alert_summary(cards, monitor_states)
+        by_id = {int(c.get("id")): c for c in cards if c.get("id") is not None}
+
+        if summary["has_alert"]:
+            critical = summary["critical_sites"] > 0
+            self.capacity_alert_strip.configure(
+                fg_color="#7f1d1d" if critical else "#78350f",
+                border_color="#ef4444" if critical else "#f59e0b",
+            )
+            self.capacity_alert_label.configure(
+                text=summary["label"],
+                text_color="#fecaca" if critical else "#fde68a",
+            )
+            self.capacity_alert_btn.configure(
+                fg_color="#ef4444" if critical else "#f59e0b",
+                hover_color="#dc2626" if critical else "#d97706",
+                text_color="#ffffff" if critical else "#111111",
+            )
+            self.capacity_alert_strip.grid()
+        else:
+            self.capacity_alert_strip.grid_remove()
+
+        for widget in self.card_widgets:
+            payload = by_id.get(widget.card_id)
+            if not payload:
+                widget.set_capacity_alert(None)
+                continue
+            severity = card_capacity_severity(
+                payload.get("health_issues"),
+                monitor_on=self._is_monitor_on(widget.card_id),
+                updated_at=payload.get("updated_at"),
+            )
+            messages = [
+                str(i.get("message") or "")
+                for i in filter_capacity_issues(payload.get("health_issues"))
+            ]
+            widget.set_capacity_alert(severity, messages)
 
     def _apply_array_rail_collapsed(self) -> None:
         if self.array_rail_collapsed:
@@ -842,6 +970,7 @@ class DashboardView(ctk.CTkFrame):
         if widget:
             widget.set_monitor_enabled(enabled)
         self._sync_master_monitor_switch()
+        self._refresh_capacity_alerts()
         if enabled:
             self.status_label.configure(text=f"Monitoring on for {card.name} — refreshing stats...")
             self._probe_card_ssh_status(card.id)
@@ -849,6 +978,20 @@ class DashboardView(ctk.CTkFrame):
         else:
             self.status_label.configure(text=f"Monitoring off for {card.name} — no background SSH.")
             self._set_card_ssh_monitor_off(card.id)
+
+    def _set_dell_report_include(self, card_id: int, enabled: bool) -> None:
+        settings = load_dell_report_settings(self.db)
+        ids = list(settings.get("include_card_ids") or [])
+        key = str(card_id)
+        if enabled and key not in ids:
+            ids.append(key)
+        if not enabled:
+            ids = [x for x in ids if x != key]
+        settings["include_card_ids"] = ids
+        save_dell_report_settings(self.db, settings)
+        widget = self._find_card_widget(card_id)
+        if widget is not None and hasattr(widget, "set_dell_report_include"):
+            widget.set_dell_report_include(enabled)
 
     def _toggle_all_monitoring(self) -> None:
         enabled = bool(self.monitor_all_switch.get())
@@ -865,6 +1008,7 @@ class DashboardView(ctk.CTkFrame):
             self._sync_master_monitor_switch()
             return
 
+        self._refresh_capacity_alerts()
         if enabled:
             self.status_label.configure(text="All monitoring on — refreshing stats for SSH cards...")
             self._fetch_all_ssh_stats()
@@ -1156,6 +1300,7 @@ class DashboardView(ctk.CTkFrame):
                 else:
                     self._set_card_ssh_monitor_off(card.id)
             self._sync_master_monitor_switch()
+            self._refresh_capacity_alerts()
             action = "Monitoring on" if enabled else "Monitoring off"
             self.status_label.configure(
                 text=f"{action} for {len(ssh_widgets)} checked SSH card(s)."
@@ -1400,6 +1545,7 @@ class DashboardView(ctk.CTkFrame):
                 )
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+                self.after(0, self._refresh_capacity_alerts)
             except Exception as exc:
                 _log(f"Health dashboard failed: {exc}")
                 self.after(
@@ -1454,6 +1600,7 @@ class DashboardView(ctk.CTkFrame):
                 )
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+                self.after(0, self._refresh_capacity_alerts)
             except Exception as exc:
                 _log(f"Capacity report failed: {exc}")
                 self.after(
@@ -1512,6 +1659,59 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self._set_status(f"FC WWPN report failed: {exc}"),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_site_lookup_all(self) -> None:
+        from launchpad.ssh_launcher import _log
+
+        cards = self._health_ssh_cards()
+        if not cards:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
+        entries: list[HealthDashboardEntry] = []
+        for card in cards:
+            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
+            entries.append(
+                HealthDashboardEntry(
+                    card_id=card.id,
+                    name=card.name,
+                    host=card.host,
+                    port=card.port,
+                    username=card.username,
+                    auth=auth,
+                    device_profile=card.device_profile,
+                    custom_commands=card.custom_commands,
+                    serial_number=getattr(card, "serial_number", "") or "",
+                    category=card.category or "",
+                )
+            )
+
+        self.status_label.configure(text=f"Opening Site Lookup for {len(entries)} site(s)...")
+        self.update_idletasks()
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Site Lookup register failed: {exc}")
+
+        def worker() -> None:
+            try:
+                url = open_site_lookup_for_cards(entries)
+                summary = (
+                    f"Site Lookup opened — {len(entries)} site(s). "
+                    "Pick a site, then Live Refresh to load hosts, volumes, and pools."
+                )
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+            except Exception as exc:
+                _log(f"Site Lookup failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self._set_status(f"Site Lookup failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1675,6 +1875,8 @@ class DashboardView(ctk.CTkFrame):
     def _open_export_excel_menu(self) -> None:
         menu = Menu(self, tearoff=0)
         menu.add_command(label="Capacity", command=self._export_capacity_excel)
+        if is_dell_report_enabled(self.db):
+            menu.add_command(label="Dell Report…", command=self._export_dell_report_excel)
         menu.add_command(label="FC WWPN", command=self._export_fc_wwpn_excel)
         menu.add_command(label="Snapshot Schedule", command=self._export_snapshot_schedule_excel)
         menu.add_separator()
@@ -1971,6 +2173,90 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self.status_label.configure(text=f"Excel export failed: {exc}"),
+                )
+                self.after(
+                    0,
+                    lambda: messagebox.showerror("Export failed", str(exc)),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _export_dell_report_excel(self) -> None:
+        from datetime import datetime
+
+        from launchpad.capacity_export import open_exported_workbook
+        from launchpad.ssh_launcher import _log
+
+        if not is_dell_report_enabled(self.db):
+            messagebox.showinfo("Dell Report", "Dell Report is disabled in Admin.")
+            return
+
+        cards = self._health_ssh_cards()
+        if not cards:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
+        default_name = f"Dell_Capacity_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        output_path = filedialog.asksaveasfilename(
+            title="Save Dell Report Excel workbook",
+            defaultextension=".xlsx",
+            filetypes=[("Excel workbook", "*.xlsx")],
+            initialfile=default_name,
+        )
+        if not output_path:
+            return
+
+        path = Path(output_path)
+        self.status_label.configure(text=f"Exporting Dell Report for {len(cards)} site(s)...")
+        self.update_idletasks()
+
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Health dashboard register failed before Dell export: {exc}")
+
+        def worker() -> None:
+            try:
+                server = get_health_server()
+                body, filename = server.export_dell_report_excel_bytes(
+                    include_monitor_off=False,
+                )
+                path.write_bytes(body)
+                summary = f"Dell Report saved: {path.name}"
+                _log(summary)
+
+                def on_export_done() -> None:
+                    self.status_label.configure(text=summary)
+                    opened = False
+                    open_error = ""
+                    try:
+                        open_exported_workbook(path)
+                        opened = True
+                    except Exception as open_exc:
+                        open_error = str(open_exc)
+                        _log(f"Could not open Dell Report file: {open_exc}")
+
+                    def show_result_dialog() -> None:
+                        note = "\n\nOpened in Excel." if opened else (
+                            f"\n\nCould not open automatically: {open_error}"
+                            if open_error
+                            else "\n\nCould not open file automatically."
+                        )
+                        messagebox.showinfo(
+                            "Dell Report export complete",
+                            f"Saved to:\n{path}\n\nSuggested filename: {filename}" + note,
+                        )
+
+                    self.after(400 if opened else 0, show_result_dialog)
+
+                self.after(0, on_export_done)
+            except Exception as exc:
+                _log(f"Dell Report Excel export failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self.status_label.configure(text=f"Dell Report export failed: {exc}"),
                 )
                 self.after(
                     0,

@@ -152,9 +152,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       cursor: pointer;
       user-select: none;
       margin-top: 8px;
+      margin-right: 14px;
     }
     .monitor-toggle input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
     .monitor-toggle.on { color: #4ade80; }
+    .dell-include-toggle.on { color: var(--accent); }
     .paused-note {
       margin: 8px 0 0;
       color: var(--muted);
@@ -260,6 +262,71 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       font-size: 0.9rem;
       white-space: pre-wrap;
     }
+    .fleet-capacity-alert {
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 20px;
+      border: 2px solid rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+    }
+    .fleet-capacity-alert.warn {
+      border-color: rgba(245, 158, 11, 0.55);
+      background: rgba(245, 158, 11, 0.14);
+      color: #fde68a;
+    }
+    .fleet-capacity-alert .alert-title {
+      margin: 0 0 8px;
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .fleet-capacity-alert ul {
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+    .fleet-capacity-alert li { margin: 4px 0; }
+    .capacity-alert {
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 0 0 16px;
+      border: 2px solid rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.14);
+      color: #fecaca;
+    }
+    .capacity-alert.warn {
+      border-color: rgba(245, 158, 11, 0.55);
+      background: rgba(245, 158, 11, 0.12);
+      color: #fde68a;
+    }
+    .capacity-alert-label {
+      display: inline-block;
+      margin: 0 0 8px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      background: rgba(239, 68, 68, 0.35);
+      color: #fff;
+    }
+    .capacity-alert.warn .capacity-alert-label {
+      background: rgba(245, 158, 11, 0.4);
+      color: #111;
+    }
+    .capacity-alert ul {
+      margin: 0;
+      padding-left: 1.15rem;
+    }
+    .capacity-alert li { margin: 3px 0; font-size: 0.92rem; }
+    .site-block.capacity-critical {
+      border-color: rgba(239, 68, 68, 0.65);
+      box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+    }
+    .site-block.capacity-warn {
+      border-color: rgba(245, 158, 11, 0.55);
+    }
     .empty { color: var(--muted); padding: 32px; text-align: center; }
     .footer { margin-top: 8px; color: var(--muted); font-size: 0.85rem; }
     .toggle-row {
@@ -282,14 +349,53 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       accent-color: var(--accent);
       cursor: pointer;
     }
+    .options-menu {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    .options-menu-panel {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 40;
+      min-width: 280px;
+      max-width: min(420px, 92vw);
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: #121821;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .options-menu.open .options-menu-panel { display: flex; }
+    .options-menu-panel .toggle-row {
+      width: 100%;
+      justify-content: flex-start;
+      height: auto;
+      min-height: 36px;
+      padding: 8px 12px;
+    }
+    #options-menu-btn[aria-expanded="true"] {
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
     body.hide-capacity-details .capacity-detail-section {
       display: none;
     }
-    body.hide-pool-storage .capacity-pools-wrap {
+    body.hide-raw-capacity .capacity-raw-wrap {
       display: none;
     }
     .capacity-pools-wrap {
       margin-top: 8px;
+      display: none;
+    }
+    body.show-pools-ibm .site-block[data-pool-family="ibm"] .capacity-pools-wrap,
+    body.show-pools-hpe .site-block[data-pool-family="hpe"] .capacity-pools-wrap,
+    body.show-pools-dell .site-block[data-pool-family="dell"] .capacity-pools-wrap {
+      display: block;
     }
     .capacity-pool-block {
       margin-top: 20px;
@@ -385,10 +491,56 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       </div>
       <p class="rename-hint no-print">Click the report title, subtitle, or any site name below to rename for this report and printout.</p>
       <div class="hero-actions no-print">
+        <div class="options-menu" id="options-menu">
+          <button type="button" id="options-menu-btn" class="secondary" aria-expanded="false" aria-controls="options-menu-panel" title="Choose one or more display and monitoring options.">View options</button>
+          <div id="options-menu-panel" class="options-menu-panel" role="group" aria-label="View options">
+            <label class="toggle-row" for="monitor-all-toggle" title="Connect over SSH only for sites you turn on.">
+              <input type="checkbox" id="monitor-all-toggle">
+              All monitoring on
+            </label>
+            <label class="toggle-row" for="show-details-toggle">
+              <input type="checkbox" id="show-details-toggle" checked>
+              Show system details
+            </label>
+            <label class="toggle-row" for="one-page-toggle">
+              <input type="checkbox" id="one-page-toggle" checked>
+              One site per page
+            </label>
+            <label class="toggle-row" for="show-pools-ibm-toggle" title="Show IBM mdiskgrp / pool blocks on this page and print.">
+              <input type="checkbox" id="show-pools-ibm-toggle">
+              Show IBM pools
+            </label>
+            <label class="toggle-row" for="show-pools-hpe-toggle" title="Show HPE CPG / pool blocks on this page and print.">
+              <input type="checkbox" id="show-pools-hpe-toggle">
+              Show HPE CPGs / pools
+            </label>
+            <label class="toggle-row" for="show-pools-dell-toggle" title="Show Dell pool blocks on this page and print.">
+              <input type="checkbox" id="show-pools-dell-toggle">
+              Show Dell pools
+            </label>
+            <label class="toggle-row" for="show-raw-toggle">
+              <input type="checkbox" id="show-raw-toggle">
+              Show raw capacity
+            </label>
+            <label class="toggle-row" for="show-title-toggle">
+              <input type="checkbox" id="show-title-toggle" checked>
+              Show report title on print
+            </label>
+            <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel. Does not add no-capacity sites to Dell Report — use the Dell Report checkbox on each site card for that.">
+              <input type="checkbox" id="include-off-toggle">
+              Include monitoring-off sites
+            </label>
+          </div>
+        </div>
         <button type="button" id="print-btn">Print / Save PDF</button>
         <button type="button" id="refresh-all-btn">Refresh On Sites</button>
         <button type="button" id="excel-btn" class="secondary">Export Excel</button>
-        <label>Site <select id="capacity-site-select"><option value="">None</option></select></label>
+        <button type="button" id="dell-report-btn" class="secondary" style="display:none">Dell Report</button>
+        <label class="toggle-row" id="dell-include-noss-wrap" for="dell-include-noss-toggle" style="display:none" title="When checked, every IBM/HPE site without live capacity / with SSH failure is included on Dell Report (blank capacity cells). Uncheck to clear those includes.">
+          <input type="checkbox" id="dell-include-noss-toggle">
+          Include no-SSH on Dell Report
+        </label>
+        <label>Site <select id="capacity-site-select"><option value="">All servers</option></select></label>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/host-volume-health">Hosts & Volumes</a>
@@ -396,34 +548,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
-        <label class="toggle-row" for="monitor-all-toggle" title="Connect over SSH only for sites you turn on.">
-          <input type="checkbox" id="monitor-all-toggle">
-          All monitoring on
-        </label>
-        <label class="toggle-row" for="show-details-toggle">
-          <input type="checkbox" id="show-details-toggle" checked>
-          Show system details
-        </label>
-        <label class="toggle-row" for="one-page-toggle">
-          <input type="checkbox" id="one-page-toggle" checked>
-          One site per page
-        </label>
-        <label class="toggle-row" for="show-pools-toggle">
-          <input type="checkbox" id="show-pools-toggle" checked>
-          Show pool storage
-        </label>
-        <label class="toggle-row" for="show-title-toggle">
-          <input type="checkbox" id="show-title-toggle" checked>
-          Show report title on print
-        </label>
-        <label class="toggle-row" for="include-off-toggle" title="When unchecked, sites with Monitor off are hidden on this page and omitted from Excel.">
-          <input type="checkbox" id="include-off-toggle">
-          Include monitoring-off sites
-        </label>
         <span id="refresh-status" class="refresh-status"></span>
       </div>
       <p id="print-meta" class="print-meta"></p>
     </section>
+    <div id="fleet-alerts"></div>
     <div id="sites"></div>
     <p class="footer no-print">
       LaunchPad Capacity v{{APP_VERSION}} · Keep LaunchPad running and unlocked while refreshing.
@@ -432,6 +561,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
   </div>
   <script>
     const sitesEl = document.getElementById("sites");
+    const fleetAlertsEl = document.getElementById("fleet-alerts");
     const refreshStatusEl = document.getElementById("refresh-status");
     const refreshAllBtn = document.getElementById("refresh-all-btn");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
@@ -439,16 +569,28 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const printMetaEl = document.getElementById("print-meta");
     const showDetailsToggle = document.getElementById("show-details-toggle");
     const onePageToggle = document.getElementById("one-page-toggle");
-    const showPoolsToggle = document.getElementById("show-pools-toggle");
+    const showPoolsIbmToggle = document.getElementById("show-pools-ibm-toggle");
+    const showPoolsHpeToggle = document.getElementById("show-pools-hpe-toggle");
+    const showPoolsDellToggle = document.getElementById("show-pools-dell-toggle");
+    const showRawToggle = document.getElementById("show-raw-toggle");
     const showTitleToggle = document.getElementById("show-title-toggle");
     const includeOffToggle = document.getElementById("include-off-toggle");
     const capacitySiteSelectEl = document.getElementById("capacity-site-select");
     const excelBtn = document.getElementById("excel-btn");
+    const dellReportBtn = document.getElementById("dell-report-btn");
+    const dellIncludeNoSshToggle = document.getElementById("dell-include-noss-toggle");
+    const dellIncludeNoSshWrap = document.getElementById("dell-include-noss-wrap");
+    const optionsMenu = document.getElementById("options-menu");
+    const optionsMenuBtn = document.getElementById("options-menu-btn");
+    const optionsMenuPanel = document.getElementById("options-menu-panel");
     const reportTitleInput = document.getElementById("report-title-input");
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
     const ONE_PAGE_PREF_KEY = "launchpad.capacityReport.oneSitePerPage";
-    const POOLS_PREF_KEY = "launchpad.capacityReport.showPools";
+    const POOLS_IBM_PREF_KEY = "launchpad.capacityReport.showPoolsIbm";
+    const POOLS_HPE_PREF_KEY = "launchpad.capacityReport.showPoolsHpe";
+    const POOLS_DELL_PREF_KEY = "launchpad.capacityReport.showPoolsDell";
+    const RAW_PREF_KEY = "launchpad.capacityReport.showRaw";
     const TITLE_PREF_KEY = "launchpad.capacityReport.title";
     const SUBTITLE_PREF_KEY = "launchpad.capacityReport.subtitle";
     const SHOW_TITLE_PRINT_KEY = "launchpad.capacityReport.showTitlePrint";
@@ -460,6 +602,159 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     let cardsCache = [];
     let siteNameOverrides = {};
     let monitorServerState = {};
+    let dellIncludeIds = new Set();
+
+    function isDellReportFamily(card) {
+      const family = (card.dell_report_family || "").toLowerCase();
+      if (family === "ibm" || family === "hp") return true;
+      const p = (card.device_profile || "").toLowerCase();
+      return /flashsystem|storwize|svc|xiv|ds8|ibm_|hpe|3par|primera|^hp_/.test(p);
+    }
+
+    function isDellIncludeOn(cardId) {
+      return dellIncludeIds.has(String(cardId));
+    }
+
+    async function loadDellIncludeState() {
+      try {
+        const res = await fetch("/api/dell-report-settings");
+        const data = await res.json();
+        dellIncludeIds = new Set(
+          (data.include_card_ids || []).map((id) => String(id))
+        );
+      } catch (_err) {
+        dellIncludeIds = new Set();
+      }
+    }
+
+    async function persistDellInclude(cardId, on) {
+      const key = String(cardId);
+      if (on) dellIncludeIds.add(key);
+      else dellIncludeIds.delete(key);
+      const res = await fetch("/api/dell-report-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card_id: cardId, include: on }),
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const err = await res.json();
+          if (err && err.error) detail = err.error;
+        } catch (_err) {
+          /* ignore */
+        }
+        if (on) dellIncludeIds.delete(key);
+        else dellIncludeIds.add(key);
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      dellIncludeIds = new Set(
+        (data.include_card_ids || []).map((id) => String(id))
+      );
+    }
+
+    function setDellInclude(cardId, on) {
+      void persistDellInclude(cardId, on)
+        .then(() => {
+          const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
+          if (!section) return;
+          const toggle = section.querySelector(".dell-include-toggle");
+          const input = section.querySelector(".dell-include-switch");
+          if (toggle) toggle.classList.toggle("on", isDellIncludeOn(cardId));
+          if (input) input.checked = isDellIncludeOn(cardId);
+          syncNoSshDellToggle();
+        })
+        .catch((err) => {
+          if (refreshStatusEl) {
+            refreshStatusEl.textContent = `Dell Report include failed: ${err.message || err}`;
+          }
+          const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
+          const input = section && section.querySelector(".dell-include-switch");
+          if (input) input.checked = isDellIncludeOn(cardId);
+          syncNoSshDellToggle();
+        });
+    }
+
+    function noSshDellCandidates(cards) {
+      return (cards || []).filter((card) => {
+        if (!isDellReportFamily(card)) return false;
+        const hasCapacity = Boolean(card.capacity_popup_html);
+        const hasSummary =
+          card.capacity_summary && Number(card.capacity_summary.total_bytes || 0) > 0;
+        const hasRaw =
+          card.raw_capacity_summary &&
+          Number(card.raw_capacity_summary.total_bytes || 0) > 0;
+        return Boolean(card.error) || !(hasCapacity || hasSummary || hasRaw);
+      });
+    }
+
+    async function setNoSshDellInclude(on) {
+      if (!dellIncludeNoSshToggle) return;
+      const candidates = noSshDellCandidates(cardsCache);
+      if (!candidates.length) {
+        dellIncludeNoSshToggle.checked = false;
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent =
+            "No IBM/HPE sites without capacity found for Dell Report include.";
+        }
+        return;
+      }
+      dellIncludeNoSshToggle.disabled = true;
+      if (refreshStatusEl) {
+        refreshStatusEl.textContent = on
+          ? `Adding ${candidates.length} no-SSH site(s) to Dell Report…`
+          : `Clearing Dell Report include on ${candidates.length} no-SSH site(s)…`;
+      }
+      let ok = 0;
+      let failed = 0;
+      for (const card of candidates) {
+        try {
+          await persistDellInclude(card.id, on);
+          ok += 1;
+        } catch (_err) {
+          failed += 1;
+        }
+      }
+      renderAll(cardsCache);
+      syncNoSshDellToggle();
+      if (refreshStatusEl) {
+        refreshStatusEl.textContent = on
+          ? `Dell Report include: ${ok} site(s) checked` +
+            (failed ? `, ${failed} failed` : "") +
+            ". Click Dell Report to export (capacity blank for those rows)."
+          : `Dell Report include cleared on ${ok} no-SSH site(s)` +
+            (failed ? `, ${failed} failed` : "") +
+            ".";
+      }
+      dellIncludeNoSshToggle.disabled = false;
+    }
+
+    function syncNoSshDellToggle() {
+      if (!dellIncludeNoSshToggle) return;
+      const candidates = noSshDellCandidates(cardsCache);
+      if (!candidates.length) {
+        dellIncludeNoSshToggle.checked = false;
+        return;
+      }
+      dellIncludeNoSshToggle.checked = candidates.every((card) =>
+        isDellIncludeOn(card.id)
+      );
+    }
+
+    function updateViewOptionsButton() {
+      if (!optionsMenuBtn || !optionsMenuPanel) return;
+      const boxes = optionsMenuPanel.querySelectorAll('input[type="checkbox"]');
+      const onCount = Array.from(boxes).filter((box) => box.checked).length;
+      optionsMenuBtn.textContent =
+        onCount > 0 ? `View options (${onCount})` : "View options";
+    }
+
+    function setOptionsMenuOpen(open) {
+      if (!optionsMenu || !optionsMenuBtn) return;
+      optionsMenu.classList.toggle("open", open);
+      optionsMenuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
 
     function isMonitorOn(cardId) {
       const key = String(cardId);
@@ -693,13 +988,30 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
-    function applyPoolStorageVisibility(showPools) {
-      document.body.classList.toggle("hide-pool-storage", !showPools);
-      if (showPoolsToggle) {
-        showPoolsToggle.checked = showPools;
+    function applyVendorPoolVisibility() {
+      const ibm = showPoolsIbmToggle ? showPoolsIbmToggle.checked : false;
+      const hpe = showPoolsHpeToggle ? showPoolsHpeToggle.checked : false;
+      const dell = showPoolsDellToggle ? showPoolsDellToggle.checked : false;
+      document.body.classList.toggle("show-pools-ibm", ibm);
+      document.body.classList.toggle("show-pools-hpe", hpe);
+      document.body.classList.toggle("show-pools-dell", dell);
+      try {
+        localStorage.setItem(POOLS_IBM_PREF_KEY, ibm ? "1" : "0");
+        localStorage.setItem(POOLS_HPE_PREF_KEY, hpe ? "1" : "0");
+        localStorage.setItem(POOLS_DELL_PREF_KEY, dell ? "1" : "0");
+      } catch (_err) {
+        /* ignore storage errors */
+      }
+      updateViewOptionsButton();
+    }
+
+    function applyRawCapacityVisibility(showRaw) {
+      document.body.classList.toggle("hide-raw-capacity", !showRaw);
+      if (showRawToggle) {
+        showRawToggle.checked = showRaw;
       }
       try {
-        localStorage.setItem(POOLS_PREF_KEY, showPools ? "1" : "0");
+        localStorage.setItem(RAW_PREF_KEY, showRaw ? "1" : "0");
       } catch (_err) {
         /* ignore storage errors */
       }
@@ -737,18 +1049,35 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
-    function initPoolStorageToggle() {
-      let showPools = true;
+    function initVendorPoolToggles() {
+      const load = (key) => {
+        try {
+          return localStorage.getItem(key) === "1";
+        } catch (_err) {
+          return false;
+        }
+      };
+      if (showPoolsIbmToggle) showPoolsIbmToggle.checked = load(POOLS_IBM_PREF_KEY);
+      if (showPoolsHpeToggle) showPoolsHpeToggle.checked = load(POOLS_HPE_PREF_KEY);
+      if (showPoolsDellToggle) showPoolsDellToggle.checked = load(POOLS_DELL_PREF_KEY);
+      applyVendorPoolVisibility();
+      [showPoolsIbmToggle, showPoolsHpeToggle, showPoolsDellToggle].forEach((el) => {
+        if (el) el.addEventListener("change", applyVendorPoolVisibility);
+      });
+    }
+
+    function initRawCapacityToggle() {
+      let showRaw = false;
       try {
-        const saved = localStorage.getItem(POOLS_PREF_KEY);
-        if (saved === "0") showPools = false;
+        const saved = localStorage.getItem(RAW_PREF_KEY);
+        if (saved === "1") showRaw = true;
       } catch (_err) {
         /* ignore storage errors */
       }
-      applyPoolStorageVisibility(showPools);
-      if (showPoolsToggle) {
-        showPoolsToggle.addEventListener("change", () => {
-          applyPoolStorageVisibility(showPoolsToggle.checked);
+      applyRawCapacityVisibility(showRaw);
+      if (showRawToggle) {
+        showRawToggle.addEventListener("change", () => {
+          applyRawCapacityVisibility(showRawToggle.checked);
         });
       }
     }
@@ -785,7 +1114,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
       capacitySiteSelectEl.innerHTML =
-        '<option value="">None</option>' +
+        '<option value="">All servers</option>' +
         sorted
           .map(
             (card) =>
@@ -808,24 +1137,108 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       });
     }
 
+    function capacityIssues(card) {
+      if (!isMonitorOn(card.id)) return [];
+      return (card.health_issues || []).filter((issue) => {
+        const cat = String(issue.category || "").toLowerCase();
+        if (cat === "capacity") return true;
+        const msg = String(issue.message || "");
+        return /%\\s*(full|capacity)/i.test(msg) || /running at\\s+\\d/i.test(msg);
+      });
+    }
+
+    function capacityAlertBanner(card) {
+      const issues = capacityIssues(card);
+      if (!issues.length) return "";
+      const hasCritical = issues.some((issue) => issue.severity === "critical");
+      const sev = hasCritical ? "critical" : "warn";
+      const label = hasCritical ? "CRITICAL" : "WARNING";
+      const items = issues
+        .map((issue) => `<li>${escapeHtml(issue.message || "")}</li>`)
+        .join("");
+      return `
+        <div class="capacity-alert ${sev}" role="alert">
+          <div class="capacity-alert-label">${label}</div>
+          <ul>${items}</ul>
+        </div>`;
+    }
+
+    function renderFleetCapacityAlerts(cards) {
+      if (!fleetAlertsEl) return;
+      const rows = [];
+      cards.forEach((card) => {
+        const issues = capacityIssues(card);
+        if (!issues.length) return;
+        const hasCritical = issues.some((issue) => issue.severity === "critical");
+        const top = issues[0];
+        rows.push({
+          name: siteDisplayName(card),
+          severity: hasCritical ? "critical" : "warn",
+          message: top.message || "",
+          count: issues.length,
+        });
+      });
+      if (!rows.length) {
+        fleetAlertsEl.innerHTML = "";
+        return;
+      }
+      const hasCritical = rows.some((row) => row.severity === "critical");
+      const sev = hasCritical ? "critical" : "warn";
+      const title = hasCritical
+        ? `Critical capacity on ${rows.filter((r) => r.severity === "critical").length} site(s)`
+        : `Capacity warning on ${rows.length} site(s)`;
+      const items = rows
+        .map((row) => {
+          const extra = row.count > 1 ? ` (+${row.count - 1} more)` : "";
+          return `<li><strong>${escapeHtml(row.name)}</strong> — ${escapeHtml(row.message)}${extra}</li>`;
+        })
+        .join("");
+      fleetAlertsEl.innerHTML = `
+        <div class="fleet-capacity-alert ${sev}" role="alert">
+          <p class="alert-title">${escapeHtml(title)}</p>
+          <ul>${items}</ul>
+        </div>`;
+    }
+
     function renderSite(card) {
       const updated = card.updated_at
         ? `Last updated: ${card.updated_at}`
         : "Not refreshed yet";
       const monitorOn = isMonitorOn(card.id);
+      const poolFamily = String(card.pool_family || "").toLowerCase();
+      const dellFamily = isDellReportFamily(card);
+      const dellIncludeOn = isDellIncludeOn(card.id);
       const offClass = monitorOn ? "" : " monitor-off";
+      const issues = capacityIssues(card);
+      const hasCritical = issues.some((issue) => issue.severity === "critical");
+      const alertClass = !issues.length
+        ? ""
+        : hasCritical
+          ? " capacity-critical"
+          : " capacity-warn";
       let body = "";
       if (card.error && !card.capacity_popup_html) {
         body = `<div class="error">${escapeHtml(card.error)}</div>`;
       } else if (card.capacity_popup_html) {
-        body = card.capacity_popup_html;
+        body = capacityAlertBanner(card) + card.capacity_popup_html;
       } else {
         body =
+          capacityAlertBanner(card) +
           '<div class="error">No capacity data for this site. ' +
-          "Turn on Monitor and refresh, or check SSH credentials in Admin.</div>";
+          "Turn on Monitor and refresh, or check SSH credentials in Admin." +
+          (dellFamily
+            ? " Or check <strong>Dell Report</strong> on this card to list it on the Dell workbook with blank capacity."
+            : "") +
+          "</div>";
       }
+      const dellToggle = dellFamily
+        ? `<label class="monitor-toggle dell-include-toggle no-print${dellIncludeOn ? " on" : ""}" title="Include on Dell Report even when SSH/capacity fails (capacity cells blank).">
+              <input type="checkbox" class="dell-include-switch" data-id="${card.id}"${dellIncludeOn ? " checked" : ""}>
+              Dell Report
+            </label>`
+        : "";
       return `
-        <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}" data-id="${card.id}">
+        <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}${alertClass}" data-id="${card.id}" data-pool-family="${escapeHtml(poolFamily)}">
           <div class="site-head">
             <input
               type="text"
@@ -839,6 +1252,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
               <input type="checkbox" class="monitor-switch" data-id="${card.id}"${monitorOn ? " checked" : ""}>
               Monitor
             </label>
+            ${dellToggle}
             <p class="paused-note no-print"${monitorOn ? ' style="display:none"' : ""}>Monitoring off — showing last snapshot. Turn on Monitor to connect over SSH.</p>
             <p class="updated">${escapeHtml(updated)}</p>
           </div>
@@ -846,8 +1260,16 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         </section>`;
     }
 
+    function visibleCards(cards) {
+      if (includeOffToggle && includeOffToggle.checked) {
+        return cards;
+      }
+      return cards.filter((c) => isMonitorOn(c.id));
+    }
+
     function renderAll(cards) {
       if (!cards.length) {
+        if (fleetAlertsEl) fleetAlertsEl.innerHTML = "";
         sitesEl.innerHTML =
           '<div class="empty">No servers yet. Keep LaunchPad running and unlocked, then use ' +
           "<strong>Capacity Report</strong> or <strong>Health Dashboard</strong> in LaunchPad.</div>";
@@ -857,27 +1279,32 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         }
         return;
       }
-      const visible = includeOffToggle && includeOffToggle.checked
-        ? cards
-        : cards.filter((c) => isMonitorOn(c.id));
+      const visible = visibleCards(cards);
       if (!visible.length) {
+        if (fleetAlertsEl) fleetAlertsEl.innerHTML = "";
         sitesEl.innerHTML =
           '<div class="empty">All sites have Monitor off. Check ' +
           '<strong>Include monitoring-off sites</strong> to view them.</div>';
         updateMasterMonitorToggle();
         if (refreshStatusEl) {
-          refreshStatusEl.textContent = `0 of ${cards.length} site(s) shown`;
+          refreshStatusEl.textContent = `0 of ${cards.length} monitored site(s) shown`;
         }
+        updatePrintMeta(cards);
         return;
       }
       const sorted = [...visible].sort((a, b) =>
         (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
       );
+      renderFleetCapacityAlerts(sorted);
       sitesEl.innerHTML = sorted.map(renderSite).join("");
       wireSiteNameInputs();
       document.querySelectorAll(".monitor-switch").forEach((input) => {
         const cardId = parseInt(input.dataset.id, 10);
         input.onchange = () => setMonitor(cardId, input.checked);
+      });
+      document.querySelectorAll(".dell-include-switch").forEach((input) => {
+        const cardId = parseInt(input.dataset.id, 10);
+        input.onchange = () => setDellInclude(cardId, input.checked);
       });
       sorted.forEach((card) => applyMonitorVisual(card.id));
       updateMasterMonitorToggle();
@@ -888,8 +1315,12 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         const shownCount = siteId == null
           ? visible.length
           : visible.filter((card) => card.id === siteId).length;
-        refreshStatusEl.textContent = `${shownCount} of ${cards.length} site(s) shown`;
+        const includeOff = includeOffToggle && includeOffToggle.checked;
+        refreshStatusEl.textContent = includeOff
+          ? `${shownCount} of ${cards.length} site(s) shown`
+          : `${shownCount} monitored site(s) shown (${cards.length} total)`;
       }
+      updatePrintMeta(cards);
     }
 
     async function downloadExcel() {
@@ -898,9 +1329,12 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Excel workbook…";
       try {
         const includeOff = includeOffToggle ? includeOffToggle.checked : false;
+        const showRaw = showRawToggle ? showRawToggle.checked : false;
         const siteId = selectedCapacitySiteId();
         let exportUrl =
-          `/api/capacity-export?include_off=${includeOff ? 1 : 0}&open=1`;
+          `/api/capacity-export?include_off=${includeOff ? 1 : 0}` +
+          `&include_pools=1` +
+          `&show_raw=${showRaw ? 1 : 0}&open=1`;
         if (siteId != null) {
           exportUrl += `&card_id=${siteId}`;
         }
@@ -935,11 +1369,76 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function downloadDellReport() {
+      if (!dellReportBtn) return;
+      dellReportBtn.disabled = true;
+      if (refreshStatusEl) refreshStatusEl.textContent = "Building Dell Report workbook…";
+      try {
+        const includeOff = includeOffToggle ? includeOffToggle.checked : false;
+        const showRaw = showRawToggle ? showRawToggle.checked : false;
+        const siteId = selectedCapacitySiteId();
+        let exportUrl =
+          `/api/dell-report-export?include_off=${includeOff ? 1 : 0}` +
+          `&include_pools=1` +
+          `&show_raw=${showRaw ? 1 : 0}&open=1`;
+        if (siteId != null) {
+          exportUrl += `&card_id=${siteId}`;
+        }
+        const res = await fetch(exportUrl);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const err = await res.json();
+            if (err && err.error) detail = err.error;
+          } catch (_err) {
+            /* ignore */
+          }
+          throw new Error(detail);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, "");
+        a.href = url;
+        a.download = `Dell_Capacity_Report_${stamp}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = "Dell Report (.xlsx) downloaded and opened in Excel.";
+        }
+      } catch (err) {
+        if (refreshStatusEl) {
+          refreshStatusEl.textContent = `Dell Report export failed: ${err.message || err}`;
+        }
+      } finally {
+        dellReportBtn.disabled = false;
+      }
+    }
+
+    async function initDellReportButton() {
+      if (!dellReportBtn) return;
+      try {
+        const res = await fetch("/api/dell-report-settings");
+        const settings = await res.json();
+        const show = settings && settings.enabled;
+        dellReportBtn.style.display = show ? "" : "none";
+        if (dellIncludeNoSshWrap) {
+          dellIncludeNoSshWrap.style.display = show ? "" : "none";
+        }
+      } catch (_err) {
+        dellReportBtn.style.display = "none";
+        if (dellIncludeNoSshWrap) dellIncludeNoSshWrap.style.display = "none";
+      }
+    }
+
     async function refreshCard(cardId) {
       const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
       if (section) section.classList.add("loading");
       try {
-        const res = await fetch(`/api/refresh/${cardId}`, { method: "POST" });
+        const res = await fetch(
+          `/api/refresh/${cardId}?focus=capacity&include_pools=1`,
+          { method: "POST" }
+        );
         const card = await res.json();
         if (!res.ok) throw new Error(card.error || "Refresh failed");
         return card;
@@ -994,14 +1493,24 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
 
     function updatePrintMeta(cards) {
       const stamp = new Date().toLocaleString();
-      const withCapacity = cards.filter((c) => c.capacity_popup_html).length;
-      printMetaEl.textContent =
-        `Report generated ${stamp} — ${withCapacity} of ${cards.length} site(s) with capacity data.`;
+      const visible = visibleCards(cards);
+      const withCapacity = visible.filter((c) => c.capacity_popup_html).length;
+      const includeOff = includeOffToggle && includeOffToggle.checked;
+      if (includeOff) {
+        printMetaEl.textContent =
+          `Report generated ${stamp} — ${withCapacity} of ${visible.length} site(s) with capacity data.`;
+      } else {
+        printMetaEl.textContent =
+          `Report generated ${stamp} — ${withCapacity} of ${visible.length} monitored site(s) with capacity data` +
+          (cards.length !== visible.length ? ` (${cards.length} total in LaunchPad).` : ".");
+      }
     }
 
     async function loadCards() {
       try {
-        if (refreshStatusEl && !refreshAllRunning) {
+        const exportBusy =
+          (excelBtn && excelBtn.disabled) || (dellReportBtn && dellReportBtn.disabled);
+        if (refreshStatusEl && !refreshAllRunning && !exportBusy) {
           refreshStatusEl.textContent = "Loading servers from LaunchPad...";
         }
         if (sitesEl && !cardsCache.length) {
@@ -1013,6 +1522,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           // Sync is best-effort; /api/cards also syncs when LaunchPad is unlocked.
         }
         await loadMonitorState();
+        await loadDellIncludeState();
         const res = await fetch("/api/cards");
         if (!res.ok) {
           throw new Error(`Health server returned ${res.status}`);
@@ -1020,6 +1530,8 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         const cards = await res.json();
         cardsCache = Array.isArray(cards) ? cards : [];
         renderAll(cardsCache);
+        syncNoSshDellToggle();
+        updateViewOptionsButton();
         updatePrintMeta(cardsCache);
       } catch (err) {
         sitesEl.innerHTML =
@@ -1064,12 +1576,43 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     if (excelBtn) {
       excelBtn.addEventListener("click", downloadExcel);
     }
+    if (dellReportBtn) {
+      dellReportBtn.addEventListener("click", downloadDellReport);
+    }
+    if (dellIncludeNoSshToggle) {
+      dellIncludeNoSshToggle.addEventListener("change", () => {
+        void setNoSshDellInclude(dellIncludeNoSshToggle.checked);
+      });
+    }
+    if (optionsMenuBtn && optionsMenu) {
+      optionsMenuBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setOptionsMenuOpen(!optionsMenu.classList.contains("open"));
+      });
+      if (optionsMenuPanel) {
+        optionsMenuPanel.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        optionsMenuPanel.addEventListener("change", () => {
+          updateViewOptionsButton();
+        });
+      }
+      document.addEventListener("click", () => {
+        setOptionsMenuOpen(false);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") setOptionsMenuOpen(false);
+      });
+    }
 
     initDetailsToggle();
     initPageLayoutToggle();
-    initPoolStorageToggle();
+    initVendorPoolToggles();
+    initRawCapacityToggle();
     loadSiteNameOverrides();
     initReportHeader();
+    initDellReportButton();
+    updateViewOptionsButton();
     loadCards();
     setInterval(loadCards, 15000);
   </script>

@@ -17,8 +17,18 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from launchpad.capacity_excel_alerts import (
+    BANNER_CRITICAL_FILL,
+    BANNER_FONT_COLOR,
+    BANNER_WARN_FILL,
+    capacity_excel_banner_summary,
+)
 from launchpad.database import Card, Database
-from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.flashsystem_health import (
+    analyze_health,
+    capacity_summary_from_pools,
+    pool_capacity_from_commands,
+)
 from launchpad.flashsystem_parse import _format_bytes
 from launchpad.monitor import HealthDashboardEntry, build_health_dashboard_entries
 
@@ -107,6 +117,7 @@ class ExportSite:
     capacity_summary: dict[str, Any] | None
     pools: list[dict[str, Any]]
     error: str | None
+    raw_capacity_summary: dict[str, Any] | None = None
 
 
 def card_ids_included_for_export(
@@ -149,12 +160,16 @@ def format_capacity_text(
     capacity_summary: dict[str, Any] | None,
     *,
     error: str | None = None,
+    pools: list[dict[str, Any]] | None = None,
 ) -> str:
-    if capacity_summary:
-        pct = float(capacity_summary.get("used_pct") or 0)
-        used = int(capacity_summary.get("used_bytes") or 0)
-        total = int(capacity_summary.get("total_bytes") or 0)
-        label = capacity_summary.get("name") or "System"
+    summary = capacity_summary
+    if (not summary or not int(summary.get("total_bytes") or 0)) and pools:
+        summary = capacity_summary_from_pools(pools) or summary
+    if summary:
+        pct = float(summary.get("used_pct") or 0)
+        used = int(summary.get("used_bytes") or 0)
+        total = int(summary.get("total_bytes") or 0)
+        label = summary.get("name") or "System"
         if total > 0:
             return (
                 f"{label}: {pct:.1f}% used "
@@ -164,6 +179,24 @@ def format_capacity_text(
             return f"{label}: {pct:.1f}% used"
     if error:
         return f"Error: {error[:160]}"
+    return ""
+
+
+def format_raw_capacity_text(raw_capacity_summary: dict[str, Any] | None) -> str:
+    """One-line raw/physical capacity for Excel when show_raw is on."""
+    if not raw_capacity_summary:
+        return ""
+    pct = float(raw_capacity_summary.get("used_pct") or 0)
+    used = int(raw_capacity_summary.get("used_bytes") or 0)
+    total = int(raw_capacity_summary.get("total_bytes") or 0)
+    label = raw_capacity_summary.get("name") or "Raw"
+    if total > 0:
+        return (
+            f"{label}: {pct:.1f}% used "
+            f"({_format_bytes(used)} / {_format_bytes(total)})"
+        )
+    if pct > 0:
+        return f"{label}: {pct:.1f}% used"
     return ""
 
 
@@ -316,6 +349,29 @@ def _pool_detail_rows_for_site(
     return rows
 
 
+def _apply_capacity_alert_banner(ws, message: str, severity: str, col_count: int) -> None:
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=col_count)
+    cell = ws.cell(row=1, column=1, value=message)
+    fill = BANNER_CRITICAL_FILL if severity == "critical" else BANNER_WARN_FILL
+    cell.fill = PatternFill("solid", fgColor=fill)
+    cell.font = Font(bold=True, color=BANNER_FONT_COLOR, size=12)
+    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 28
+
+
+def _banner_from_pool_detail_rows(pool_detail_rows: list[PoolDetailRow]) -> dict | None:
+    pool_pcts = [float(row[4]) for row in pool_detail_rows]
+    site_keys = {
+        f"{row[0]}|{row[1]}|{row[2]}"
+        for row in pool_detail_rows
+        if float(row[4]) >= 80
+    }
+    return capacity_excel_banner_summary(
+        pool_used_pcts=pool_pcts,
+        site_keys_over=site_keys,
+    )
+
+
 def _styled_workbook(
     inventory_rows: list[tuple[str, ...]],
     inventory_fills: list[InventoryFill],
@@ -334,14 +390,21 @@ def _styled_workbook(
     thin = Side(style="thin", color="B4C6E7")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
+    banner = _banner_from_pool_detail_rows(pool_detail_rows)
+    header_row = 2 if banner else 1
+    data_start = header_row + 1
+
+    if banner:
+        _apply_capacity_alert_banner(ws, banner["message"], banner["severity"], len(HEADERS))
+
     for col, title in enumerate(HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=title)
+        cell = ws.cell(row=header_row, column=col, value=title)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = border
 
-    row_idx = 2
+    row_idx = data_start
     for inv_row, (capacity, pool_stats) in zip(inventory_rows, inventory_fills, strict=True):
         location, device_sn, ip_addr, device_name, serial, model = inv_row
         values = (
@@ -377,13 +440,18 @@ def _styled_workbook(
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = f"A{header_row + 1}"
     last_row = row_idx - 1
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{last_row}"
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(HEADERS))}{last_row}"
 
     ws_pools = wb.create_sheet("Pool Capacity")
+    if banner:
+        _apply_capacity_alert_banner(
+            ws_pools, banner["message"], banner["severity"], len(POOL_HEADERS)
+        )
+
     for col, title in enumerate(POOL_HEADERS, start=1):
-        cell = ws_pools.cell(row=1, column=col, value=title)
+        cell = ws_pools.cell(row=header_row, column=col, value=title)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -393,7 +461,7 @@ def _styled_workbook(
     for col, width in enumerate(pool_widths, start=1):
         ws_pools.column_dimensions[get_column_letter(col)].width = width
 
-    for pool_row_index, row in enumerate(pool_detail_rows, start=2):
+    for pool_row_index, row in enumerate(pool_detail_rows, start=data_start):
         for col_index, value in enumerate(row, start=1):
             cell = ws_pools.cell(row=pool_row_index, column=col_index, value=value)
             cell.border = border
@@ -402,9 +470,10 @@ def _styled_workbook(
                 cell.number_format = "0.0"
 
     if pool_detail_rows:
-        ws_pools.freeze_panes = "A2"
+        ws_pools.freeze_panes = f"A{header_row + 1}"
         ws_pools.auto_filter.ref = (
-            f"A1:{get_column_letter(len(POOL_HEADERS))}{len(pool_detail_rows) + 1}"
+            f"A{header_row}:{get_column_letter(len(POOL_HEADERS))}"
+            f"{data_start + len(pool_detail_rows) - 1}"
         )
 
     return wb
@@ -491,10 +560,10 @@ def export_storage_capacity_excel(
             progress(entry.name, index, total)
         try:
             summary, pools, error = _refresh_entry_capacity(entry)
-            text = format_capacity_text(summary, error=error)
+            text = format_capacity_text(summary, error=error, pools=pools)
             capacity_by_card_id[entry.card_id] = text
             pools_by_card_id[entry.card_id] = pools
-            if error and not summary:
+            if error and not summary and not pools:
                 error_count += 1
         except Exception as exc:
             capacity_by_card_id[entry.card_id] = format_capacity_text(None, error=str(exc))
@@ -591,6 +660,8 @@ def export_storage_capacity_excel_from_sites(
     include_monitor_off: bool,
     monitor_enabled: Mapping[int, bool],
     card_id: int | None = None,
+    include_pools: bool = True,
+    show_raw: bool = False,
 ) -> ExportResult:
     included = card_ids_included_for_export(
         [site.card_id for site in sites],
@@ -606,10 +677,21 @@ def export_storage_capacity_excel_from_sites(
     error_count = 0
 
     for card_id, site in sites_by_id.items():
-        text = format_capacity_text(site.capacity_summary, error=site.error)
+        pools_for_text = site.pools if include_pools else []
+        text = format_capacity_text(
+            site.capacity_summary,
+            error=site.error,
+            pools=pools_for_text,
+        )
+        if show_raw:
+            raw_text = format_raw_capacity_text(site.raw_capacity_summary)
+            if raw_text:
+                text = f"{text}\n{raw_text}" if text else raw_text
         capacity_by_card_id[card_id] = text
-        pools_by_card_id[card_id] = site.pools
-        if site.error and not site.capacity_summary:
+        pools_by_card_id[card_id] = site.pools if include_pools else []
+        if site.error and not site.capacity_summary and not (
+            include_pools and site.pools
+        ):
             error_count += 1
 
     matched_card_ids: set[int] = set()
@@ -640,10 +722,11 @@ def export_storage_capacity_excel_from_sites(
             matched_card_ids.add(card_id)
             capacity_text = capacity_by_card_id.get(card_id, "")
             pools = pools_by_card_id.get(card_id, [])
-            pool_stats_text = format_pool_stats_text(pools)
-            pool_detail_rows.extend(
-                _pool_detail_rows_for_site(location, device_sn, ip_addr, pools)
-            )
+            pool_stats_text = format_pool_stats_text(pools) if include_pools else ""
+            if include_pools:
+                pool_detail_rows.extend(
+                    _pool_detail_rows_for_site(location, device_sn, ip_addr, pools)
+                )
             if capacity_text and not capacity_text.startswith("Error:"):
                 filled_count += 1
             if pool_stats_text:
@@ -657,16 +740,17 @@ def export_storage_capacity_excel_from_sites(
             continue
         capacity_text = capacity_by_card_id.get(card_id, "")
         pools = pools_by_card_id.get(card_id, [])
-        pool_stats_text = format_pool_stats_text(pools)
+        pool_stats_text = format_pool_stats_text(pools) if include_pools else ""
         extra_rows.append(_site_to_extra_row(site, capacity_text, pool_stats_text))
-        pool_detail_rows.extend(
-            _pool_detail_rows_for_site(
-                site.category or site.name,
-                site.name,
-                site.host,
-                pools,
+        if include_pools:
+            pool_detail_rows.extend(
+                _pool_detail_rows_for_site(
+                    site.category or site.name,
+                    site.name,
+                    site.host,
+                    pools,
+                )
             )
-        )
         if capacity_text and not capacity_text.startswith("Error:"):
             filled_count += 1
         if pool_stats_text:

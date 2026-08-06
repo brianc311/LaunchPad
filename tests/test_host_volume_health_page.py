@@ -9,7 +9,7 @@ def test_host_volume_health_path_and_controls():
     for text in (
         "Hosts & Volumes Health",
         'id="hv-site-select"',
-        '<option value="">None</option>',
+        '<option value="">All servers</option>',
         'id="hv-refresh-btn"',
         'id="hv-export-xlsx-btn"',
         'id="hv-export-csv-btn"',

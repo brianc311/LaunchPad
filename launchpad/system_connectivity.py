@@ -5,13 +5,23 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from launchpad.firmware_catalog import latest_in_catalog, normalize_hpe_firmware_version, versions_behind
+from launchpad.firmware_catalog import (
+    latest_in_catalog,
+    normalize_hpe_firmware_version,
+    versions_behind,
+    versions_behind_list,
+)
 from launchpad.flashsystem_parse import _parse_colon_table
 from launchpad.storage_presets import HPE_SHELL_PROFILES, SVC_PROFILES, is_svc_fc_profile
 from launchpad.volume_find import vendor_for_profile as _vendor_for_profile
 
 TOPICS: tuple[str, ...] = ("call_home", "dns", "snmp", "ntp", "firmware", "license_key")
-FIRMWARE_EXTRA_FIELDS: tuple[str, ...] = ("current", "latest", "versions_behind")
+FIRMWARE_EXTRA_FIELDS: tuple[str, ...] = (
+    "current",
+    "latest",
+    "versions_behind",
+    "behind_versions",
+)
 LICENSE_KEY_EXTRA_FIELDS: tuple[str, ...] = (
     "key_generation_date",
     "date",
@@ -48,8 +58,10 @@ _HPE_LABEL_RE = re.compile(
     r"^(?P<label>DNS server|NTP server)\s*:\s*(?P<value>\S.*)?$",
     re.IGNORECASE,
 )
+# Real 3PAR/Primera CLI: "Release version 3.3.1.648 (MU5)" (no colon).
+# Also accept "Version: …", "Release version: …", and CSV "Release version,…".
 _HPE_VERSION_RE = re.compile(
-    r"^(?:Release\s+version|Version)\s*:\s*(?P<version>\S.+)$",
+    r"^(?:Release\s+version|Version)\s*(?:[:=,]\s*|\s+)(?P<version>\S.+)$",
     re.IGNORECASE,
 )
 _DS_FIRMWARE_NA = (
@@ -364,6 +376,7 @@ def enrich_firmware_row(
 ) -> dict:
     latest = latest_in_catalog(catalog)
     behind = versions_behind(current, catalog)
+    behind_versions = versions_behind_list(current, catalog)
     resolved_status = status
     if not resolved_status and not error:
         if configured == "yes":
@@ -383,6 +396,7 @@ def enrich_firmware_row(
     out["current"] = current
     out["latest"] = latest
     out["versions_behind"] = behind
+    out["behind_versions"] = behind_versions
     return out
 
 

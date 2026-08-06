@@ -27,6 +27,9 @@ class GlowCard(ctk.CTkFrame):
         collapsed: bool = True,
         on_selection_change=None,
         on_collapsed_change=None,
+        show_dell_report_include: bool = False,
+        dell_report_include: bool = False,
+        on_dell_report_include_change=None,
         **kwargs,
     ) -> None:
         self.glow_color = normalize_color(glow_color)
@@ -45,6 +48,8 @@ class GlowCard(ctk.CTkFrame):
         self.on_snapshot = on_snapshot
         self.on_monitor_change = on_monitor_change
         self._monitor_enabled = monitor_enabled
+        self.on_dell_report_include_change = on_dell_report_include_change
+        self._dell_report_include = bool(dell_report_include)
         self.on_reorder = on_reorder
         self.on_selection_change = on_selection_change
         self.on_collapsed_change = on_collapsed_change
@@ -63,8 +68,14 @@ class GlowCard(ctk.CTkFrame):
         btn_row_idx = stats_row + 1
         self._stats_row = stats_row
         self._btn_row_idx = btn_row_idx
-        self._monitor_row_idx = btn_row_idx + 1 if on_monitor_change else None
-        self._snapshot_row_idx = btn_row_idx + (2 if on_monitor_change else 1)
+        next_row = btn_row_idx + 1
+        self._monitor_row_idx = next_row if on_monitor_change else None
+        if on_monitor_change:
+            next_row += 1
+        self._dell_report_row_idx = next_row if show_dell_report_include else None
+        if show_dell_report_include:
+            next_row += 1
+        self._snapshot_row_idx = next_row
         self.grid_rowconfigure(stats_row, weight=1)
 
         self.top_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -118,6 +129,27 @@ class GlowCard(ctk.CTkFrame):
         )
         self.expand_btn.grid(row=0, column=3, sticky="e", padx=(4, 4))
 
+        self._capacity_alert_severity: str | None = None
+        self._capacity_alert_tip = ""
+        self._capacity_alert_tip_window = None
+        self._capacity_alert_tip_after = None
+        self._capacity_alert_tip_hide_after = None
+        self.capacity_alert_badge = ctk.CTkLabel(
+            top_row,
+            text="",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#111111",
+            fg_color=theme["surface"],
+            corner_radius=8,
+            width=44,
+            height=20,
+        )
+        self.capacity_alert_badge.grid(row=0, column=4, sticky="e", padx=(4, 4))
+        self.capacity_alert_badge.grid_remove()
+        self.capacity_alert_badge.bind("<Enter>", self._on_capacity_alert_enter)
+        self.capacity_alert_badge.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
+        self.bind("<Destroy>", lambda _e: self._hide_capacity_alert_tip(), add="+")
+
         self.type_badge = ctk.CTkLabel(
             top_row,
             text=card_type.upper(),
@@ -128,7 +160,7 @@ class GlowCard(ctk.CTkFrame):
             width=48,
             height=20,
         )
-        self.type_badge.grid(row=0, column=4, sticky="e")
+        self.type_badge.grid(row=0, column=5, sticky="e")
 
         if draggable:
             self.drag_handle = ctk.CTkLabel(
@@ -139,7 +171,7 @@ class GlowCard(ctk.CTkFrame):
                 width=20,
                 cursor="hand2",
             )
-            self.drag_handle.grid(row=0, column=5, sticky="e", padx=(6, 0))
+            self.drag_handle.grid(row=0, column=6, sticky="e", padx=(6, 0))
             self.drag_handle.bind("<Button-1>", self._start_drag)
             self.drag_handle.bind("<B1-Motion>", self._on_drag)
             self.drag_handle.bind("<ButtonRelease-1>", self._end_drag)
@@ -150,7 +182,7 @@ class GlowCard(ctk.CTkFrame):
 
         self.bottom_left = ctk.CTkFrame(self.compact_bottom_row, fg_color="transparent")
         self.bottom_left.grid(row=0, column=0, padx=(0, 6), sticky="ew")
-        self.bottom_left.grid_columnconfigure(1, weight=1)
+        self.bottom_left.grid_columnconfigure(2, weight=1)
 
         if show_stats:
             self.status_led = ctk.CTkFrame(
@@ -174,6 +206,22 @@ class GlowCard(ctk.CTkFrame):
             self._ssh_status = ""
             self._ssh_status_tip = ""
 
+        # Compact-layout CRIT/WARN badge (next to status LED; avoids name overlap)
+        self.capacity_alert_badge_compact = ctk.CTkLabel(
+            self.bottom_left,
+            text="",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color="#111111",
+            fg_color=theme["surface"],
+            corner_radius=6,
+            width=40,
+            height=18,
+        )
+        self.capacity_alert_badge_compact.grid(row=0, column=1, padx=(0, 6), sticky="w")
+        self.capacity_alert_badge_compact.grid_remove()
+        self.capacity_alert_badge_compact.bind("<Enter>", self._on_capacity_alert_enter)
+        self.capacity_alert_badge_compact.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
+
         self.subtitle_label = ctk.CTkLabel(
             self.bottom_left,
             text=subtitle,
@@ -181,7 +229,7 @@ class GlowCard(ctk.CTkFrame):
             text_color=theme["muted"],
             anchor="w",
         )
-        self.subtitle_label.grid(row=0, column=1, sticky="ew")
+        self.subtitle_label.grid(row=0, column=2, sticky="ew")
 
         self.compact_expand_btn = ctk.CTkButton(
             self.compact_bottom_row,
@@ -292,6 +340,33 @@ class GlowCard(ctk.CTkFrame):
             self.monitor_switch = None
             self.monitor_hint = None
 
+        if show_dell_report_include and self._dell_report_row_idx is not None:
+            self.dell_report_row = ctk.CTkFrame(self, fg_color="transparent")
+            self.dell_report_row.grid(
+                row=self._dell_report_row_idx, column=0, padx=18, pady=(0, 6), sticky="ew"
+            )
+            self.dell_report_var = ctk.BooleanVar(value=self._dell_report_include)
+            self.dell_report_check = ctk.CTkCheckBox(
+                self.dell_report_row,
+                text="Dell Report",
+                variable=self.dell_report_var,
+                command=self._on_dell_report_include_toggle,
+                font=ctk.CTkFont(size=12),
+            )
+            self.dell_report_check.pack(side="left")
+            self.dell_report_hint = ctk.CTkLabel(
+                self.dell_report_row,
+                text="Include even without SSH",
+                font=ctk.CTkFont(size=11),
+                text_color=theme["muted"],
+            )
+            self.dell_report_hint.pack(side="left", padx=(10, 0))
+        else:
+            self.dell_report_row = None
+            self.dell_report_var = None
+            self.dell_report_check = None
+            self.dell_report_hint = None
+
         if on_snapshot:
             self.snapshot_btn = ctk.CTkButton(
                 self,
@@ -311,6 +386,8 @@ class GlowCard(ctk.CTkFrame):
         self._detail_widgets = [self.compact_bottom_row, self.btn_row]
         if self.monitor_row:
             self._detail_widgets.append(self.monitor_row)
+        if self.dell_report_row:
+            self._detail_widgets.append(self.dell_report_row)
         if show_stats:
             self._detail_widgets.insert(1, self.stats_frame)
         if self.snapshot_btn:
@@ -336,6 +413,18 @@ class GlowCard(ctk.CTkFrame):
         self._monitor_enabled = enabled
         self._apply_monitor_visual(enabled)
         self.on_monitor_change(enabled)
+
+    def _on_dell_report_include_toggle(self) -> None:
+        if not self.dell_report_var or not self.on_dell_report_include_change:
+            return
+        enabled = bool(self.dell_report_var.get())
+        self._dell_report_include = enabled
+        self.on_dell_report_include_change(enabled)
+
+    def set_dell_report_include(self, enabled: bool) -> None:
+        self._dell_report_include = bool(enabled)
+        if self.dell_report_var is not None:
+            self.dell_report_var.set(self._dell_report_include)
 
     def _toggle_on_name_click(self, _event=None) -> str:
         if self._collapsed:
@@ -365,11 +454,14 @@ class GlowCard(ctk.CTkFrame):
         self.name_label.grid(row=0, column=2, sticky="ew", padx=(6, 6))
         self.name_label.configure(wraplength=0)
         self.expand_btn.grid(row=0, column=3, sticky="e", padx=(4, 4))
-        self.type_badge.grid(row=0, column=4, sticky="e")
+        self.type_badge.grid(row=0, column=5, sticky="e")
         if hasattr(self, "drag_handle"):
-            self.drag_handle.grid(row=0, column=5, sticky="e", padx=(6, 0))
+            self.drag_handle.grid(row=0, column=6, sticky="e", padx=(6, 0))
+        self._hide_capacity_alert_tip()
+        self._place_capacity_alert_badges()
 
     def _layout_compact_header(self) -> None:
+        self.capacity_alert_badge.grid_remove()
         self.type_badge.grid_remove()
         if hasattr(self, "drag_handle"):
             self.drag_handle.grid_remove()
@@ -381,6 +473,8 @@ class GlowCard(ctk.CTkFrame):
         self.bottom_left.grid(row=0, column=0, padx=(0, 6), sticky="ew")
         self.compact_expand_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
         self.compact_connect_btn.grid(row=0, column=2, sticky="e")
+        self._hide_capacity_alert_tip()
+        self._place_capacity_alert_badges()
 
     def set_collapsed(self, collapsed: bool, *, animate: bool = True, notify: bool = True) -> None:
         if collapsed == self._collapsed:
@@ -613,6 +707,163 @@ class GlowCard(ctk.CTkFrame):
             self._status_tip.destroy()
             self._status_tip = None
 
+    def _capacity_alert_style(self, severity: str) -> tuple[str, str, str]:
+        is_critical = severity == "critical"
+        return (
+            "CRIT" if is_critical else "WARN",
+            "#ef4444" if is_critical else "#f59e0b",
+            "#ffffff" if is_critical else "#111111",
+        )
+
+    def _place_capacity_alert_badges(self) -> None:
+        """Show header badge when expanded; compact badge (by LED) when collapsed."""
+        header = getattr(self, "capacity_alert_badge", None)
+        compact = getattr(self, "capacity_alert_badge_compact", None)
+        if not header or not compact:
+            return
+        if not self._capacity_alert_severity:
+            header.grid_remove()
+            compact.grid_remove()
+            return
+        text, fg, tc = self._capacity_alert_style(self._capacity_alert_severity)
+        for badge in (header, compact):
+            badge.configure(text=text, fg_color=fg, text_color=tc)
+        if self._collapsed:
+            header.grid_remove()
+            compact.grid(row=0, column=1, padx=(0, 6), sticky="w")
+        else:
+            compact.grid_remove()
+            header.grid(row=0, column=4, sticky="e", padx=(4, 4))
+
+    def _visible_capacity_badge(self):
+        compact = getattr(self, "capacity_alert_badge_compact", None)
+        header = getattr(self, "capacity_alert_badge", None)
+        if self._collapsed and compact is not None:
+            return compact
+        return header
+
+    def set_capacity_alert(
+        self,
+        severity: str | None,
+        messages: list[str] | None = None,
+    ) -> None:
+        if not hasattr(self, "capacity_alert_badge") or self.capacity_alert_badge is None:
+            return
+        if severity not in {"critical", "warn"}:
+            self._capacity_alert_severity = None
+            self.capacity_alert_badge.configure(text="")
+            if getattr(self, "capacity_alert_badge_compact", None) is not None:
+                self.capacity_alert_badge_compact.configure(text="")
+            self._place_capacity_alert_badges()
+            self._hide_capacity_alert_tip()
+            return
+        self._capacity_alert_severity = severity
+        is_critical = severity == "critical"
+        tip = "\n".join(m for m in (messages or []) if m).strip()
+        if tip:
+            self._capacity_alert_tip = tip
+        else:
+            self._capacity_alert_tip = (
+                "Critical capacity on this site" if is_critical else "Capacity warning on this site"
+            )
+        self._place_capacity_alert_badges()
+
+    def _pointer_over_capacity_tip_widgets(self) -> bool:
+        """True when pointer is still over the CRIT/WARN badge or the tip window."""
+        try:
+            x = int(self.winfo_pointerx())
+            y = int(self.winfo_pointery())
+        except Exception:
+            return False
+        for widget in (self._visible_capacity_badge(), getattr(self, "_capacity_alert_tip_window", None)):
+            if widget is None:
+                continue
+            try:
+                if not widget.winfo_exists():
+                    continue
+                left = int(widget.winfo_rootx())
+                top = int(widget.winfo_rooty())
+                right = left + int(widget.winfo_width())
+                bottom = top + int(widget.winfo_height())
+                if left <= x < right and top <= y < bottom:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _cancel_scheduled_hide_capacity_alert_tip(self) -> None:
+        hide_after = getattr(self, "_capacity_alert_tip_hide_after", None)
+        if hide_after:
+            try:
+                self.after_cancel(hide_after)
+            except Exception:
+                pass
+            self._capacity_alert_tip_hide_after = None
+
+    def _schedule_hide_capacity_alert_tip(self, _event=None) -> None:
+        """Defer hide so pointer can move badge → tip without killing the tip."""
+        self._cancel_scheduled_hide_capacity_alert_tip()
+        self._capacity_alert_tip_hide_after = self.after(80, self._hide_capacity_alert_tip_if_away)
+
+    def _hide_capacity_alert_tip_if_away(self) -> None:
+        self._capacity_alert_tip_hide_after = None
+        if self._pointer_over_capacity_tip_widgets():
+            return
+        self._hide_capacity_alert_tip()
+
+    def _on_capacity_alert_enter(self, _event=None) -> None:
+        self._cancel_scheduled_hide_capacity_alert_tip()
+        tip = getattr(self, "_capacity_alert_tip", "")
+        if tip:
+            self._show_capacity_alert_tip(tip)
+
+    def _show_capacity_alert_tip(self, text: str) -> None:
+        badge = self._visible_capacity_badge()
+        if not text or not badge or not badge.winfo_exists():
+            return
+        self._hide_capacity_alert_tip()
+        self._capacity_alert_tip_window = ctk.CTkToplevel(self)
+        self._capacity_alert_tip_window.wm_overrideredirect(True)
+        self._capacity_alert_tip_window.attributes("-topmost", True)
+        x = badge.winfo_rootx()
+        y = badge.winfo_rooty() + badge.winfo_height() + 4
+        self._capacity_alert_tip_window.geometry(f"+{x}+{y}")
+        tip_label = ctk.CTkLabel(
+            self._capacity_alert_tip_window,
+            text=text,
+            font=ctk.CTkFont(size=11),
+            text_color=self.theme["text"],
+            fg_color=self.theme["surface"],
+            corner_radius=6,
+            padx=8,
+            pady=4,
+        )
+        tip_label.pack()
+        # Topmost overrideredirect tips often miss Leave on Windows; defer +
+        # pointer geometry check, and bind Enter/Leave on both tip and label.
+        for widget in (self._capacity_alert_tip_window, tip_label):
+            widget.bind("<Enter>", lambda _e: self._cancel_scheduled_hide_capacity_alert_tip())
+            widget.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
+            widget.bind("<Button-1>", lambda _e: self._hide_capacity_alert_tip())
+        self._capacity_alert_tip_after = self.after(5000, self._hide_capacity_alert_tip)
+
+    def _hide_capacity_alert_tip(self, _event=None) -> None:
+        self._cancel_scheduled_hide_capacity_alert_tip()
+        if getattr(self, "_capacity_alert_tip_after", None):
+            try:
+                self.after_cancel(self._capacity_alert_tip_after)
+            except Exception:
+                pass
+            self._capacity_alert_tip_after = None
+        tip_window = getattr(self, "_capacity_alert_tip_window", None)
+        if tip_window is not None:
+            try:
+                if tip_window.winfo_exists():
+                    tip_window.destroy()
+            except Exception:
+                pass
+            self._capacity_alert_tip_window = None
+
     def apply_theme(self, theme: dict) -> None:
         self.theme = theme
         self.configure(fg_color=theme["surface_alt"], border_color=theme["border"])
@@ -629,3 +880,5 @@ class GlowCard(ctk.CTkFrame):
             self.stats_frame.configure(fg_color=theme["surface"])
         if self.status_led and self._ssh_status:
             self.set_ssh_status(self._ssh_status)
+        if self._capacity_alert_severity:
+            self._place_capacity_alert_badges()

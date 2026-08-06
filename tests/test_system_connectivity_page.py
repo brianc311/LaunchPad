@@ -9,7 +9,7 @@ def test_system_connectivity_path_and_controls():
     for text in (
         "System Connectivity",
         'id="sc-site-select"',
-        '<option value="">None</option>',
+        '<option value="">All servers</option>',
         'id="sc-refresh-btn"',
         'id="sc-export-xlsx-btn"',
         'id="sc-export-csv-btn"',
@@ -34,6 +34,9 @@ def test_page_has_firmware_tab_after_ntp():
     assert "Admin Firmware catalog" in html
     assert 'id="sc-panel-firmware"' in html
     assert 'id="sc-firmware-body"' in html
+    assert "behind-count" in html
+    assert "behind_versions" in html
+    assert "renderBehindCell" in html
     compact = html.replace(" ", "")
     assert '"firmware"' in compact and "TOPICS" in compact
     assert compact.index('"ntp"') < compact.index('"firmware"')
@@ -48,6 +51,14 @@ def test_firmware_panel_includes_ibm_upgrade_matrix_link():
     assert 'target="_blank"' in html
     assert 'rel="noopener noreferrer"' in html
     assert "IBM FlashSystem software upgrade matrix" in html
+
+
+def test_firmware_panel_includes_hpe_spock_upgrade_matrix_link():
+    from launchpad.system_connectivity_page import SYSTEM_CONNECTIVITY_HTML
+
+    html = SYSTEM_CONNECTIVITY_HTML
+    assert 'href="https://www.hpe.com/storage/spock"' in html
+    assert "HPE software upgrade matrix (SPOCK)" in html
 
 
 def test_page_has_license_key_tab_after_firmware():

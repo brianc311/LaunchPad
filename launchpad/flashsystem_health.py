@@ -16,6 +16,8 @@ from launchpad.flashsystem_parse import (
     format_command_output_html,
     parse_capacity_summary,
     parse_pool_capacity_rows,
+    parse_raw_capacity_summary,
+    parse_showsys_space_raw,
 )
 
 _GOOD_STATUS = frozenset({"online", "ok", "normal", "active", "yes"})
@@ -56,27 +58,88 @@ def _find_result(
     return None
 
 
+def _is_hpe_showsys_space_item(item: dict[str, Any] | None) -> bool:
+    if not item:
+        return False
+    haystack = f"{item.get('label', '')} {item.get('command', '')}".lower()
+    return "showsys -space" in haystack or "capacity - raw" in haystack
+
+
+def _find_system_capacity_result(
+    command_results: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Prefer lssystem / showsys -d; never treat showsys -space as System."""
+    if not command_results:
+        return None
+    for needles in (
+        ("lssystem", "capacity - system"),
+        ("showsys", "capacity - system"),
+        ("showspace", "capacity - system"),
+        ("lssi", "capacity - system"),
+        ("space_show", "capacity - system"),
+    ):
+        for item in command_results:
+            if _is_hpe_showsys_space_item(item):
+                continue
+            haystack = f"{item.get('label', '')} {item.get('command', '')}".lower()
+            if any(needle in haystack for needle in needles):
+                if _capacity_result_output(item):
+                    return item
+    return None
+
+
+def _find_showsys_space_result(
+    command_results: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not command_results:
+        return None
+    for item in command_results:
+        if _is_hpe_showsys_space_item(item) and _capacity_result_output(item):
+            return item
+    return None
+
+
+def _looks_like_hpe_checkhealth(output: str) -> bool:
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    checking = sum(1 for line in lines if line.lower().startswith("checking "))
+    if checking == 0:
+        return False
+    if any(
+        token in (output or "").lower()
+        for token in ("total capacity", "usr_total", ",name,", "free capacity")
+    ):
+        return False
+    return checking >= 1 and len(lines) <= 12
+
+
 def _result_output(item: dict[str, Any] | None) -> str:
     if not item or item.get("error"):
         return ""
     return (item.get("output") or "").strip()
 
 
-def pool_capacity_from_commands(
+def _capacity_result_output(item: dict[str, Any] | None) -> str:
+    """Like ``_result_output`` but drops checkhealth bleed mistaken for capacity."""
+    text = _result_output(item)
+    if text and _looks_like_hpe_checkhealth(text):
+        return ""
+    return text
+
+
+def _find_pool_capacity_result(
     command_results: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """Parsed pool rows from SSH command output (lsmdiskgrp, capacity - pools, etc.)."""
-    pools_output = _result_output(
-        _find_result(
-            command_results,
-            "lsmdiskgrp",
-            "capacity - pools",
-            "showcpg",
-            "showspace",
-            "capacity - cpg",
-            "lsextpool",
-            "pool_list",
-            "capacity - ext pools",
+) -> dict[str, Any] | None:
+    """Prefer CPG/pool commands over generic showspace system estimates."""
+    if not command_results:
+        return None
+    for needles in (
+        ("showcpg",),
+        ("showspace -cpg", "capacity - cpg"),
+        ("lsmdiskgrp", "capacity - pools"),
+        ("lsextpool", "pool_list", "capacity - ext pools"),
+        (
             "storage aggregate",
             "isi storagepool",
             "storage_container",
@@ -85,8 +148,53 @@ def pool_capacity_from_commands(
             "symcfg list -pool",
             "capacity - usage",
             "ud-ssd-space",
-        )
-    )
+        ),
+        ("showspace",),
+    ):
+        item = _find_result(command_results, *needles)
+        if _result_output(item):
+            return item
+    return None
+
+
+def capacity_summary_from_pools(
+    pools: list[dict[str, Any]] | None,
+    *,
+    name: str = "All CPGs",
+) -> dict[str, Any] | None:
+    """Roll CPG/pool rows into one system capacity summary for Excel/UI."""
+    if not pools:
+        return None
+    total = 0.0
+    used = 0.0
+    free = 0.0
+    for pool in pools:
+        pool_name = str(pool.get("name") or "").strip().lower()
+        if pool_name in {"total", "totals", "sum"}:
+            continue
+        total += float(pool.get("total_bytes") or 0)
+        used += float(pool.get("used_bytes") or 0)
+        free += float(pool.get("free_bytes") or 0)
+    if total <= 0:
+        return None
+    if free <= 0 and used <= total:
+        free = max(0.0, total - used)
+    used_pct = (used / total * 100.0) if total else 0.0
+    return {
+        "name": name,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_pct": round(used_pct, 1),
+        "raw": {},
+    }
+
+
+def pool_capacity_from_commands(
+    command_results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Parsed pool rows from SSH command output (lsmdiskgrp, capacity - pools, etc.)."""
+    pools_output = _capacity_result_output(_find_pool_capacity_result(command_results))
     return parse_pool_capacity_rows(pools_output)
 
 
@@ -128,7 +236,10 @@ def _capacity_detail_rows(raw: dict[str, str]) -> str:
     return "".join(
         f"<tr><th>{html.escape(key)}</th><td>{html.escape(str(value))}</td></tr>"
         for key, value in raw.items()
-        if str(value).strip() and key.lower() not in skip
+        if str(value).strip()
+        and key.lower() not in skip
+        # HPE Warn% of "-" means no array-side threshold is configured.
+        and not (key.lower() in {"warn%", "warn"} and str(value).strip() in {"-", "--", ""})
     )
 
 
@@ -194,10 +305,24 @@ def format_pools_capacity_html(pools: list[dict[str, Any]]) -> str:
 def format_capacity_report_html(
     system_capacity: dict[str, Any] | None,
     pools_output: str = "",
+    *,
+    raw_capacity: dict[str, Any] | None = None,
 ) -> str:
+    """Build capacity popup HTML; optional raw/physical block uses capacity-raw-wrap."""
     parts: list[str] = []
     if system_capacity:
         parts.append(format_capacity_popup_html(system_capacity))
+    if raw_capacity:
+        parts.append(
+            '<div class="capacity-raw-wrap">'
+            + _format_capacity_block(
+                raw_capacity,
+                summary_suffix="raw / physical capacity",
+                bar_label="Raw utilization",
+                section_class="capacity-section capacity-raw-block",
+            )
+            + "</div>"
+        )
     pools = parse_pool_capacity_rows(pools_output) if pools_output.strip() else []
     if pools:
         parts.append(format_pools_capacity_html(pools))
@@ -476,6 +601,8 @@ def format_preset_capacity_fallback_html(
         output = (item.get("output") or "").strip()
         if not output:
             continue
+        if _looks_like_hpe_checkhealth(output):
+            continue
         body = item.get("output_html") or format_command_output_html(
             item.get("label", ""),
             item.get("command", ""),
@@ -730,6 +857,8 @@ def analyze_health(
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     capacity: dict[str, Any] | None = None
+    system_capacity: dict[str, Any] | None = None
+    raw_capacity_summary: dict[str, Any] | None = None
     pools_output = ""
 
     if command_results:
@@ -744,21 +873,12 @@ def analyze_health(
                     }
                 )
 
-        system_item = None
-        system_output = ""
-        for needles in (
-            ("lssystem", "capacity - system"),
-            ("showsys", "capacity - system"),
-            ("showspace", "capacity - system"),
-            ("lssi", "capacity - system"),
-            ("space_show", "capacity - system"),
-        ):
-            system_item = _find_result(command_results, *needles)
-            system_output = _result_output(system_item)
-            if system_output:
-                break
+        system_item = _find_system_capacity_result(command_results)
+        system_output = _capacity_result_output(system_item)
         if system_output:
             capacity = _parse_system_capacity(system_output)
+            system_capacity = capacity
+            raw_capacity_summary = parse_raw_capacity_summary(system_output)
             if capacity and capacity["used_pct"] >= 80:
                 issues.append(
                     {
@@ -773,51 +893,33 @@ def analyze_health(
                     }
                 )
 
-        pools_item = _find_result(
-            command_results,
-            "lsmdiskgrp",
-            "capacity - pools",
-            "showcpg",
-            "showspace",
-            "capacity - cpg",
-            "lsextpool",
-            "pool_list",
-            "capacity - ext pools",
-            "storage aggregate",
-            "isi storagepool",
-            "storage_container",
-            "stor/prov/pool",
-            "storagepool -list",
-            "symcfg list -pool",
-            "capacity - usage",
-            "ud-ssd-space",
-        )
-        pools_output = _result_output(pools_item)
-        if pools_output:
-            headers, rows = _table_rows(pools_output)
-            for row in rows:
-                record = _row_map(headers, row)
-                pool_name = record.get("name") or record.get("CPG") or record.get("PoolName") or "pool"
-                cap = _parse_size_bytes(record.get("capacity", "") or record.get("Total", ""))
-                free = _parse_size_bytes(record.get("free_capacity", "") or record.get("Free", ""))
-                used_pct_raw = record.get("UsedPct") or record.get("Used%") or record.get("used_pct", "")
-                used_pct: float | None = None
-                if used_pct_raw:
-                    try:
-                        used_pct = float(str(used_pct_raw).replace("%", "").strip())
-                    except ValueError:
-                        used_pct = None
-                if used_pct is None and cap and free is not None:
-                    used_pct = (cap - free) / cap * 100.0
-                if used_pct is not None and used_pct >= 80:
-                    issues.append(
-                        {
-                            "severity": "critical" if used_pct >= 90 else "warn",
-                            "category": "capacity",
-                            "message": f"Pool {pool_name} is {used_pct:.1f}% full",
-                            "server": server_name,
-                        }
-                    )
+        space_item = _find_showsys_space_result(command_results)
+        space_output = _capacity_result_output(space_item)
+        if space_output:
+            space_raw = parse_showsys_space_raw(space_output)
+            if space_raw:
+                raw_capacity_summary = space_raw
+
+        pools_item = _find_pool_capacity_result(command_results)
+        pools_output = _capacity_result_output(pools_item)
+        pools_for_issues = parse_pool_capacity_rows(pools_output) if pools_output else []
+        for pool in pools_for_issues:
+            used_pct = float(pool.get("used_pct") or 0.0)
+            if used_pct < 80:
+                continue
+            pool_name = str(pool.get("name") or "pool")
+            issues.append(
+                {
+                    "severity": "critical" if used_pct >= 90 else "warn",
+                    "category": "capacity",
+                    "message": (
+                        f"Pool {pool_name} is {used_pct:.1f}% full "
+                        f"({_format_bytes(float(pool.get('used_bytes') or 0))} / "
+                        f"{_format_bytes(float(pool.get('total_bytes') or 0))})"
+                    ),
+                    "server": server_name,
+                }
+            )
 
         node_output = _result_output(_find_result(command_results, "lsnode", "health - nodes", "shownode"))
         _analyze_status_table(
@@ -942,15 +1044,6 @@ def analyze_health(
                     }
                 )
 
-    severity_rank = {"critical": 0, "warn": 1}
-    issues.sort(key=lambda item: (severity_rank.get(item["severity"], 9), item["server"], item["category"]))
-
-    popup_html = format_capacity_report_html(capacity, pools_output)
-    if not popup_html:
-        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
-    if not popup_html:
-        popup_html = format_preset_capacity_fallback_html(command_results)
-
     # Always fill capacity for Linux / metric hosts — not only when a popup exists.
     if not capacity:
         root_item = _find_result(command_results, "capacity - root disk", "df -h /")
@@ -966,9 +1059,6 @@ def analyze_health(
         if not capacity and metrics:
             capacity = _capacity_from_metrics(metrics)
 
-    if not popup_html and capacity:
-        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
-
     pools = parse_pool_capacity_rows(pools_output) if pools_output else []
     if not pools and capacity:
         pools = [
@@ -980,10 +1070,58 @@ def analyze_health(
                 "used_pct": float(capacity.get("used_pct") or 0),
             }
         ]
+    if not system_capacity and not capacity and pools:
+        capacity = capacity_summary_from_pools(pools)
+
+    # System bar from showsys/lssystem; All-CPGs rollup only when pool rows exist.
+    display_system = system_capacity
+    if display_system is None and pools:
+        display_system = capacity
+
+    # Build System / Raw / pool HTML after capacity resolution so HPE cards still
+    # get a System utilization bar when showsys failed but CPG rollup exists.
+    popup_html = format_capacity_report_html(
+        display_system,
+        pools_output,
+        raw_capacity=raw_capacity_summary,
+    )
+    if not popup_html:
+        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
+    if not popup_html:
+        popup_html = format_preset_capacity_fallback_html(command_results)
+    if not popup_html and capacity:
+        popup_html = format_linux_host_capacity_html(command_results, metrics, server_name)
+
+    # Raise issues from final capacity/pools so HPE CSV rollups are included.
+    if capacity and float(capacity.get("used_pct") or 0) >= 80:
+        already = any(
+            issue.get("category") == "capacity"
+            and "Running at" in str(issue.get("message") or "")
+            for issue in issues
+        )
+        if not already:
+            used_pct = float(capacity["used_pct"])
+            issues.append(
+                {
+                    "severity": "critical" if used_pct >= 90 else "warn",
+                    "category": "capacity",
+                    "message": (
+                        f"Running at {used_pct:.1f}% capacity "
+                        f"({_format_bytes(float(capacity.get('used_bytes') or 0))} used / "
+                        f"{_format_bytes(float(capacity.get('total_bytes') or 0))})"
+                    ),
+                    "server": server_name,
+                }
+            )
+    severity_rank = {"critical": 0, "warn": 1}
+    issues.sort(
+        key=lambda item: (severity_rank.get(item["severity"], 9), item["server"], item["category"])
+    )
 
     return {
         "health_issues": issues,
         "capacity_summary": capacity,
+        "raw_capacity_summary": raw_capacity_summary,
         "capacity_popup_html": popup_html,
         "pools": pools,
     }
