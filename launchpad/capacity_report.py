@@ -385,14 +385,17 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     body.hide-capacity-details .capacity-detail-section {
       display: none;
     }
-    body.hide-pool-storage .capacity-pools-wrap {
-      display: none;
-    }
     body.hide-raw-capacity .capacity-raw-wrap {
       display: none;
     }
     .capacity-pools-wrap {
       margin-top: 8px;
+      display: none;
+    }
+    body.show-pools-ibm .site-block[data-pool-family="ibm"] .capacity-pools-wrap,
+    body.show-pools-hpe .site-block[data-pool-family="hpe"] .capacity-pools-wrap,
+    body.show-pools-dell .site-block[data-pool-family="dell"] .capacity-pools-wrap {
+      display: block;
     }
     .capacity-pool-block {
       margin-top: 20px;
@@ -503,9 +506,17 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
               <input type="checkbox" id="one-page-toggle" checked>
               One site per page
             </label>
-            <label class="toggle-row" for="show-pools-toggle" title="HPE CPGs and IBM pools">
-              <input type="checkbox" id="show-pools-toggle" checked>
-              Include CPG / pools
+            <label class="toggle-row" for="show-pools-ibm-toggle" title="Show IBM mdiskgrp / pool blocks on this page and print.">
+              <input type="checkbox" id="show-pools-ibm-toggle">
+              Show IBM pools
+            </label>
+            <label class="toggle-row" for="show-pools-hpe-toggle" title="Show HPE CPG / pool blocks on this page and print.">
+              <input type="checkbox" id="show-pools-hpe-toggle">
+              Show HPE CPGs / pools
+            </label>
+            <label class="toggle-row" for="show-pools-dell-toggle" title="Show Dell pool blocks on this page and print.">
+              <input type="checkbox" id="show-pools-dell-toggle">
+              Show Dell pools
             </label>
             <label class="toggle-row" for="show-raw-toggle">
               <input type="checkbox" id="show-raw-toggle">
@@ -558,7 +569,9 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const printMetaEl = document.getElementById("print-meta");
     const showDetailsToggle = document.getElementById("show-details-toggle");
     const onePageToggle = document.getElementById("one-page-toggle");
-    const showPoolsToggle = document.getElementById("show-pools-toggle");
+    const showPoolsIbmToggle = document.getElementById("show-pools-ibm-toggle");
+    const showPoolsHpeToggle = document.getElementById("show-pools-hpe-toggle");
+    const showPoolsDellToggle = document.getElementById("show-pools-dell-toggle");
     const showRawToggle = document.getElementById("show-raw-toggle");
     const showTitleToggle = document.getElementById("show-title-toggle");
     const includeOffToggle = document.getElementById("include-off-toggle");
@@ -574,7 +587,9 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const reportSubtitleInput = document.getElementById("report-subtitle-input");
     const DETAILS_PREF_KEY = "launchpad.capacityReport.showDetails";
     const ONE_PAGE_PREF_KEY = "launchpad.capacityReport.oneSitePerPage";
-    const POOLS_PREF_KEY = "launchpad.capacityReport.showPools";
+    const POOLS_IBM_PREF_KEY = "launchpad.capacityReport.showPoolsIbm";
+    const POOLS_HPE_PREF_KEY = "launchpad.capacityReport.showPoolsHpe";
+    const POOLS_DELL_PREF_KEY = "launchpad.capacityReport.showPoolsDell";
     const RAW_PREF_KEY = "launchpad.capacityReport.showRaw";
     const TITLE_PREF_KEY = "launchpad.capacityReport.title";
     const SUBTITLE_PREF_KEY = "launchpad.capacityReport.subtitle";
@@ -973,16 +988,21 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
-    function applyPoolStorageVisibility(showPools) {
-      document.body.classList.toggle("hide-pool-storage", !showPools);
-      if (showPoolsToggle) {
-        showPoolsToggle.checked = showPools;
-      }
+    function applyVendorPoolVisibility() {
+      const ibm = showPoolsIbmToggle ? showPoolsIbmToggle.checked : false;
+      const hpe = showPoolsHpeToggle ? showPoolsHpeToggle.checked : false;
+      const dell = showPoolsDellToggle ? showPoolsDellToggle.checked : false;
+      document.body.classList.toggle("show-pools-ibm", ibm);
+      document.body.classList.toggle("show-pools-hpe", hpe);
+      document.body.classList.toggle("show-pools-dell", dell);
       try {
-        localStorage.setItem(POOLS_PREF_KEY, showPools ? "1" : "0");
+        localStorage.setItem(POOLS_IBM_PREF_KEY, ibm ? "1" : "0");
+        localStorage.setItem(POOLS_HPE_PREF_KEY, hpe ? "1" : "0");
+        localStorage.setItem(POOLS_DELL_PREF_KEY, dell ? "1" : "0");
       } catch (_err) {
         /* ignore storage errors */
       }
+      updateViewOptionsButton();
     }
 
     function applyRawCapacityVisibility(showRaw) {
@@ -1029,20 +1049,21 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       }
     }
 
-    function initPoolStorageToggle() {
-      let showPools = true;
-      try {
-        const saved = localStorage.getItem(POOLS_PREF_KEY);
-        if (saved === "0") showPools = false;
-      } catch (_err) {
-        /* ignore storage errors */
-      }
-      applyPoolStorageVisibility(showPools);
-      if (showPoolsToggle) {
-        showPoolsToggle.addEventListener("change", () => {
-          applyPoolStorageVisibility(showPoolsToggle.checked);
-        });
-      }
+    function initVendorPoolToggles() {
+      const load = (key) => {
+        try {
+          return localStorage.getItem(key) === "1";
+        } catch (_err) {
+          return false;
+        }
+      };
+      if (showPoolsIbmToggle) showPoolsIbmToggle.checked = load(POOLS_IBM_PREF_KEY);
+      if (showPoolsHpeToggle) showPoolsHpeToggle.checked = load(POOLS_HPE_PREF_KEY);
+      if (showPoolsDellToggle) showPoolsDellToggle.checked = load(POOLS_DELL_PREF_KEY);
+      applyVendorPoolVisibility();
+      [showPoolsIbmToggle, showPoolsHpeToggle, showPoolsDellToggle].forEach((el) => {
+        if (el) el.addEventListener("change", applyVendorPoolVisibility);
+      });
     }
 
     function initRawCapacityToggle() {
@@ -1184,6 +1205,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         ? `Last updated: ${card.updated_at}`
         : "Not refreshed yet";
       const monitorOn = isMonitorOn(card.id);
+      const poolFamily = String(card.pool_family || "").toLowerCase();
       const dellFamily = isDellReportFamily(card);
       const dellIncludeOn = isDellIncludeOn(card.id);
       const offClass = monitorOn ? "" : " monitor-off";
@@ -1216,7 +1238,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
             </label>`
         : "";
       return `
-        <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}${alertClass}" data-id="${card.id}">
+        <section class="site-block${card.error && !card.capacity_popup_html ? " fail" : ""}${offClass}${alertClass}" data-id="${card.id}" data-pool-family="${escapeHtml(poolFamily)}">
           <div class="site-head">
             <input
               type="text"
@@ -1307,12 +1329,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Excel workbook…";
       try {
         const includeOff = includeOffToggle ? includeOffToggle.checked : false;
-        const includePools = showPoolsToggle ? showPoolsToggle.checked : true;
         const showRaw = showRawToggle ? showRawToggle.checked : false;
         const siteId = selectedCapacitySiteId();
         let exportUrl =
           `/api/capacity-export?include_off=${includeOff ? 1 : 0}` +
-          `&include_pools=${includePools ? 1 : 0}` +
+          `&include_pools=1` +
           `&show_raw=${showRaw ? 1 : 0}&open=1`;
         if (siteId != null) {
           exportUrl += `&card_id=${siteId}`;
@@ -1354,12 +1375,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       if (refreshStatusEl) refreshStatusEl.textContent = "Building Dell Report workbook…";
       try {
         const includeOff = includeOffToggle ? includeOffToggle.checked : false;
-        const includePools = showPoolsToggle ? showPoolsToggle.checked : true;
         const showRaw = showRawToggle ? showRawToggle.checked : false;
         const siteId = selectedCapacitySiteId();
         let exportUrl =
           `/api/dell-report-export?include_off=${includeOff ? 1 : 0}` +
-          `&include_pools=${includePools ? 1 : 0}` +
+          `&include_pools=1` +
           `&show_raw=${showRaw ? 1 : 0}&open=1`;
         if (siteId != null) {
           exportUrl += `&card_id=${siteId}`;
@@ -1415,9 +1435,8 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       const section = document.querySelector(`.site-block[data-id="${cardId}"]`);
       if (section) section.classList.add("loading");
       try {
-        const includePools = showPoolsToggle ? showPoolsToggle.checked : true;
         const res = await fetch(
-          `/api/refresh/${cardId}?focus=capacity&include_pools=${includePools ? 1 : 0}`,
+          `/api/refresh/${cardId}?focus=capacity&include_pools=1`,
           { method: "POST" }
         );
         const card = await res.json();
@@ -1588,7 +1607,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
 
     initDetailsToggle();
     initPageLayoutToggle();
-    initPoolStorageToggle();
+    initVendorPoolToggles();
     initRawCapacityToggle();
     loadSiteNameOverrides();
     initReportHeader();

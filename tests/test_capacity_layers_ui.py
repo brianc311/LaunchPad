@@ -11,11 +11,21 @@ from launchpad.health_server import HealthCard, HealthServer, _HealthHandler
 
 def test_capacity_report_has_pool_and_raw_toggles():
     html = CAPACITY_REPORT_HTML
-    assert 'id="show-pools-toggle"' in html
-    assert "Include CPG / pools" in html
+    assert 'id="show-pools-toggle"' not in html
+    assert "Include CPG / pools" not in html
+    assert 'id="show-pools-ibm-toggle"' in html
+    assert 'id="show-pools-hpe-toggle"' in html
+    assert 'id="show-pools-dell-toggle"' in html
+    assert "Show IBM pools" in html
+    assert "Show HPE CPGs / pools" in html
+    assert "Show Dell pools" in html
+    assert "launchpad.capacityReport.showPoolsIbm" in html
+    assert "launchpad.capacityReport.showPoolsHpe" in html
+    assert "launchpad.capacityReport.showPoolsDell" in html
+    assert "show-pools-ibm" in html
+    assert "data-pool-family" in html
     assert 'id="show-raw-toggle"' in html
     assert "Show raw capacity" in html
-    assert "launchpad.capacityReport.showPools" in html
     assert "launchpad.capacityReport.showRaw" in html
     assert "hide-raw-capacity" in html
     assert "include_pools=" in html
@@ -24,9 +34,10 @@ def test_capacity_report_has_pool_and_raw_toggles():
 
 def test_capacity_report_refresh_and_export_pass_include_pools():
     html = CAPACITY_REPORT_HTML
-    assert "include_pools=${showPoolsToggle.checked ? 1 : 0}" in html or (
-        "include_pools=" in html and "showPoolsToggle" in html
-    )
+    assert "showPoolsToggle" not in html
+    assert "`&include_pools=1` +" in html
+    assert html.count("`&include_pools=1` +") == 2
+    assert "`/api/refresh/${cardId}?focus=capacity&include_pools=1`" in html
     assert "/api/capacity-export" in html
     assert "show_raw=" in html
 
