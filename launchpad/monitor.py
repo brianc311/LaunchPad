@@ -200,6 +200,17 @@ def open_fc_wwpn_report_for_cards(
     return server.open_fc_wwpn_report_once()
 
 
+def open_site_lookup_for_cards(entries: list[HealthDashboardEntry]) -> str:
+    if not entries:
+        raise ValueError("No SSH cards with credentials to monitor.")
+
+    server = get_health_server()
+    server.ensure_running()
+    for entry in entries:
+        _register_entry(server, entry)
+    return server.open_site_lookup()
+
+
 def get_monitor_states() -> dict[int, bool]:
     server = get_health_server()
     server.ensure_running()

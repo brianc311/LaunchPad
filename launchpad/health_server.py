@@ -116,6 +116,7 @@ from launchpad.flashsystem_fc import (
     parse_fabric_logins,
     parse_fc_hosts,
     parse_host_lun_maps,
+    parse_lsconsistgrp,
     parse_lsvdisk_volumes,
 )
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
@@ -150,6 +151,8 @@ from launchpad.lun_builder_data import (
 )
 from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
+from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
+from launchpad.site_lookup_data import payload_from_live
 from launchpad.lun_builder_export import (
     export_lun_build_csv_zip,
     export_lun_build_xlsx,
@@ -227,6 +230,7 @@ class HealthCard:
                 self.device_profile, site_name=self.name
             ),
             "model": model,
+            "serial_number": self.serial_number,
             "category": self.category,
             "command_mode": bool(
                 resolve_card_commands(
@@ -2169,6 +2173,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == SYSTEM_CONNECTIVITY_PATH:
             self._send_html(SYSTEM_CONNECTIVITY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == SITE_LOOKUP_PATH:
+            self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
@@ -3076,6 +3083,32 @@ class _HealthHandler(BaseHTTPRequestHandler):
             count = server.sync_from_app()
             cards = server.list_cards(allow_sync=False)
             self._send_json({"synced": count, "total": len(cards)})
+            return
+        if path == "/api/site-lookup/refresh":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            try:
+                result = server.refresh_site_lookup(card_id)
+            except KeyError:
+                self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
+                return
+            except (RuntimeError, OSError) as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            self._send_json(result)
             return
         if path == "/api/monitor":
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -6127,6 +6160,10 @@ class HealthServer:
     def system_connectivity_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{SYSTEM_CONNECTIVITY_PATH}"
 
+    @property
+    def site_lookup_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{SITE_LOOKUP_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -6269,6 +6306,81 @@ class HealthServer:
         if (focus or "").strip().lower() == "capacity" and error is None:
             self._capture_dell_snapshot_best_effort(card)
         return card
+
+    def refresh_site_lookup(self, card_id: int) -> dict:
+        cid = int(card_id)
+        with self._lock:
+            if cid not in self._cards:
+                raise KeyError(cid)
+
+        try:
+            card = self.refresh_card(cid)
+        except KeyError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        results = list(card.command_results or [])
+        has_successful_command = any(not item.get("error") for item in results)
+        if card.error and not card.metrics and not has_successful_command:
+            raise RuntimeError(card.error)
+
+        try:
+            meta = card.to_api()
+            hosts = list(meta.get("fc_hosts") or [])
+            maps = list(meta.get("fc_mappings") or [])
+            pools = list(meta.get("pools") or []) or pool_capacity_from_commands(results)
+
+            volumes: list[dict] = []
+            for item in results:
+                command = str(item.get("command") or "")
+                if (
+                    "lsvdisk" in command
+                    and "lshostvdiskmap" not in command
+                    and "lsvdiskhostmap" not in command
+                ):
+                    volumes = parse_lsvdisk_volumes(str(item.get("output") or ""))
+                    break
+            if not hosts:
+                for item in results:
+                    command = str(item.get("command") or "")
+                    if "lshost" in command and "vdisk" not in command:
+                        hosts = parse_fc_hosts(str(item.get("output") or ""))
+                        break
+            if not maps:
+                for item in results:
+                    command = str(item.get("command") or "")
+                    if (
+                        "lshostvdiskmap" in command
+                        or "lsvdiskhostmap" in command
+                    ):
+                        maps = parse_host_lun_maps(str(item.get("output") or ""))
+                        break
+
+            consist_groups: list[dict] = []
+            if card.device_profile in SVC_PROFILES:
+                try:
+                    output = self._lun_run_command(card)(
+                        "svcinfo lsconsistgrp -delim :"
+                    )
+                    consist_groups = parse_lsconsistgrp(output)
+                except Exception:
+                    consist_groups = []
+
+            return payload_from_live(
+                card=meta,
+                hosts=hosts,
+                volumes=volumes,
+                maps=maps,
+                consist_groups=consist_groups,
+                pools=pools,
+                contingency_groups=self.get_contingency_groups(),
+                refreshed_at=datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
 
     def update_card_live_data(
         self,
@@ -6647,6 +6759,13 @@ class HealthServer:
         self._fc_browser_opened = True
         _log(f"Opened FC WWPN report in browser: {self.fc_wwpn_report_url}")
         return self.fc_wwpn_report_url
+
+    def open_site_lookup(self) -> str:
+        """Open Site Lookup in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.site_lookup_url)
+        _log(f"Opened Site Lookup in browser: {self.site_lookup_url}")
+        return self.site_lookup_url
 
     def open_contingency_groups(self) -> str:
         """Open the contingency groups reference page in the default browser."""
