@@ -34,6 +34,9 @@ def test_page_has_firmware_tab_after_ntp():
     assert "Admin Firmware catalog" in html
     assert 'id="sc-panel-firmware"' in html
     assert 'id="sc-firmware-body"' in html
+    assert "behind-count" in html
+    assert "behind_versions" in html
+    assert "renderBehindCell" in html
     compact = html.replace(" ", "")
     assert '"firmware"' in compact and "TOPICS" in compact
     assert compact.index('"ntp"') < compact.index('"firmware"')

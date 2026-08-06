@@ -3,6 +3,7 @@ from launchpad.firmware_catalog import (
     latest_in_catalog,
     normalize_catalog,
     versions_behind,
+    versions_behind_list,
 )
 
 
@@ -13,6 +14,14 @@ def test_versions_behind_counts_entries_after_current():
     assert versions_behind("8.7.0", catalog) == "unknown"
     assert versions_behind("8.6.0", []) == "unknown"
     assert versions_behind("", catalog) == "unknown"
+
+
+def test_versions_behind_list_returns_entries_after_current():
+    catalog = ["8.5.0", "8.6.0", "8.6.1", "8.6.2"]
+    assert versions_behind_list("8.6.0", catalog) == ["8.6.1", "8.6.2"]
+    assert versions_behind_list("8.6.2", catalog) == []
+    assert versions_behind_list("8.7.0", catalog) == []
+    assert versions_behind_list("", catalog) == []
 
 
 def test_latest_in_catalog():

@@ -77,15 +77,29 @@ def latest_in_catalog(versions: list[str]) -> str:
     return versions[-1] if versions else ""
 
 
+def versions_behind_list(current: str, versions: list[str]) -> list[str]:
+    """Return catalog entries strictly after ``current`` (oldest→newest).
+
+    Empty when Current is missing from the catalog, Current is blank, or the
+    catalog is empty — same cases where ``versions_behind`` returns ``unknown``.
+    """
+    cur = str(current or "").strip()
+    if not cur or not versions:
+        return []
+    try:
+        idx = versions.index(cur)
+    except ValueError:
+        return []
+    return list(versions[idx + 1 :])
+
+
 def versions_behind(current: str, versions: list[str]) -> str:
     cur = str(current or "").strip()
     if not cur or not versions:
         return "unknown"
-    try:
-        idx = versions.index(cur)
-    except ValueError:
+    if cur not in versions:
         return "unknown"
-    return str(len(versions) - idx - 1)
+    return str(len(versions_behind_list(cur, versions)))
 
 
 def load_firmware_auto_add(db) -> bool:

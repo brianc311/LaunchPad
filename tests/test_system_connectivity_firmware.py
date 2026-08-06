@@ -58,6 +58,7 @@ def test_enrich_firmware_row_behind_count():
     assert out["current"] == "8.6.0"
     assert out["latest"] == "8.6.1"
     assert out["versions_behind"] == "1"
+    assert out["behind_versions"] == ["8.6.1"]
 
 
 def test_enrich_firmware_unknown_when_current_missing_from_catalog():
@@ -68,6 +69,7 @@ def test_enrich_firmware_unknown_when_current_missing_from_catalog():
         row, current="9.0.0", catalog=["8.5.0", "8.6.0"], configured="yes"
     )
     assert out["versions_behind"] == "unknown"
+    assert out["behind_versions"] == []
     assert out["latest"] == "8.6.0"
 
 

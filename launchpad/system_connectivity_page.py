@@ -82,6 +82,38 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
     .status { color: var(--muted); font-size: 0.9rem; margin-top: 8px; }
     .errors { color: var(--danger); font-size: 0.88rem; margin-top: 8px; white-space: pre-wrap; }
     .footer { color: var(--muted); font-size: 0.82rem; margin-top: 20px; }
+    .behind-count {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 1.5rem;
+      cursor: help;
+      border-bottom: 1px dotted var(--muted);
+    }
+    .behind-count[data-tip]:hover::after,
+    .behind-count[data-tip]:focus-visible::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 8px);
+      transform: translateX(-50%);
+      z-index: 30;
+      min-width: 160px;
+      max-width: 320px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f141d;
+      color: var(--text);
+      font-size: 0.78rem;
+      font-weight: 500;
+      line-height: 1.35;
+      white-space: pre-line;
+      text-align: left;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+    }
     select {
       background: #0f141d; color: var(--text); border: 1px solid var(--border);
       border-radius: 10px; height: 34px; padding: 0 10px; font: inherit;
@@ -188,7 +220,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
 
     <div class="section" id="sc-panel-firmware" data-panel="firmware" hidden>
       <h2>Firmware</h2>
-      <p class="hint">Versions behind uses the Admin Firmware catalog for this device profile. If Current is not in the catalog, behind shows unknown.</p>
+      <p class="hint">Versions behind uses the Admin Firmware catalog for this device profile (exact string match on Current). If Current is not in the catalog, behind shows <strong>unknown</strong> — common for HPE until you add matching release strings under Admin → Firmware catalog. Hover a numeric behind count to see the catalog versions still ahead.</p>
       <p class="hint"><a href="https://www.ibm.com/support/pages/node/5692850" target="_blank" rel="noopener noreferrer">IBM FlashSystem software upgrade matrix</a>
         ·
         <a href="https://www.hpe.com/storage/spock" target="_blank" rel="noopener noreferrer">HPE software upgrade matrix (SPOCK)</a></p>
@@ -301,6 +333,43 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
       return 9;
     }
 
+    function behindVersionsTip(row) {
+      const behind = String(row.versions_behind || "").trim();
+      const listed = Array.isArray(row.behind_versions)
+        ? row.behind_versions.map((v) => String(v || "").trim()).filter(Boolean)
+        : [];
+      if (behind === "unknown") {
+        return "Current is not in the Admin Firmware catalog for this profile (exact match required).";
+      }
+      if (behind === "0") {
+        return "Current matches the latest catalog entry.";
+      }
+      if (listed.length) {
+        return "Versions ahead in catalog:\\n" + listed.join("\\n");
+      }
+      if (behind && behind !== "0") {
+        return behind + " catalog release(s) after Current.";
+      }
+      return "";
+    }
+
+    function renderBehindCell(row) {
+      const label = escapeHtml(row.versions_behind || "");
+      const tip = behindVersionsTip(row);
+      if (!tip) {
+        return "<td>" + label + "</td>";
+      }
+      return (
+        '<td><span class="behind-count" tabindex="0" data-tip="' +
+        escapeHtml(tip) +
+        '" title="' +
+        escapeHtml(tip) +
+        '">' +
+        label +
+        "</span></td>"
+      );
+    }
+
     function renderTopic(topic, rows) {
       const bodyEl = bodies[topic];
       if (!bodyEl) return;
@@ -320,7 +389,7 @@ SYSTEM_CONNECTIVITY_HTML = """<!DOCTYPE html>
           cells +=
             "<td>" + escapeHtml(row.current || "") + "</td>"
             + "<td>" + escapeHtml(row.latest || "") + "</td>"
-            + "<td>" + escapeHtml(row.versions_behind || "") + "</td>";
+            + renderBehindCell(row);
         } else if (topic === "license_key") {
           cells +=
             "<td>" + escapeHtml(row.key_generation_date || "") + "</td>"
