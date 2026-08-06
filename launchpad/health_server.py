@@ -152,7 +152,7 @@ from launchpad.lun_builder_data import (
 from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
-from launchpad.site_lookup_data import payload_from_live
+from launchpad.site_lookup_data import payload_from_card_cache, payload_from_live
 from launchpad.lun_builder_export import (
     export_lun_build_csv_zip,
     export_lun_build_xlsx,
@@ -2356,6 +2356,21 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/cards":
             self._send_json(server.list_cards())
+            return
+        if path == "/api/site-lookup/cache":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            try:
+                card_id = int(raw_card_id)
+            except ValueError:
+                self._send_json({"error": "card_id must be an integer"}, status=400)
+                return
+            try:
+                payload = server.site_lookup_cache(card_id)
+            except KeyError:
+                self._send_json({"error": f"Unknown card id {card_id}"}, status=404)
+                return
+            self._send_json(payload)
             return
         if path == "/api/sync":
             count = server.sync_from_app()
@@ -6381,6 +6396,18 @@ class HealthServer:
             )
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
+
+    def site_lookup_cache(self, card_id: int) -> dict:
+        cid = int(card_id)
+        with self._lock:
+            card = self._cards.get(cid)
+            if card is None:
+                raise KeyError(cid)
+            meta = card.to_api()
+        return payload_from_card_cache(
+            meta,
+            contingency_groups=self.get_contingency_groups(),
+        )
 
     def update_card_live_data(
         self,

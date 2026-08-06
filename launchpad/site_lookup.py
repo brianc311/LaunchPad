@@ -385,7 +385,11 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
           String(mapping.host_name || mapping.name || "") === String(name)
         )));
       });
-      if (!rows.length) return emptyMessage(false);
+      if (!rows.length) {
+        return emptyMessage(
+          data.hosts.length === 0 && !profileSupportsConsistencyGroups(data.card)
+        );
+      }
       return '<div class="table-wrap"><table><thead><tr>'
         + "<th>Host</th><th>Status</th><th>Type</th><th>Ports</th><th>Protocol</th>"
         + "</tr></thead><tbody>" + rows.map((host) => (
@@ -404,7 +408,11 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
           String(mapping.vdisk_name || mapping.volume_name || "") === String(name)
         )));
       });
-      if (!rows.length) return emptyMessage(false);
+      if (!rows.length) {
+        return emptyMessage(
+          data.volumes.length === 0 && !profileSupportsConsistencyGroups(data.card)
+        );
+      }
       return '<div class="table-wrap"><table><thead><tr>'
         + "<th>Volume</th><th>Status</th><th>Capacity</th><th>Pool</th><th>UID</th>"
         + "</tr></thead><tbody>" + rows.map((volume) => (
@@ -419,7 +427,13 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     function renderConsistencyGroups(data) {
       const groups = data.consistency_groups.filter((group) => matchesFilter(group));
       const mappings = data.mappings.filter((mapping) => matchesFilter(mapping));
-      if (!groups.length && !mappings.length) return emptyMessage(false);
+      if (!groups.length && !mappings.length) {
+        return emptyMessage(
+          data.consistency_groups.length === 0
+          && data.mappings.length === 0
+          && !profileSupportsConsistencyGroups(data.card)
+        );
+      }
       let html = "";
       if (groups.length) {
         html += '<div class="table-wrap"><table><thead><tr>'
@@ -536,8 +550,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       }
     }
 
-    function selectCard(card) {
+    async function selectCard(card) {
       refreshGeneration += 1;
+      const gen = refreshGeneration;
       currentCard = card;
       currentPayload = cachePayload(card);
       activeTab = "hosts";
@@ -547,6 +562,18 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       hideSuggestions();
       setError("");
       renderPayload();
+      try {
+        const response = await fetch(
+          "/api/site-lookup/cache?card_id=" + encodeURIComponent(card.id)
+        );
+        const payload = await response.json().catch(() => ({}));
+        if (gen !== refreshGeneration) return;
+        if (!response.ok || payload.error) return;
+        currentPayload = normalizePayload(payload);
+        renderPayload();
+      } catch (_error) {
+        // The card-list cache remains usable if the richer cache endpoint fails.
+      }
     }
 
     function lookup() {

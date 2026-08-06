@@ -98,6 +98,60 @@ def test_refresh_site_lookup_missing_card():
         pass
 
 
+def test_site_lookup_cache_includes_contingency_group_fallback(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(name="site-a")
+    monkeypatch.setattr(
+        server,
+        "get_contingency_groups",
+        lambda: [
+            {
+                "id": "cg-1",
+                "name": "site-a",
+                "location": "DC1",
+                "storage_hint": "site-a",
+                "hosts": [],
+                "volumes": [{"name": "vol-a"}],
+                "maps": [],
+            }
+        ],
+    )
+
+    payload = server.site_lookup_cache(1)
+
+    assert payload["source"] == "cache"
+    assert payload["consistency_groups"][0]["id"] == "cg-1"
+    assert payload["volumes"][0]["name"] == "vol-a"
+
+
+def test_site_lookup_cache_get_maps_errors(monkeypatch):
+    class FakeServer:
+        def site_lookup_cache(self, card_id):
+            if card_id == 404:
+                raise KeyError(card_id)
+            return {"card": {"id": card_id}, "source": "cache"}
+
+    monkeypatch.setattr(health_server_module, "get_health_server", lambda: FakeServer())
+
+    def get(path):
+        handler = _HealthHandler.__new__(_HealthHandler)
+        handler.path = path
+        sent = {}
+        handler._send_json = lambda payload, status=200: sent.update(
+            payload=payload, status=status
+        )
+        handler.do_GET()
+        return sent
+
+    assert get("/api/site-lookup/cache")["status"] == 400
+    assert get("/api/site-lookup/cache?card_id=nope")["status"] == 400
+    assert get("/api/site-lookup/cache?card_id=404")["status"] == 404
+    assert get("/api/site-lookup/cache?card_id=1") == {
+        "payload": {"card": {"id": 1}, "source": "cache"},
+        "status": 200,
+    }
+
+
 def test_site_lookup_refresh_post_maps_errors(monkeypatch):
     class FakeServer:
         def refresh_site_lookup(self, card_id):
