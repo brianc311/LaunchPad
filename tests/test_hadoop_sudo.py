@@ -32,6 +32,11 @@ def test_ensure_sudo_dash_s_inserts_after_option_args():
     assert ensure_sudo_dash_s("sudo --user=root id") == "sudo -S --user=root id"
 
 
+def test_ensure_sudo_dash_s_respects_double_dash():
+    assert ensure_sudo_dash_s("sudo -- -S") == "sudo -S -- -S"
+    assert ensure_sudo_dash_s("sudo -S -- -S") == "sudo -S -- -S"
+
+
 def test_prepare_feeds_stdin_or_errors():
     cmd, payload = prepare_hadoop_sudo_command("sudo shutdown -h now", sudo_password="secret")
     assert cmd == "sudo -S shutdown -h now"

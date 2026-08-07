@@ -61,6 +61,8 @@ def _sudo_has_dash_s(command: str) -> bool:
         else:
             token = rest[:space_idx]
             rest = rest[space_idx + 1 :].lstrip()
+        if token == "--":
+            break
         if _token_has_dash_s(token):
             return True
         if _sudo_option_consumes_next_token(token) and rest:
