@@ -95,6 +95,13 @@ from launchpad.host_volume_health_page import (
     HOST_VOLUME_HEALTH_HTML,
     HOST_VOLUME_HEALTH_PATH,
 )
+from launchpad.host_power import HOST_POWER_HTML, HOST_POWER_PATH
+from launchpad.host_power_ops import (
+    build_host_power_preview,
+    extract_power_steps,
+    require_host_power_confirm,
+    run_host_power_for_card,
+)
 from launchpad.snapcopy_summary_page import (
     SNAPCOPY_SUMMARY_HTML,
     SNAPCOPY_SUMMARY_PATH,
@@ -2232,6 +2239,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == ANSIBLE_PAD_PATH:
             self._send_html(ANSIBLE_PAD_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == HOST_POWER_PATH:
+            self._send_html(HOST_POWER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == "/api/ansible-pad/settings":
             try:
                 self._send_json(server.get_ansible_pad_settings())
@@ -2249,6 +2259,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 content_type="application/zip",
                 filename="LaunchPad_Ansible_Pad.zip",
             )
+            return
+        if path == "/api/host-power/cards":
+            self._send_json({"cards": server.host_power_cards()})
             return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
@@ -3224,6 +3237,40 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=400)
                 return
             except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            self._send_json(result)
+            return
+        if path in {"/api/host-power/preview", "/api/host-power/run"}:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            card_ids = payload.get("card_ids") or []
+            if not isinstance(card_ids, list):
+                self._send_json({"error": "card_ids must be a list"}, status=400)
+                return
+            try:
+                if path == "/api/host-power/preview":
+                    result = server.host_power_preview(card_ids)
+                else:
+                    result = server.host_power_run(
+                        card_ids,
+                        confirm=payload.get("confirm") is True,
+                    )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except (RuntimeError, OSError) as exc:
                 self._send_json({"error": str(exc)}, status=502)
                 return
             except Exception as exc:
@@ -4732,6 +4779,76 @@ class HealthServer:
             password=card.password,
             timeout=120,
         )
+
+    @staticmethod
+    def _host_power_card_payload(card: HealthCard) -> dict[str, Any]:
+        return {
+            "id": card.card_id,
+            "name": card.name,
+            "host": card.host,
+            "commands": resolve_card_commands(
+                card.device_profile,
+                card.custom_commands,
+                instance_id=card.serial_number,
+            ),
+        }
+
+    def _host_power_cards_for_ids(self, card_ids: list[int]) -> list[HealthCard]:
+        selected_ids = set(card_ids)
+        with self._lock:
+            cards = list(self._cards.values())
+        return [
+            card
+            for card in cards
+            if card.card_id in selected_ids
+            and card.device_profile == "hadoop_linux"
+            and str(card.host or "").strip()
+        ]
+
+    def host_power_cards(self) -> list[dict[str, Any]]:
+        with self._lock:
+            cards = list(self._cards.values())
+        return [
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+                "device_profile": card.device_profile,
+            }
+            for card in cards
+            if card.device_profile == "hadoop_linux"
+            and str(card.host or "").strip()
+        ]
+
+    def host_power_preview(self, card_ids: list[int]) -> dict[str, Any]:
+        cards = self._host_power_cards_for_ids(card_ids)
+        return build_host_power_preview(
+            [self._host_power_card_payload(card) for card in cards]
+        )
+
+    def host_power_run(
+        self,
+        card_ids: list[int],
+        *,
+        confirm: bool,
+    ) -> dict[str, Any]:
+        require_host_power_confirm(confirm)
+        hosts: list[dict[str, Any]] = []
+        for card in self._host_power_cards_for_ids(card_ids):
+            payload = self._host_power_card_payload(card)
+            result = run_host_power_for_card(
+                steps=extract_power_steps(payload["commands"]),
+                run_command=self._snap_run_command(card),
+            )
+            hosts.append(
+                {
+                    "card_id": card.card_id,
+                    "name": card.name,
+                    "host": card.host,
+                    **result,
+                }
+            )
+        return {"ok": all(host["ok"] for host in hosts), "hosts": hosts}
 
     def generate_contingency_snaps(self, group_id: str) -> dict[str, Any]:
         group = self._contingency_group_by_id(group_id)
@@ -6610,6 +6727,10 @@ class HealthServer:
     def ansible_pad_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{ANSIBLE_PAD_PATH}"
 
+    @property
+    def host_power_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{HOST_POWER_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -7253,6 +7374,16 @@ class HealthServer:
         webbrowser.open(self.ansible_pad_url)
         _log(f"Opened Ansible Pad in browser: {self.ansible_pad_url}")
         return self.ansible_pad_url
+
+    def open_host_power(self, card_id: int | None = None) -> str:
+        """Open Host Power in the default browser."""
+        self.ensure_running()
+        url = self.host_power_url
+        if card_id is not None:
+            url = f"{url}?card_id={card_id}"
+        webbrowser.open(url)
+        _log(f"Opened Host Power in browser: {url}")
+        return url
 
     def open_contingency_groups(self) -> str:
         """Open the contingency groups reference page in the default browser."""
