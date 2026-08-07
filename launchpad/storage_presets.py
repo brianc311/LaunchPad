@@ -602,6 +602,24 @@ def preset_command_text(profile: str) -> str:
     return f"{header}{body}" if header else body
 
 
+def device_profile_menu_keys() -> list[str]:
+    """Profile keys for Admin dropdown: General first, then A–Z by label."""
+    return [""] + sorted(
+        (key for key in DEVICE_PROFILES if key),
+        key=lambda key: DEVICE_PROFILES[key].lower(),
+    )
+
+
+def device_profile_menu_labels() -> list[str]:
+    """Labels aligned 1:1 with device_profile_menu_keys()."""
+    return [DEVICE_PROFILES[key] for key in device_profile_menu_keys()]
+
+
+def device_profile_label_to_key() -> dict[str, str]:
+    """Map display label → profile key (must not zip differently sorted lists)."""
+    return {DEVICE_PROFILES[key]: key for key in device_profile_menu_keys()}
+
+
 def is_storage_profile(profile: str) -> bool:
     return profile in STORAGE_PROFILES
 

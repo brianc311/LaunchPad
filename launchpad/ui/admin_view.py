@@ -43,6 +43,8 @@ from launchpad.firmware_catalog_seed import recommended_firmware_seed
 from launchpad.icons import ICON_CHOICES, resolve_icon
 from launchpad.storage_presets import (
     DEVICE_PROFILES,
+    device_profile_label_to_key,
+    device_profile_menu_labels,
     is_storage_profile,
     preset_command_text,
     preset_commands_for_profile,
@@ -1224,15 +1226,9 @@ class AdminView(ctk.CTkFrame):
             row=profile_row, column=0, padx=8, pady=6, sticky="w"
         )
         self.device_profile_var = ctk.StringVar(value="")
-        profile_keys = list(DEVICE_PROFILES.keys())
-        profile_labels = [DEVICE_PROFILES[key] for key in profile_keys]
+        sorted_labels = device_profile_menu_labels()
         general = DEVICE_PROFILES[""]
-        sorted_labels = [general] + sorted(label for label in profile_labels if label != general)
-        sorted_keys = [""] + sorted(
-            (key for key in profile_keys if key),
-            key=lambda key: DEVICE_PROFILES[key].lower(),
-        )
-        self._device_profile_keys = sorted_keys
+        self._device_profile_label_to_key = device_profile_label_to_key()
         self.device_profile_menu = ctk.CTkComboBox(
             scroll,
             variable=self.device_profile_var,
@@ -1243,9 +1239,6 @@ class AdminView(ctk.CTkFrame):
             dropdown_hover_color=self.theme["border"],
         )
         self.device_profile_menu.grid(row=profile_row, column=1, padx=8, pady=6, sticky="ew")
-        self._device_profile_label_to_key = dict(
-            zip(sorted_labels, sorted_keys, strict=True)
-        )
         self.device_profile_var.set(general)
 
         ctk.CTkLabel(
