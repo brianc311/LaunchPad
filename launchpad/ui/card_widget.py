@@ -3,6 +3,11 @@ import customtkinter as ctk
 from launchpad.icons import resolve_icon
 from launchpad.ui.colors import ctk_color, normalize_color
 
+# CRIT/WARN hover tip: keep short-lived and never permanently topmost over other apps.
+CAPACITY_ALERT_TIP_MAX_MS = 4000
+CAPACITY_ALERT_TIP_WATCHDOG_MS = 200
+CAPACITY_ALERT_TIP_LEAVE_GRACE_MS = 80
+
 
 class GlowCard(ctk.CTkFrame):
     def __init__(
@@ -136,6 +141,7 @@ class GlowCard(ctk.CTkFrame):
         self._capacity_alert_tip_window = None
         self._capacity_alert_tip_after = None
         self._capacity_alert_tip_hide_after = None
+        self._capacity_alert_tip_watchdog_after = None
         self.capacity_alert_badge = ctk.CTkLabel(
             top_row,
             text="",
@@ -151,6 +157,12 @@ class GlowCard(ctk.CTkFrame):
         self.capacity_alert_badge.bind("<Enter>", self._on_capacity_alert_enter)
         self.capacity_alert_badge.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
         self.bind("<Destroy>", lambda _e: self._hide_capacity_alert_tip(), add="+")
+        try:
+            self.winfo_toplevel().bind(
+                "<FocusOut>", self._on_app_focus_out_hide_capacity_tip, add="+"
+            )
+        except Exception:
+            pass
 
         self.type_badge = ctk.CTkLabel(
             top_row,
@@ -823,14 +835,50 @@ class GlowCard(ctk.CTkFrame):
                 pass
             self._capacity_alert_tip_hide_after = None
 
+    def _cancel_capacity_alert_tip_watchdog(self) -> None:
+        watchdog = getattr(self, "_capacity_alert_tip_watchdog_after", None)
+        if watchdog:
+            try:
+                self.after_cancel(watchdog)
+            except Exception:
+                pass
+            self._capacity_alert_tip_watchdog_after = None
+
+    def _arm_capacity_alert_tip_watchdog(self) -> None:
+        """Poll pointer while tip is open — Leave alone is unreliable on Windows."""
+        self._cancel_capacity_alert_tip_watchdog()
+        self._capacity_alert_tip_watchdog_after = self.after(
+            CAPACITY_ALERT_TIP_WATCHDOG_MS, self._capacity_alert_tip_watchdog_tick
+        )
+
+    def _capacity_alert_tip_watchdog_tick(self) -> None:
+        self._capacity_alert_tip_watchdog_after = None
+        tip_window = getattr(self, "_capacity_alert_tip_window", None)
+        if tip_window is None:
+            return
+        try:
+            if not tip_window.winfo_exists():
+                self._capacity_alert_tip_window = None
+                return
+        except Exception:
+            self._capacity_alert_tip_window = None
+            return
+        if not self._pointer_over_capacity_tip_widgets():
+            self._hide_capacity_alert_tip()
+            return
+        self._arm_capacity_alert_tip_watchdog()
+
     def _schedule_hide_capacity_alert_tip(self, _event=None) -> None:
         """Defer hide so pointer can move badge → tip without killing the tip."""
         self._cancel_scheduled_hide_capacity_alert_tip()
-        self._capacity_alert_tip_hide_after = self.after(80, self._hide_capacity_alert_tip_if_away)
+        self._capacity_alert_tip_hide_after = self.after(
+            CAPACITY_ALERT_TIP_LEAVE_GRACE_MS, self._hide_capacity_alert_tip_if_away
+        )
 
     def _hide_capacity_alert_tip_if_away(self) -> None:
         self._capacity_alert_tip_hide_after = None
         if self._pointer_over_capacity_tip_widgets():
+            # Leave fired but pointer still over tip/badge — keep polling via watchdog.
             return
         self._hide_capacity_alert_tip()
 
@@ -846,13 +894,15 @@ class GlowCard(ctk.CTkFrame):
             return
         self._hide_capacity_alert_tip()
         self._capacity_alert_tip_window = ctk.CTkToplevel(self)
-        self._capacity_alert_tip_window.wm_overrideredirect(True)
-        self._capacity_alert_tip_window.attributes("-topmost", True)
+        tip_window = self._capacity_alert_tip_window
+        tip_window.wm_overrideredirect(True)
+        # Do not set -topmost: that leaves orphan tips stuck above browser/other apps.
+        tip_window.transient(self.winfo_toplevel())
         x = badge.winfo_rootx()
         y = badge.winfo_rooty() + badge.winfo_height() + 4
-        self._capacity_alert_tip_window.geometry(f"+{x}+{y}")
+        tip_window.geometry(f"+{x}+{y}")
         tip_label = ctk.CTkLabel(
-            self._capacity_alert_tip_window,
+            tip_window,
             text=text,
             font=ctk.CTkFont(size=11),
             text_color=self.theme["text"],
@@ -862,16 +912,27 @@ class GlowCard(ctk.CTkFrame):
             pady=4,
         )
         tip_label.pack()
-        # Topmost overrideredirect tips often miss Leave on Windows; defer +
-        # pointer geometry check, and bind Enter/Leave on both tip and label.
-        for widget in (self._capacity_alert_tip_window, tip_label):
+        # Overrideredirect tips often miss Leave on Windows; defer + pointer
+        # geometry check, bind Enter/Leave on tip and label, and poll.
+        for widget in (tip_window, tip_label):
             widget.bind("<Enter>", lambda _e: self._cancel_scheduled_hide_capacity_alert_tip())
             widget.bind("<Leave>", self._schedule_hide_capacity_alert_tip)
             widget.bind("<Button-1>", lambda _e: self._hide_capacity_alert_tip())
-        self._capacity_alert_tip_after = self.after(5000, self._hide_capacity_alert_tip)
+        tip_window.bind("<FocusOut>", lambda _e: self._hide_capacity_alert_tip(), add="+")
+        tip_window.bind("<Escape>", lambda _e: self._hide_capacity_alert_tip(), add="+")
+        self._capacity_alert_tip_after = self.after(
+            CAPACITY_ALERT_TIP_MAX_MS, self._hide_capacity_alert_tip
+        )
+        self._arm_capacity_alert_tip_watchdog()
+
+    def _on_app_focus_out_hide_capacity_tip(self, _event=None) -> None:
+        if getattr(self, "_capacity_alert_tip_window", None) is None:
+            return
+        self.after(0, self._hide_capacity_alert_tip)
 
     def _hide_capacity_alert_tip(self, _event=None) -> None:
         self._cancel_scheduled_hide_capacity_alert_tip()
+        self._cancel_capacity_alert_tip_watchdog()
         if getattr(self, "_capacity_alert_tip_after", None):
             try:
                 self.after_cancel(self._capacity_alert_tip_after)
@@ -885,7 +946,21 @@ class GlowCard(ctk.CTkFrame):
                     tip_window.destroy()
             except Exception:
                 pass
-            self._capacity_alert_tip_window = None
+            # Only drop the reference after destroy attempt so we never orphan
+            # a live top-level without a handle.
+            try:
+                still = tip_window.winfo_exists()
+            except Exception:
+                still = False
+            if not still:
+                self._capacity_alert_tip_window = None
+            else:
+                # Last resort: withdraw so it cannot stay visible.
+                try:
+                    tip_window.withdraw()
+                except Exception:
+                    pass
+                self._capacity_alert_tip_window = None
 
     def apply_theme(self, theme: dict) -> None:
         self.theme = theme
