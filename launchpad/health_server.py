@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 import paramiko
 
+from launchpad.ansible_pad import ANSIBLE_PAD_HTML, ANSIBLE_PAD_PATH
 from launchpad.ansible_pad_export import (
     build_ansible_pad_files,
     build_ansible_pad_zip_bytes,
@@ -227,7 +228,6 @@ from launchpad.volume_find import (
 
 DEFAULT_PORT = 18765
 PREFERRED_PORTS = (18765, 18766, 18767, 18768)
-ANSIBLE_PAD_PATH = "/ansible-pad"
 
 _ANSIBLE_PAD_SETTING_FIELDS = {
     ANSIBLE_PAD_HOST: "host",
@@ -2226,7 +2226,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == ANSIBLE_PAD_PATH:
-            self._send_html("<!doctype html><title>Ansible Pad</title><p>Ansible Pad</p>")
+            self._send_html(ANSIBLE_PAD_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == "/api/ansible-pad/settings":
             self._send_json(server.get_ansible_pad_settings())
