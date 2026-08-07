@@ -176,9 +176,17 @@ def run_ssh_command(
     command: str,
     *,
     timeout: int = COMMAND_TIMEOUT,
+    stdin_data: str | None = None,
 ) -> str:
     with password_ssh_client(host, port, username, password) as client:
-        _, stdout, stderr = client.exec_command(command, timeout=timeout)
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        if stdin_data:
+            try:
+                stdin.write(stdin_data)
+                stdin.flush()
+                stdin.channel.shutdown_write()
+            except OSError:
+                pass
         exit_status = stdout.channel.recv_exit_status()
         return _read_command_output(stdout, stderr, exit_status=exit_status)
 
@@ -193,6 +201,7 @@ def run_ssh_auth_command(
     key_path: str = "",
     key_passphrase: str = "",
     timeout: int = COMMAND_TIMEOUT,
+    stdin_data: str | None = None,
 ) -> str:
     with ssh_auth_client(
         host,
@@ -202,7 +211,14 @@ def run_ssh_auth_command(
         key_path=key_path,
         key_passphrase=key_passphrase,
     ) as client:
-        _, stdout, stderr = client.exec_command(command, timeout=timeout)
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        if stdin_data:
+            try:
+                stdin.write(stdin_data)
+                stdin.flush()
+                stdin.channel.shutdown_write()
+            except OSError:
+                pass
         exit_status = stdout.channel.recv_exit_status()
         return _read_command_output(stdout, stderr, exit_status=exit_status)
 

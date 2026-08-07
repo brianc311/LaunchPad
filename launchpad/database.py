@@ -27,6 +27,7 @@ class Card:
     key_file_path: str
     device_profile: str
     custom_commands: str
+    encrypted_sudo_password: str = ""
 
 
 class Database:
@@ -86,6 +87,10 @@ class Database:
                 ("device_profile", "ALTER TABLE cards ADD COLUMN device_profile TEXT DEFAULT ''"),
                 ("custom_commands", "ALTER TABLE cards ADD COLUMN custom_commands TEXT DEFAULT ''"),
                 ("serial_number", "ALTER TABLE cards ADD COLUMN serial_number TEXT DEFAULT ''"),
+                (
+                    "encrypted_sudo_password",
+                    "ALTER TABLE cards ADD COLUMN encrypted_sudo_password TEXT DEFAULT ''",
+                ),
             ):
                 try:
                     conn.execute(ddl)
@@ -168,10 +173,10 @@ class Database:
                 """
                 INSERT INTO cards (
                     name, card_type, host, port, serial_number, username,
-                    encrypted_password, encrypted_key_passphrase, encrypted_key, url,
+                    encrypted_password, encrypted_sudo_password, encrypted_key_passphrase, encrypted_key, url,
                     icon, category, sort_order, glow_color, key_file_path,
                     device_profile, custom_commands
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data["name"],
@@ -181,6 +186,7 @@ class Database:
                     data.get("serial_number", ""),
                     data.get("username", ""),
                     data.get("encrypted_password", ""),
+                    data.get("encrypted_sudo_password", ""),
                     data.get("encrypted_key_passphrase", ""),
                     data.get("encrypted_key", ""),
                     data.get("url", ""),
@@ -201,7 +207,7 @@ class Database:
                 """
                 UPDATE cards SET
                     name = ?, card_type = ?, host = ?, port = ?, serial_number = ?, username = ?,
-                    encrypted_password = ?, encrypted_key_passphrase = ?, encrypted_key = ?, url = ?,
+                    encrypted_password = ?, encrypted_sudo_password = ?, encrypted_key_passphrase = ?, encrypted_key = ?, url = ?,
                     icon = ?, category = ?, sort_order = ?, glow_color = ?,
                     key_file_path = ?, device_profile = ?, custom_commands = ?
                 WHERE id = ?
@@ -214,6 +220,7 @@ class Database:
                     data.get("serial_number", ""),
                     data.get("username", ""),
                     data.get("encrypted_password", ""),
+                    data.get("encrypted_sudo_password", ""),
                     data.get("encrypted_key_passphrase", ""),
                     data.get("encrypted_key", ""),
                     data.get("url", ""),
@@ -251,6 +258,7 @@ class Database:
                 "serial_number": card.serial_number,
                 "username": card.username,
                 "encrypted_password": card.encrypted_password,
+                "encrypted_sudo_password": card.encrypted_sudo_password,
                 "encrypted_key_passphrase": card.encrypted_key_passphrase,
                 "encrypted_key": card.encrypted_key,
                 "url": card.url,
@@ -281,6 +289,7 @@ class Database:
                     "serial_number": entry.get("serial_number", ""),
                     "username": entry.get("username", ""),
                     "encrypted_password": entry.get("encrypted_password", ""),
+                    "encrypted_sudo_password": entry.get("encrypted_sudo_password", ""),
                     "encrypted_key_passphrase": entry.get("encrypted_key_passphrase", ""),
                     "encrypted_key": entry.get("encrypted_key", ""),
                     "url": entry.get("url", ""),
@@ -307,6 +316,12 @@ class Database:
             serial_number=(row["serial_number"] if "serial_number" in row.keys() else "") or "",
             username=row["username"] or "",
             encrypted_password=row["encrypted_password"] or "",
+            encrypted_sudo_password=(
+                row["encrypted_sudo_password"]
+                if "encrypted_sudo_password" in row.keys()
+                else ""
+            )
+            or "",
             encrypted_key_passphrase=(
                 row["encrypted_key_passphrase"]
                 if "encrypted_key_passphrase" in row.keys()
