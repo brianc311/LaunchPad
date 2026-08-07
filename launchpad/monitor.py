@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from launchpad.health_server import get_health_server
 from launchpad.ssh_launcher import _log
-from launchpad.ssh_utils import SshMetricsAuth
+from launchpad.ssh_utils import SshMetricsAuth, resolve_sudo_password
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class HealthDashboardEntry:
     serial_number: str = ""
     category: str = ""
     url: str = ""
+    sudo_password: str = ""
 
 
 def _register_entry(server, entry: HealthDashboardEntry) -> None:
@@ -35,6 +36,7 @@ def _register_entry(server, entry: HealthDashboardEntry) -> None:
         entry.serial_number,
         entry.category,
         entry.url,
+        sudo_password=entry.sudo_password,
     )
 
 
@@ -61,6 +63,11 @@ def build_health_dashboard_entries(db, crypto_key: bytes) -> list[HealthDashboar
                 serial_number=getattr(card, "serial_number", "") or "",
                 category=card.category or "",
                 url=card.url or "",
+                sudo_password=(
+                    resolve_sudo_password(card, crypto_key)
+                    if card.device_profile == "hadoop_linux"
+                    else ""
+                ),
             )
         )
     return entries
@@ -97,6 +104,7 @@ def open_health_dashboard(
     device_profile: str = "",
     custom_commands: str = "",
     serial_number: str = "",
+    sudo_password: str = "",
 ) -> str:
     if not key_path and not password:
         raise ValueError("SSH password or key is required for health monitoring.")
@@ -115,6 +123,7 @@ def open_health_dashboard(
         device_profile,
         custom_commands,
         serial_number,
+        sudo_password=sudo_password if device_profile == "hadoop_linux" else "",
     )
     card = server.refresh_card(card_id)
     if card.error and not card.command_results and not card.metrics:

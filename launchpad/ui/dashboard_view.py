@@ -49,7 +49,12 @@ from launchpad.monitor import (
 from launchpad.ssh_commands import run_remote_command_suite
 from launchpad.ssh_launcher import _log
 from launchpad.ssh_test import probe_ssh_login_for_card
-from launchpad.ssh_utils import resolve_ssh_key, resolve_ssh_metrics_auth, ssh_stats_prereq_message
+from launchpad.ssh_utils import (
+    resolve_ssh_key,
+    resolve_ssh_metrics_auth,
+    resolve_sudo_password,
+    ssh_stats_prereq_message,
+)
 from launchpad.ui.card_widget import GlowCard
 from launchpad.ui.stats_snapshot_dialog import StatsSnapshotDialog
 from launchpad.ui.colors import normalize_color
@@ -1484,6 +1489,11 @@ class DashboardView(ctk.CTkFrame):
                 card.device_profile,
                 card.custom_commands,
                 getattr(card, "serial_number", "") or "",
+                (
+                    resolve_sudo_password(card, self.crypto_key)
+                    if card.device_profile == "hadoop_linux"
+                    else ""
+                ),
             )
         except Exception as exc:
             _log(f"Health check failed: {exc}")
@@ -1537,6 +1547,11 @@ class DashboardView(ctk.CTkFrame):
                     device_profile=card.device_profile,
                     custom_commands=card.custom_commands,
                     serial_number=getattr(card, "serial_number", "") or "",
+                    sudo_password=(
+                        resolve_sudo_password(card, self.crypto_key)
+                        if card.device_profile == "hadoop_linux"
+                        else ""
+                    ),
                 )
             )
 
@@ -1592,6 +1607,11 @@ class DashboardView(ctk.CTkFrame):
                     device_profile=card.device_profile,
                     custom_commands=card.custom_commands,
                     serial_number=getattr(card, "serial_number", "") or "",
+                    sudo_password=(
+                        resolve_sudo_password(card, self.crypto_key)
+                        if card.device_profile == "hadoop_linux"
+                        else ""
+                    ),
                 )
             )
 
@@ -1648,6 +1668,11 @@ class DashboardView(ctk.CTkFrame):
                     custom_commands=card.custom_commands,
                     serial_number=getattr(card, "serial_number", "") or "",
                     category=card.category or "",
+                    sudo_password=(
+                        resolve_sudo_password(card, self.crypto_key)
+                        if card.device_profile == "hadoop_linux"
+                        else ""
+                    ),
                 )
             )
 
@@ -1701,6 +1726,11 @@ class DashboardView(ctk.CTkFrame):
                     custom_commands=card.custom_commands,
                     serial_number=getattr(card, "serial_number", "") or "",
                     category=card.category or "",
+                    sudo_password=(
+                        resolve_sudo_password(card, self.crypto_key)
+                        if card.device_profile == "hadoop_linux"
+                        else ""
+                    ),
                 )
             )
 
@@ -1752,6 +1782,11 @@ class DashboardView(ctk.CTkFrame):
                     custom_commands=card.custom_commands,
                     serial_number=getattr(card, "serial_number", "") or "",
                     category=card.category or "",
+                    sudo_password=(
+                        resolve_sudo_password(card, self.crypto_key)
+                        if card.device_profile == "hadoop_linux"
+                        else ""
+                    ),
                 )
             )
 
@@ -1802,6 +1837,11 @@ class DashboardView(ctk.CTkFrame):
                     custom_commands=card.custom_commands,
                     serial_number=getattr(card, "serial_number", "") or "",
                     category=card.category or "",
+                    sudo_password=(
+                        resolve_sudo_password(card, self.crypto_key)
+                        if card.device_profile == "hadoop_linux"
+                        else ""
+                    ),
                 )
             )
 

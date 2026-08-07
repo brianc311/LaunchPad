@@ -262,6 +262,7 @@ class HealthCard:
     key_path: str
     key_passphrase: str = ""
     password: str = ""
+    sudo_password: str = ""
     device_profile: str = ""
     custom_commands: str = ""
     serial_number: str = ""
@@ -4779,6 +4780,7 @@ class HealthServer:
             key_passphrase=card.key_passphrase,
             password=card.password,
             timeout=120,
+            sudo_password=card.sudo_password if card.device_profile == "hadoop_linux" else "",
         )
 
     @staticmethod
@@ -6788,6 +6790,7 @@ class HealthServer:
         serial_number: str = "",
         category: str = "",
         url: str = "",
+        sudo_password: str = "",
     ) -> None:
         with self._lock:
             existing = self._cards.get(card_id)
@@ -6800,6 +6803,7 @@ class HealthServer:
                 key_path=key_path,
                 key_passphrase=key_passphrase,
                 password=password,
+                sudo_password=sudo_password if device_profile == "hadoop_linux" else "",
                 device_profile=device_profile,
                 custom_commands=custom_commands,
                 serial_number=serial_number,
@@ -6828,6 +6832,7 @@ class HealthServer:
             key_path = card.key_path
             key_passphrase = card.key_passphrase
             password = card.password
+            sudo_password = card.sudo_password
             device_profile = card.device_profile
             custom_commands = card.custom_commands
             serial_number = card.serial_number
@@ -6858,6 +6863,7 @@ class HealthServer:
                 key_passphrase,
                 password,
                 device_profile=device_profile,
+                sudo_password=sudo_password if device_profile == "hadoop_linux" else "",
             )
             if (focus or "").strip().lower() == "capacity" and prior_results:
                 # Preserve non-capacity health outputs from the last full refresh.
