@@ -222,6 +222,20 @@ def open_ansible_pad_for_cards(entries: list[HealthDashboardEntry]) -> str:
     return server.open_ansible_pad()
 
 
+def open_host_power_for_cards(
+    entries: list[HealthDashboardEntry],
+    card_id: int | None = None,
+) -> str:
+    if not entries:
+        raise ValueError("No SSH cards with credentials to monitor.")
+
+    server = get_health_server()
+    server.ensure_running()
+    for entry in entries:
+        _register_entry(server, entry)
+    return server.open_host_power(card_id=card_id)
+
+
 def get_monitor_states() -> dict[int, bool]:
     server = get_health_server()
     server.ensure_running()

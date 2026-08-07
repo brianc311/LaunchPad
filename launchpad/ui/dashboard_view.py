@@ -39,6 +39,7 @@ from launchpad.monitor import (
     open_capacity_report_for_cards,
     open_fc_wwpn_report_for_cards,
     open_ansible_pad_for_cards,
+    open_host_power_for_cards,
     open_site_lookup_for_cards,
     open_health_dashboard,
     open_health_dashboard_for_cards,
@@ -274,6 +275,7 @@ class DashboardView(ctk.CTkFrame):
             ("FC WWPN", self._open_fc_wwpn_report_all, None),
             ("Site Lookup", self._open_site_lookup_all, None),
             ("Ansible Pad", self._open_ansible_pad, None),
+            ("Host Power", self._open_host_power, None),
             ("Consistency Groups", self._open_contingency_groups, None),
             ("FlashCopy CGs", self._open_fc_consistgrp, None),
             ("LUN Builder", self._open_lun_builder, None),
@@ -627,6 +629,15 @@ class DashboardView(ctk.CTkFrame):
                     on_click=lambda c=card: self._launch_card(c),
                     on_health=(lambda c=card: self._monitor_card(c)) if card.card_type == "ssh" else None,
                     on_snapshot=(lambda c=card: self._snapshot_card(c)) if card.card_type == "ssh" else None,
+                    **(
+                        {
+                            "on_power_off": (
+                                lambda cid=card.id: self._open_host_power(card_id=cid)
+                            )
+                        }
+                        if card.device_profile == "hadoop_linux"
+                        else {}
+                    ),
                     on_monitor_change=(
                         (lambda enabled, c=card: self._on_card_monitor_toggle(c, enabled))
                         if card.card_type == "ssh"
@@ -1764,6 +1775,56 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self._set_status(f"Ansible Pad failed: {exc}"),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_host_power(self, card_id: int | None = None) -> None:
+        cards = self._health_ssh_cards()
+        if not cards:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
+        entries: list[HealthDashboardEntry] = []
+        for card in cards:
+            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
+            entries.append(
+                HealthDashboardEntry(
+                    card_id=card.id,
+                    name=card.name,
+                    host=card.host,
+                    port=card.port,
+                    username=card.username,
+                    auth=auth,
+                    device_profile=card.device_profile,
+                    custom_commands=card.custom_commands,
+                    serial_number=getattr(card, "serial_number", "") or "",
+                    category=card.category or "",
+                )
+            )
+
+        self.status_label.configure(text="Opening Host Power…")
+        self.update_idletasks()
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Host Power register failed: {exc}")
+
+        def worker() -> None:
+            try:
+                url = open_host_power_for_cards(entries, card_id=card_id)
+                summary = (
+                    "Host Power opened — select a Hadoop host and confirm before powering it off."
+                )
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+            except Exception as exc:
+                _log(f"Host Power failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self._set_status(f"Host Power failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()
