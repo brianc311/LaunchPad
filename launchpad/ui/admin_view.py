@@ -56,7 +56,7 @@ from launchpad.ui.theme import get_theme
 
 
 class AdminView(ctk.CTkFrame):
-    _SECRET_ENTRY_KEYS = frozenset({"password", "key_passphrase"})
+    _SECRET_ENTRY_KEYS = frozenset({"password", "sudo_password", "key_passphrase"})
     _MASK_CHAR = "•"
     _EMAIL_MODE_LABELS = {"daily": "Daily", "weekly": "Weekly", "every_n_days": "Every N days"}
     _EMAIL_MODE_KEYS = {label: key for key, label in _EMAIL_MODE_LABELS.items()}
@@ -1138,6 +1138,7 @@ class AdminView(ctk.CTkFrame):
             ("Port", "port"),
             ("Username", "username"),
             ("Password", "password"),
+            ("Sudo password", "sudo_password"),
             ("SSH Key File Path", "key_file_path"),
             ("SSH Key Passphrase", "key_passphrase"),
             ("SSH Private Key", "ssh_key"),
@@ -1148,9 +1149,12 @@ class AdminView(ctk.CTkFrame):
         ]
         self.entries: dict[str, ctk.CTkEntry] = {}
         for row, (label, key) in enumerate(fields, start=0):
-            ctk.CTkLabel(scroll, text=label, text_color=self.theme["muted"]).grid(
+            field_label = ctk.CTkLabel(scroll, text=label, text_color=self.theme["muted"])
+            field_label.grid(
                 row=row, column=0, padx=8, pady=6, sticky="w"
             )
+            if key == "sudo_password":
+                self.sudo_password_label = field_label
             show = self._MASK_CHAR if key in self._SECRET_ENTRY_KEYS else None
             entry = ctk.CTkEntry(scroll, show=show)
             entry.grid(row=row, column=1, padx=8, pady=6, sticky="ew")
@@ -1166,6 +1170,11 @@ class AdminView(ctk.CTkFrame):
             if key == "password":
                 entry.configure(
                     placeholder_text="SSH/RDP login password — for SSH, used instead of keys when set",
+                    show=self._MASK_CHAR,
+                )
+            if key == "sudo_password":
+                entry.configure(
+                    placeholder_text="Required only for Hadoop Linux sudo commands",
                     show=self._MASK_CHAR,
                 )
             if key == "key_passphrase":
@@ -1324,6 +1333,7 @@ class AdminView(ctk.CTkFrame):
         self.entries["sort_order"].insert(0, "0")
         self.entries["port"].insert(0, str(DEFAULT_SSH_PORT))
         self._set_form_mode(editing=False)
+        self._update_sudo_password_visibility()
 
     def _ssh_form_values(self) -> tuple[str, int, str, str, str, str, str]:
         host = self.entries["host"].get().strip()
@@ -1479,6 +1489,7 @@ class AdminView(ctk.CTkFrame):
 
     def _on_device_profile_change(self, selected_label: str) -> None:
         profile_key = self._device_profile_label_to_key.get(selected_label, "")
+        self._update_sudo_password_visibility()
         if is_storage_profile(profile_key):
             self.commands_box.delete("1.0", "end")
             self.commands_box.insert("1.0", preset_command_text(profile_key))
@@ -1502,6 +1513,11 @@ class AdminView(ctk.CTkFrame):
 
     def _selected_device_profile_key(self) -> str:
         return self._device_profile_label_to_key.get(self.device_profile_var.get(), "")
+
+    def _update_sudo_password_visibility(self) -> None:
+        visible = self._selected_device_profile_key() == "hadoop_linux"
+        for widget in (self.sudo_password_label, self.entries["sudo_password"]):
+            widget.grid() if visible else widget.grid_remove()
 
     def _get_commands_text(self) -> str:
         return self.commands_box.get("1.0", "end").strip()
@@ -1641,6 +1657,7 @@ class AdminView(ctk.CTkFrame):
         self.icon_var.set("terminal")
         if hasattr(self, "device_profile_var"):
             self.device_profile_var.set(DEVICE_PROFILES[""])
+            self._update_sudo_password_visibility()
         if hasattr(self, "commands_box"):
             self._set_commands_text("")
         if defaults:
@@ -1693,6 +1710,17 @@ class AdminView(ctk.CTkFrame):
                     "It may have been imported from a backup using a different vault password. "
                     "Re-enter the password and click Save.",
                 )
+        if card.encrypted_sudo_password:
+            try:
+                self.entries["sudo_password"].insert(
+                    0, decrypt_text(self.crypto_key, card.encrypted_sudo_password)
+                )
+            except ValueError:
+                messagebox.showwarning(
+                    "Admin",
+                    "Could not decrypt the stored sudo password for this card.\n\n"
+                    "Re-enter the password and click Save.",
+                )
         if card.encrypted_key_passphrase:
             try:
                 self.entries["key_passphrase"].insert(
@@ -1722,6 +1750,7 @@ class AdminView(ctk.CTkFrame):
         profile_label = DEVICE_PROFILES.get(profile_key, DEVICE_PROFILES[""])
         if hasattr(self, "device_profile_var"):
             self.device_profile_var.set(profile_label)
+            self._update_sudo_password_visibility()
         if hasattr(self, "admin_status") and is_storage_profile(profile_key):
             self.admin_status.configure(
                 text=(
@@ -1757,6 +1786,7 @@ class AdminView(ctk.CTkFrame):
         sort_order = int(sort_raw) if sort_raw else 0
 
         password = self.entries["password"].get()
+        sudo_password = self.entries["sudo_password"].get()
         key_passphrase = self.entries["key_passphrase"].get()
         ssh_key = self.entries["ssh_key"].get().strip()
         if card_type == "ssh" and ssh_key and "PRIVATE KEY" not in ssh_key:
@@ -1781,6 +1811,7 @@ class AdminView(ctk.CTkFrame):
             "serial_number": self.entries["serial_number"].get().strip(),
             "username": self.entries["username"].get().strip(),
             "encrypted_password": encrypt_text(self.crypto_key, password),
+            "encrypted_sudo_password": encrypt_text(self.crypto_key, sudo_password),
             "encrypted_key_passphrase": encrypt_text(self.crypto_key, key_passphrase),
             "encrypted_key": encrypt_text(self.crypto_key, ssh_key),
             "url": url,

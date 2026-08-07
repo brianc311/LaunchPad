@@ -56,6 +56,14 @@ def resolve_ssh_key(card: Card, crypto_key: bytes) -> str:
     return ""
 
 
+def resolve_sudo_password(card: Card, crypto_key: bytes) -> str:
+    encrypted_sudo_password = getattr(card, "encrypted_sudo_password", "") or ""
+    try:
+        return decrypt_text(crypto_key, encrypted_sudo_password)
+    except ValueError:
+        return ""
+
+
 @dataclass(frozen=True)
 class SshMetricsAuth:
     password: str
