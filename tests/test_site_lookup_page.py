@@ -70,3 +70,13 @@ def test_live_refresh_discards_stale_responses_via_generation_guard():
     assert "const requestedCardId = currentCard.id;" in html
     assert "refreshingCardIds.add(requestedCardId);" in html
     assert "refreshingCardIds.has(currentCard.id)" in html
+
+
+def test_site_lookup_export_controls():
+    html = SITE_LOOKUP_HTML
+    assert "Export Excel" in html
+    assert "Export CSV" in html
+    assert "Include Offline sheet" in html
+    assert "/api/site-lookup/export" in html
+    assert "include_offline" in html
+    assert "exportExcelBtn.disabled" in html or "export-excel-btn" in html

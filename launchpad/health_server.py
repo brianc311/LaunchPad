@@ -3312,6 +3312,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
             self._send_bytes(body, content_type=content_type, filename=filename)
             return
         if path == "/api/site-lookup/refresh":
