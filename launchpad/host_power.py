@@ -81,7 +81,7 @@ HOST_POWER_HTML = """<!doctype html>
         const cards = data.cards || [];
         hostsEl.replaceChildren();
         if (!cards.length) {
-          hostsEl.innerHTML = '<p class="hint">No Hadoop/Linux Health Cards with a host are available.</p>';
+          hostsEl.innerHTML = '<p class="hint">No Hadoop / Linux SSH cards with a host are available. In Admin, set Device Profile to <strong>Hadoop / Linux SSH</strong> (or name the card with Hadoop/HDP so LaunchPad can promote it).</p>';
           return;
         }
         cards.forEach((card) => {
