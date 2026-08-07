@@ -139,7 +139,7 @@ def inventory_from_command_results(
             if not volumes and "showvv" in cmd:
                 volumes = shape_volumes_for_lookup(parse_showvv_volumes(output))
         if not hosts and ("lshost" in cmd and "vdisk" not in cmd):
-            hosts = parse_fc_hosts(output)
+            hosts = shape_hosts_for_lookup(parse_fc_hosts(output))
         if (
             not volumes
             and "lsvdisk" in cmd
@@ -355,7 +355,7 @@ def payload_from_card_cache(
     contingency_groups: list[dict] | None = None,
     command_results: list[dict] | None = None,
 ) -> dict[str, Any]:
-    hosts = list(card.get("fc_hosts") or [])
+    hosts = shape_hosts_for_lookup(list(card.get("fc_hosts") or []))
     maps = list(card.get("fc_mappings") or [])
     pools = _shape_pools(card.get("pools") if isinstance(card.get("pools"), list) else [])
     matched = match_contingency_groups(contingency_groups or [], card_name=str(card.get("name") or ""))
