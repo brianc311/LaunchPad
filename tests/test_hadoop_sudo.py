@@ -30,6 +30,7 @@ def test_ensure_sudo_dash_s_no_duplicate_when_s_present():
 def test_ensure_sudo_dash_s_inserts_after_option_args():
     assert ensure_sudo_dash_s("sudo -u root id") == "sudo -S -u root id"
     assert ensure_sudo_dash_s("sudo --user=root id") == "sudo -S --user=root id"
+    assert ensure_sudo_dash_s("sudo -uS id") == "sudo -S -uS id"
 
 
 def test_ensure_sudo_dash_s_respects_double_dash():

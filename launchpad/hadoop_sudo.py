@@ -24,13 +24,29 @@ def command_needs_sudo(command: str) -> bool:
     return _SUDO_TOKEN.search(command) is not None
 
 
+def _parse_sudo_short_option_token(token: str) -> tuple[bool, bool]:
+    """Return (has_dash_s, consumes_next_token) for a combined short-option token."""
+    has_dash_s = False
+    index = 1
+    while index < len(token):
+        option = token[index]
+        if option in _SUDO_SHORT_OPTS_WITH_ARG:
+            if index + 1 < len(token):
+                return has_dash_s, False
+            return has_dash_s, True
+        if option == "S":
+            has_dash_s = True
+        index += 1
+    return has_dash_s, False
+
+
 def _token_has_dash_s(token: str) -> bool:
-    return token == "-S" or (
-        token.startswith("-")
-        and len(token) > 1
-        and token[1] != "-"
-        and "S" in token[1:]
-    )
+    if token == "-S":
+        return True
+    if token.startswith("-") and len(token) > 1 and token[1] != "-":
+        has_dash_s, _ = _parse_sudo_short_option_token(token)
+        return has_dash_s
+    return False
 
 
 def _sudo_option_consumes_next_token(token: str) -> bool:
@@ -39,10 +55,9 @@ def _sudo_option_consumes_next_token(token: str) -> bool:
         if "=" in name:
             return False
         return name in _SUDO_LONG_OPTS_WITH_ARG
-    if token.startswith("-") and len(token) > 1:
-        if len(token) == 2:
-            return token[1] in _SUDO_SHORT_OPTS_WITH_ARG
-        return token[-1] in _SUDO_SHORT_OPTS_WITH_ARG
+    if token.startswith("-") and len(token) > 1 and token[1] != "-":
+        _, consumes_next_token = _parse_sudo_short_option_token(token)
+        return consumes_next_token
     return False
 
 
