@@ -1,7 +1,8 @@
 """Host Power preview and run helpers.
 
-Step failure is defined solely by ``run_command`` raising an exception.
-Successful steps record the returned string as output.
+Step failure is defined by ``run_command`` raising an exception or returning
+a string that starts with ``ERROR:``. Successful steps record the returned
+string as output.
 """
 
 from __future__ import annotations
@@ -86,6 +87,18 @@ def run_host_power_for_card(
                     "command": command,
                     "ok": False,
                     "error": str(exc),
+                }
+            )
+            aborted = True
+            break
+
+        if str(output).startswith("ERROR:"):
+            results.append(
+                {
+                    "label": label,
+                    "command": command,
+                    "ok": False,
+                    "error": str(output),
                 }
             )
             aborted = True

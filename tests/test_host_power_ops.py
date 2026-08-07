@@ -65,3 +65,27 @@ def test_run_aborts_remaining_after_stop_failure():
     assert result["aborted"] is True
     assert calls == ["sudo systemctl stop yarn"]
     assert "shutdown" not in "".join(calls)
+
+
+def test_run_aborts_remaining_after_error_string():
+    calls: list[str] = []
+
+    def run_command(cmd: str) -> str:
+        calls.append(cmd)
+        if "stop" in cmd:
+            return "ERROR: unit not found"
+        return "ok"
+
+    result = run_host_power_for_card(
+        steps=[
+            {"label": "Power - Stop YARN", "command": "sudo systemctl stop yarn"},
+            {"label": "Power - OS Shutdown", "command": "sudo shutdown -h now"},
+        ],
+        run_command=run_command,
+    )
+    assert result["ok"] is False
+    assert result["aborted"] is True
+    assert result["results"][0]["ok"] is False
+    assert result["results"][0]["error"] == "ERROR: unit not found"
+    assert calls == ["sudo systemctl stop yarn"]
+    assert "shutdown" not in "".join(calls)
