@@ -1,0 +1,58 @@
+import zipfile
+from io import BytesIO
+
+from openpyxl import load_workbook
+
+from launchpad.site_lookup_export import (
+    export_site_lookup_csv_zip,
+    export_site_lookup_xlsx,
+    offline_inventory_rows,
+    pools_sheet_title,
+)
+
+
+def _hpe_payload():
+    return {
+        "card": {"name": "HPE-site", "device_profile": "hpe_3par_8400"},
+        "hosts": [
+            {"host_name": "esx_ok", "status": "online", "type": "VMware", "port_count": "2"},
+            {"host_name": "esx_bad", "status": "offline", "type": "VMware", "port_count": "0"},
+        ],
+        "volumes": [
+            {"name": "vv_ok", "status": "normal", "pool": "cpg_a", "capacity": "10"},
+            {"name": "vv_bad", "status": "degraded", "pool": "cpg_b", "capacity": "20"},
+        ],
+        "pools": [{"name": "cpg_a", "used_pct": 10}],
+        "consistency_groups": [],
+        "consistency_groups_available": False,
+    }
+
+
+def test_pools_sheet_title_hpe_vs_ibm():
+    assert pools_sheet_title({"device_profile": "hpe_3par_8400"}) == "CPGs"
+    assert pools_sheet_title({"device_profile": "flashsystem_7200"}) == "Pools"
+
+
+def test_offline_inventory_rows_combined():
+    rows = offline_inventory_rows(_hpe_payload())
+    assert {(r["row_type"], r["name"]) for r in rows} == {
+        ("host", "esx_bad"),
+        ("volume", "vv_bad"),
+    }
+
+
+def test_export_xlsx_sheets_and_optional_offline():
+    payload = _hpe_payload()
+    wb = load_workbook(BytesIO(export_site_lookup_xlsx(payload, include_offline=False)))
+    assert wb.sheetnames == ["Hosts", "Volumes", "CPGs"]
+    wb2 = load_workbook(BytesIO(export_site_lookup_xlsx(payload, include_offline=True)))
+    assert "Offline" in wb2.sheetnames
+    assert wb2["Offline"].max_row >= 2
+
+
+def test_export_csv_zip_no_offline_member():
+    raw = export_site_lookup_csv_zip(_hpe_payload())
+    with zipfile.ZipFile(BytesIO(raw)) as zf:
+        names = set(zf.namelist())
+    assert names == {"Hosts.csv", "Volumes.csv", "CPGs.csv"}
+    assert "Offline.csv" not in names

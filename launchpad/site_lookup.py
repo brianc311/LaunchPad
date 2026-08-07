@@ -58,6 +58,15 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       outline: none;
     }
     .searchbar input { flex: 1; min-width: 0; }
+    .searchbar .offline-opt {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--sub);
+      font-size: .85rem;
+      white-space: nowrap;
+      padding: 0 4px;
+    }
     .searchbar input:focus, .row-filter:focus { border-color: var(--accent); }
     button {
       border: 0;
@@ -212,6 +221,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       <div class="suggest" id="site-suggest" role="listbox"></div>
       <button type="button" id="lookup-btn">Look Up</button>
       <button type="button" class="secondary" id="refresh-btn" disabled>Live Refresh</button>
+      <button type="button" class="secondary" id="export-excel-btn" disabled>Export Excel</button>
+      <button type="button" class="secondary" id="export-csv-btn" disabled>Export CSV</button>
+      <label class="offline-opt"><input type="checkbox" id="include-offline-sheet"> Include Offline sheet</label>
     </div>
 
     <div class="banner" id="error-banner" role="alert" hidden></div>
@@ -226,6 +238,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     const suggestEl = document.getElementById("site-suggest");
     const lookupBtn = document.getElementById("lookup-btn");
     const refreshBtn = document.getElementById("refresh-btn");
+    const exportExcelBtn = document.getElementById("export-excel-btn");
+    const exportCsvBtn = document.getElementById("export-csv-btn");
+    const includeOfflineEl = document.getElementById("include-offline-sheet");
     const errorEl = document.getElementById("error-banner");
     const resultEl = document.getElementById("result");
 
@@ -283,6 +298,54 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     function setError(message) {
       errorEl.textContent = message || "";
       errorEl.hidden = !message;
+    }
+
+    function updateExportEnabled() {
+      const enabled = Boolean(currentPayload);
+      exportExcelBtn.disabled = !enabled;
+      exportCsvBtn.disabled = !enabled;
+    }
+
+    async function exportLookup(format) {
+      if (!currentPayload) return;
+      const btn = format === "xlsx" ? exportExcelBtn : exportCsvBtn;
+      const otherBtn = format === "xlsx" ? exportCsvBtn : exportExcelBtn;
+      btn.disabled = true;
+      otherBtn.disabled = true;
+      setError("");
+      const statusEl = document.getElementById("lookup-status");
+      const statusMessage = format === "xlsx" ? "Exporting Excel…" : "Exporting CSV…";
+      if (statusEl) statusEl.textContent = statusMessage;
+      try {
+        const response = await fetch("/api/site-lookup/export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            format: format,
+            include_offline: includeOfflineEl.checked,
+            payload: currentPayload,
+          }),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || ("Export failed (" + response.status + ")"));
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        const filename = match ? match[1] : ("Site_Lookup." + (format === "xlsx" ? "xlsx" : "zip"));
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        if (statusEl) statusEl.textContent = "Export saved.";
+      } catch (error) {
+        setError(String(error && error.message ? error.message : error));
+        if (statusEl) statusEl.textContent = "Export failed.";
+      } finally {
+        updateExportEnabled();
+      }
     }
 
     function profileSupportsConsistencyGroups(card) {
@@ -619,6 +682,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       hideSuggestions();
       setError("");
       renderPayload();
+      updateExportEnabled();
       try {
         const response = await fetch(
           "/api/site-lookup/cache?card_id=" + encodeURIComponent(card.id)
@@ -628,6 +692,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         if (!response.ok || payload.error) return;
         currentPayload = normalizePayload(payload);
         renderPayload();
+        updateExportEnabled();
       } catch (_error) {
         // The card-list cache remains usable if the richer cache endpoint fails.
       }
@@ -672,6 +737,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         }
         currentPayload = normalizePayload(payload);
         renderPayload();
+        updateExportEnabled();
       } catch (error) {
         if (gen !== refreshGeneration) return;
         setError(String(error && error.message ? error.message : error));
@@ -727,6 +793,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     });
     lookupBtn.addEventListener("click", lookup);
     refreshBtn.addEventListener("click", liveRefresh);
+    exportExcelBtn.addEventListener("click", () => exportLookup("xlsx"));
+    exportCsvBtn.addEventListener("click", () => exportLookup("csv"));
+    updateExportEnabled();
     loadCards();
   </script>
 </body>
