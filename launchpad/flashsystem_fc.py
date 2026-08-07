@@ -85,11 +85,17 @@ def parse_fc_hosts(output: str) -> list[dict[str, str]]:
         name = _get(record, "name", "host_name")
         if not name:
             continue
+        # Summary lshost often omits type; detailed rows include it.
+        # Default Generic matches Contingency Groups / inventory sync.
+        host_type = _get(record, "type", "host_type") or "Generic"
         hosts.append(
             {
                 "host_id": _get(record, "id", "host_id"),
                 "host_name": name,
+                "name": name,
                 "status": _get(record, "status"),
+                "type": host_type,
+                "host_type": host_type,
                 "protocol": _get(record, "protocol"),
                 "port_count": _get(record, "port_count"),
                 "site_name": _get(record, "site_name"),

@@ -7000,7 +7000,7 @@ class HealthServer:
 
         try:
             meta = card.to_api()
-            hosts = list(meta.get("fc_hosts") or [])
+            hosts = shape_hosts_for_lookup(list(meta.get("fc_hosts") or []))
             maps = list(meta.get("fc_mappings") or [])
             pools = list(meta.get("pools") or []) or pool_capacity_from_commands(results)
 
