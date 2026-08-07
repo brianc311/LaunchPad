@@ -26,3 +26,13 @@ def test_card_widget_supports_power_off_callback():
     text = path.read_text(encoding="utf-8")
     assert "on_power_off" in text
     assert "Power off" in text
+
+
+def test_dashboard_power_off_only_for_ssh_hadoop_linux():
+    path = Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
+    text = path.read_text(encoding="utf-8")
+    assert '"on_power_off"' in text
+    assert (
+        'if card.card_type == "ssh" and card.device_profile == "hadoop_linux"'
+        in text
+    )

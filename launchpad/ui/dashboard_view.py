@@ -635,7 +635,7 @@ class DashboardView(ctk.CTkFrame):
                                 lambda cid=card.id: self._open_host_power(card_id=cid)
                             )
                         }
-                        if card.device_profile == "hadoop_linux"
+                        if card.card_type == "ssh" and card.device_profile == "hadoop_linux"
                         else {}
                     ),
                     on_monitor_change=(
