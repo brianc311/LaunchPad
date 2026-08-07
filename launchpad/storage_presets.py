@@ -103,6 +103,47 @@ VULTR_VPS_COMMANDS: list[tuple[str, str]] = [
     ("Capacity - All Filesystems", "df -h --output=target,pcent,size,used,avail 2>/dev/null || df -h"),
 ]
 
+HADOOP_LINUX_COMMANDS: list[tuple[str, str]] = [
+    ("Health - Uptime", "uptime"),
+    ("Health - Failed Units", "systemctl --failed --no-pager 2>/dev/null || true"),
+    ("CPU - Load Average", "cat /proc/loadavg"),
+    (
+        "CPU - Usage %",
+        "vmstat 1 2 | tail -1 | awk '{printf \"%.1f%% busy (idle %.1f%%)\\n\", 100-$15, $15}'",
+    ),
+    (
+        "Memory - Usage %",
+        "free -m | awk '/Mem:/ {printf \"%.1f%% used (%d MB / %d MB)\\n\", $3/$2*100, $3, $2}'",
+    ),
+    ("Memory - Detailed", "free -h"),
+    (
+        "Capacity - Root Disk %",
+        "df -h / | awk 'NR==2 {print $5\" used (\"$3\" / \"$2\")\"}'",
+    ),
+    (
+        "Capacity - All Filesystems",
+        "df -h --output=target,pcent,size,used,avail 2>/dev/null || df -h",
+    ),
+    (
+        "Health - HDFS dfsadmin",
+        "hdfs dfsadmin -report 2>/dev/null | head -n 40 || true",
+    ),
+    ("Health - YARN nodes", "yarn node -list 2>/dev/null || true"),
+    (
+        "Health - Hadoop systemd units",
+        "systemctl list-units 'hadoop*' 'hdfs*' 'yarn*' --no-pager 2>/dev/null || true",
+    ),
+    (
+        "Power - Stop YARN NodeManager",
+        "sudo systemctl stop hadoop-yarn-nodemanager",
+    ),
+    (
+        "Power - Stop HDFS DataNode",
+        "sudo systemctl stop hadoop-hdfs-datanode",
+    ),
+    ("Power - OS Shutdown", "sudo shutdown -h now"),
+]
+
 # Combined preset: vultr-cli cloud checks + on-instance Linux metrics
 VULTR_COMBINED_COMMANDS: list[tuple[str, str]] = [
     *VULTR_CLI_COMMANDS,
@@ -258,6 +299,10 @@ PRESET_HEADERS: dict[str, str] = {
         "# Vultr - vultr-cli cloud checks plus Linux metrics on the VPS.\n"
         "# Put your Vultr instance ID in Serial Number (replaces YOUR_INSTANCE_ID).\n"
     ),
+    "hadoop_linux": (
+        "# Hadoop Linux SSH - OS health/capacity, sample HDFS/YARN status, "
+        "and Power - stop-then-shutdown (edit to match your units).\n"
+    ),
 }
 
 DEVICE_PROFILES: dict[str, str] = {
@@ -305,6 +350,7 @@ DEVICE_PROFILES: dict[str, str] = {
     "vultr_combined": "Vultr Cloud VPS (CLI + Linux)",
     "vultr_cli": "Vultr Cloud (vultr-cli API)",
     "vultr_vps": "Vultr VPS (Linux SSH)",
+    "hadoop_linux": "Hadoop / Linux SSH",
 }
 
 SVC_PROFILES = frozenset(
@@ -405,6 +451,7 @@ PROFILE_COMMANDS: dict[str, list[tuple[str, str]]] = {
     "vultr_cli": list(VULTR_CLI_COMMANDS),
     "vultr_vps": list(VULTR_VPS_COMMANDS),
     "vultr_combined": list(VULTR_COMBINED_COMMANDS),
+    "hadoop_linux": list(HADOOP_LINUX_COMMANDS),
 }
 
 # Backward-compatible aliases

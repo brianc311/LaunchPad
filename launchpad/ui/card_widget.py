@@ -17,6 +17,7 @@ class GlowCard(ctk.CTkFrame):
         card_id: int,
         on_click,
         on_health=None,
+        on_power_off=None,
         on_snapshot=None,
         on_monitor_change=None,
         monitor_enabled: bool = False,
@@ -45,6 +46,7 @@ class GlowCard(ctk.CTkFrame):
         self.theme = theme
         self.on_click = on_click
         self.on_health = on_health
+        self.on_power_off = on_power_off
         self.on_snapshot = on_snapshot
         self.on_monitor_change = on_monitor_change
         self._monitor_enabled = monitor_enabled
@@ -290,6 +292,8 @@ class GlowCard(ctk.CTkFrame):
         btn_row.grid_columnconfigure(0, weight=1)
         if on_health:
             btn_row.grid_columnconfigure(1, weight=1)
+        if on_power_off:
+            btn_row.grid_columnconfigure(2 if on_health else 1, weight=1)
 
         self.connect_btn = ctk.CTkButton(
             btn_row,
@@ -314,6 +318,21 @@ class GlowCard(ctk.CTkFrame):
                 command=self._health,
             )
             self.health_btn.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        if on_power_off:
+            power_off_column = 2 if on_health else 1
+            self.power_off_btn = ctk.CTkButton(
+                btn_row,
+                text="Power off…",
+                fg_color=theme["surface"],
+                hover_color=theme["border"],
+                border_width=1,
+                border_color=theme["danger"],
+                text_color=theme["danger"],
+                height=32,
+                command=self._power_off,
+            )
+            self.power_off_btn.grid(row=0, column=power_off_column, sticky="ew", padx=(6, 0))
 
         if on_monitor_change:
             self.monitor_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -578,6 +597,10 @@ class GlowCard(ctk.CTkFrame):
     def _health(self) -> None:
         if self.on_health:
             self.on_health()
+
+    def _power_off(self) -> None:
+        if self.on_power_off:
+            self.on_power_off()
 
     def _snapshot(self) -> None:
         if self.on_snapshot:
