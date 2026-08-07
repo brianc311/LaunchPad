@@ -23,7 +23,22 @@ def extract_power_steps(commands: list[tuple[str, str]]) -> list[dict[str, str]]
     return steps
 
 
+def coerce_card_ids(raw_ids: list[Any]) -> tuple[list[int], list[str]]:
+    """Parse JSON card_ids entries to int, skipping invalid values."""
+    parsed: list[int] = []
+    warnings: list[str] = []
+    for raw_id in raw_ids:
+        try:
+            parsed.append(int(raw_id))
+        except (TypeError, ValueError):
+            warnings.append(f"Ignored invalid card_id: {raw_id!r}")
+    return parsed, warnings
+
+
 def build_host_power_preview(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    if not cards:
+        return {"ok": False, "warnings": ["No eligible hosts to preview"], "hosts": []}
+
     warnings: list[str] = []
     hosts: list[dict[str, Any]] = []
     ok = True

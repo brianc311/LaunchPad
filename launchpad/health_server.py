@@ -98,6 +98,7 @@ from launchpad.host_volume_health_page import (
 from launchpad.host_power import HOST_POWER_HTML, HOST_POWER_PATH
 from launchpad.host_power_ops import (
     build_host_power_preview,
+    coerce_card_ids,
     extract_power_steps,
     require_host_power_confirm,
     run_host_power_for_card,
@@ -4805,6 +4806,22 @@ class HealthServer:
             and str(card.host or "").strip()
         ]
 
+    def _host_power_selection(
+        self,
+        raw_card_ids: list[Any],
+    ) -> tuple[list[HealthCard], list[str]]:
+        parsed_ids, warnings = coerce_card_ids(raw_card_ids)
+        cards = self._host_power_cards_for_ids(parsed_ids)
+        if not cards:
+            if not parsed_ids:
+                if raw_card_ids:
+                    warnings.append("No valid card_ids in selection")
+                else:
+                    warnings.append("No hosts selected")
+            else:
+                warnings.append("No eligible Hadoop hosts matched the selection")
+        return cards, warnings
+
     def host_power_cards(self) -> list[dict[str, Any]]:
         with self._lock:
             cards = list(self._cards.values())
@@ -4820,21 +4837,29 @@ class HealthServer:
             and str(card.host or "").strip()
         ]
 
-    def host_power_preview(self, card_ids: list[int]) -> dict[str, Any]:
-        cards = self._host_power_cards_for_ids(card_ids)
-        return build_host_power_preview(
+    def host_power_preview(self, card_ids: list[Any]) -> dict[str, Any]:
+        cards, selection_warnings = self._host_power_selection(card_ids)
+        preview = build_host_power_preview(
             [self._host_power_card_payload(card) for card in cards]
         )
+        if selection_warnings:
+            preview["warnings"] = selection_warnings + preview.get("warnings", [])
+        if not cards:
+            preview["ok"] = False
+        return preview
 
     def host_power_run(
         self,
-        card_ids: list[int],
+        card_ids: list[Any],
         *,
         confirm: bool,
     ) -> dict[str, Any]:
         require_host_power_confirm(confirm)
+        cards, selection_warnings = self._host_power_selection(card_ids)
+        if not cards:
+            return {"ok": False, "warnings": selection_warnings, "hosts": []}
         hosts: list[dict[str, Any]] = []
-        for card in self._host_power_cards_for_ids(card_ids):
+        for card in cards:
             payload = self._host_power_card_payload(card)
             result = run_host_power_for_card(
                 steps=extract_power_steps(payload["commands"]),
@@ -4848,7 +4873,13 @@ class HealthServer:
                     **result,
                 }
             )
-        return {"ok": all(host["ok"] for host in hosts), "hosts": hosts}
+        response: dict[str, Any] = {
+            "ok": all(host["ok"] for host in hosts),
+            "hosts": hosts,
+        }
+        if selection_warnings:
+            response["warnings"] = selection_warnings
+        return response
 
     def generate_contingency_snaps(self, group_id: str) -> dict[str, Any]:
         group = self._contingency_group_by_id(group_id)

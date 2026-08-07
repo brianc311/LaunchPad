@@ -104,31 +104,53 @@ HOST_POWER_HTML = """<!doctype html>
       }
     }
 
-    async function preview() {
+    const previewBtn = document.getElementById("preview");
+    const runBtn = document.getElementById("run");
+    let requestInFlight = false;
+
+    async function withButtonsLocked(action) {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      previewBtn.disabled = true;
+      runBtn.disabled = true;
       try {
-        writeLog("Building preview…");
-        writeLog(await requestJson("/api/host-power/preview", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({card_ids: selectedIds()}),
-        }));
-      } catch (error) {
-        writeLog(`Preview failed: ${error.message}`);
+        await action();
+      } finally {
+        requestInFlight = false;
+        previewBtn.disabled = false;
+        runBtn.disabled = false;
       }
     }
 
+    async function preview() {
+      await withButtonsLocked(async () => {
+        try {
+          writeLog("Building preview…");
+          writeLog(await requestJson("/api/host-power/preview", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({card_ids: selectedIds()}),
+          }));
+        } catch (error) {
+          writeLog(`Preview failed: ${error.message}`);
+        }
+      });
+    }
+
     async function run() {
-      try {
-        writeLog("Running host power steps…");
-        writeLog(await requestJson("/api/host-power/run", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            card_ids: selectedIds(),
-            confirm: document.getElementById("confirm-mutate").checked,
-          }),
-        }));
-      } catch (error) {
-        writeLog(`Run failed: ${error.message}`);
-      }
+      await withButtonsLocked(async () => {
+        try {
+          writeLog("Running host power steps…");
+          writeLog(await requestJson("/api/host-power/run", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              card_ids: selectedIds(),
+              confirm: document.getElementById("confirm-mutate").checked,
+            }),
+          }));
+        } catch (error) {
+          writeLog(`Run failed: ${error.message}`);
+        }
+      });
     }
 
     document.getElementById("preview").addEventListener("click", preview);

@@ -126,3 +126,88 @@ def test_host_power_run_continues_after_other_host_fails(monkeypatch):
     assert result["ok"] is False
     assert [host["card_id"] for host in result["hosts"]] == [1, 2]
     assert any(name == "Healthy host" for name, _command in seen)
+
+
+def test_host_power_run_empty_selection_not_ok():
+    server = HealthServer()
+    result = server.host_power_run([], confirm=True)
+    assert result["ok"] is False
+    assert result["hosts"] == []
+    assert "No hosts selected" in result["warnings"]
+
+
+def test_host_power_run_unmatched_ids_not_ok():
+    server = HealthServer()
+    server._cards[1] = _card(1, profile="flashsystem_5200")
+    result = server.host_power_run([1], confirm=True)
+    assert result["ok"] is False
+    assert result["hosts"] == []
+    assert "No eligible Hadoop hosts matched the selection" in result["warnings"]
+
+
+def test_host_power_run_coerces_string_ids(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(1)
+    commands: list[str] = []
+
+    def run_command(command: str) -> str:
+        commands.append(command)
+        return "ok"
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(lambda _card: run_command),
+    )
+
+    result = server.host_power_run(["1"], confirm=True)
+
+    assert result["ok"] is True
+    assert len(result["hosts"]) == 1
+
+
+def test_host_power_run_rejects_invalid_ids():
+    server = HealthServer()
+    result = server.host_power_run(["not-an-id"], confirm=True)
+    assert result["ok"] is False
+    assert any("Ignored invalid card_id" in w for w in result["warnings"])
+
+
+def test_host_power_preview_empty_selection_not_ok():
+    server = HealthServer()
+    result = server.host_power_preview([])
+    assert result["ok"] is False
+    assert result["hosts"] == []
+    assert "No hosts selected" in result["warnings"]
+
+
+def test_host_power_preview_coerces_string_ids():
+    server = HealthServer()
+    server._cards[1] = _card(1)
+    result = server.host_power_preview(["1"])
+    assert result["ok"] is True
+    assert len(result["hosts"]) == 1
+
+
+def test_host_power_api_empty_selection_not_ok(monkeypatch):
+    server = HealthServer()
+
+    preview = _post(
+        "/api/host-power/preview",
+        {"card_ids": []},
+        monkeypatch,
+        server,
+    )
+    assert preview["status"] == 200
+    assert preview["payload"]["ok"] is False
+    assert "No hosts selected" in preview["payload"]["warnings"]
+
+    run = _post(
+        "/api/host-power/run",
+        {"card_ids": [], "confirm": True},
+        monkeypatch,
+        server,
+    )
+    assert run["status"] == 200
+    assert run["payload"]["ok"] is False
+    assert "No hosts selected" in run["payload"]["warnings"]
