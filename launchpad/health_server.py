@@ -3286,6 +3286,34 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(result)
             return
+        if path == "/api/site-lookup/export":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                body_payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(body_payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            export_format = body_payload.get("format")
+            include_offline = bool(body_payload.get("include_offline"))
+            payload = body_payload.get("payload")
+            if not isinstance(payload, dict):
+                self._send_json({"error": "payload is required."}, status=400)
+                return
+            try:
+                body, filename, content_type = server.export_site_lookup_bytes(
+                    export_format=str(export_format or ""),
+                    include_offline=include_offline,
+                    payload=payload,
+                )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
         if path == "/api/site-lookup/refresh":
             length = int(self.headers.get("Content-Length", "0") or "0")
             raw = self.rfile.read(length) if length else b"{}"
@@ -5874,6 +5902,37 @@ class HealthServer:
             )
         body = export_host_volume_health_csv_zip(scoped)
         return body, f"Host_Volume_Health_{stamp}.zip", "application/zip"
+
+    def export_site_lookup_bytes(
+        self,
+        *,
+        export_format: str,
+        include_offline: bool,
+        payload: dict,
+    ) -> tuple[bytes, str, str]:
+        from launchpad.site_lookup_export import (
+            export_site_lookup_csv_zip,
+            export_site_lookup_xlsx,
+        )
+
+        fmt = str(export_format or "").strip().lower()
+        if fmt not in {"xlsx", "csv"}:
+            raise ValueError("Export format must be xlsx or csv.")
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("payload is required.")
+        card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
+        site = str(card.get("name") or card.get("id") or "site").strip() or "site"
+        safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in site)[:60]
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        if fmt == "xlsx":
+            body = export_site_lookup_xlsx(payload, include_offline=bool(include_offline))
+            return (
+                body,
+                f"Site_Lookup_{safe}_{stamp}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        body = export_site_lookup_csv_zip(payload)
+        return body, f"Site_Lookup_{safe}_{stamp}.zip", "application/zip"
 
     @staticmethod
     def _system_connectivity_svc_command(command: str) -> str:

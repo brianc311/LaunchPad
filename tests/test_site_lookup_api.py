@@ -1,4 +1,5 @@
 import io
+import json
 from types import SimpleNamespace
 
 import launchpad.health_server as health_server_module
@@ -347,6 +348,44 @@ def test_site_lookup_refresh_post_maps_errors(monkeypatch):
     assert post(1) == {"payload": {"card": {"id": 1}, "error": None}, "status": 200}
     assert post(404)["status"] == 404
     assert post(502) == {"payload": {"error": "SSH unavailable"}, "status": 502}
+
+
+def test_site_lookup_export_post_xlsx_and_errors(monkeypatch):
+    class FakeServer:
+        def export_site_lookup_bytes(self, *, export_format, include_offline, payload):
+            if export_format == "bad":
+                raise ValueError("Export format must be xlsx or csv.")
+            if not payload:
+                raise ValueError("payload is required.")
+            return (
+                b"XLSX",
+                "Site_Lookup.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+    monkeypatch.setattr(health_server_module, "get_health_server", lambda: FakeServer())
+
+    def post(body):
+        raw = json.dumps(body).encode("utf-8")
+        handler = _HealthHandler.__new__(_HealthHandler)
+        handler.path = "/api/site-lookup/export"
+        handler.headers = {"Content-Length": str(len(raw))}
+        handler.rfile = io.BytesIO(raw)
+        sent = {}
+        handler._send_json = lambda payload, status=200: sent.update(
+            payload=payload, status=status
+        )
+        handler._send_bytes = lambda body, *, content_type, filename, status=200: sent.update(
+            body=body, content_type=content_type, filename=filename, status=status
+        )
+        handler.do_POST()
+        return sent
+
+    ok = post({"format": "xlsx", "include_offline": True, "payload": {"hosts": []}})
+    assert ok["status"] == 200
+    assert ok["body"] == b"XLSX"
+    assert ok["filename"] == "Site_Lookup.xlsx"
+    assert post({"format": "bad", "payload": {}})["status"] == 400
 
 
 def test_site_lookup_open_helpers_register_cards(monkeypatch):
