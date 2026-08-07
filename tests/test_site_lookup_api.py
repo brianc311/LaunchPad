@@ -258,6 +258,40 @@ def test_site_lookup_cache_includes_contingency_group_fallback(monkeypatch):
     assert payload["volumes"][0]["name"] == "vol-a"
 
 
+def test_site_lookup_cache_parses_hpe_showhost_showvv(monkeypatch):
+    server = HealthServer()
+    card = _card(name="HPE-site", device_profile="hpe_3par_8450")
+    card.command_results = [
+        {
+            "label": "Hosts - host list",
+            "command": "showhost",
+            "output": "Id,Name\n0,prod_host\n",
+            "error": None,
+        },
+        {
+            "label": "Volumes - VV list",
+            "command": "showvv",
+            "output": "Id,Name,State,UsrCPG\n1,vv_prod,normal,cpg_a\n",
+            "error": None,
+        },
+        {
+            "label": "Capacity - CPG %",
+            "command": "showspace -cpg",
+            "output": "------------- Name --- - Total --- --- Used --- --- Free --\ncpg_a 100 40 60\n",
+            "error": None,
+        },
+    ]
+    server._cards[1] = card
+    monkeypatch.setattr(server, "get_contingency_groups", lambda: [])
+
+    payload = server.site_lookup_cache(1)
+
+    assert payload["stats"]["hosts"] == 1
+    assert payload["stats"]["volumes"] == 1
+    assert payload["hosts"][0]["host_name"] == "prod_host"
+    assert payload["volumes"][0]["name"] == "vv_prod"
+
+
 def test_site_lookup_cache_get_maps_errors(monkeypatch):
     class FakeServer:
         def site_lookup_cache(self, card_id):

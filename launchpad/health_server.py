@@ -187,11 +187,13 @@ from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
 from launchpad.site_lookup_data import (
+    inventory_from_command_results,
     payload_from_card_cache,
     payload_from_live,
     payload_from_lun_offline,
     payload_from_offline_snapshot,
     payload_has_inventory,
+    shape_volumes_for_lookup,
 )
 from launchpad.site_lookup_offline import (
     SITE_LOOKUP_OFFLINE_SETTING,
@@ -6936,30 +6938,49 @@ class HealthServer:
             maps = list(meta.get("fc_mappings") or [])
             pools = list(meta.get("pools") or []) or pool_capacity_from_commands(results)
 
-            volumes: list[dict] = []
-            for item in results:
-                command = str(item.get("command") or "")
-                if (
-                    "lsvdisk" in command
-                    and "lshostvdiskmap" not in command
-                    and "lsvdiskhostmap" not in command
-                ):
-                    volumes = parse_lsvdisk_volumes(str(item.get("output") or ""))
-                    break
-            if not hosts:
-                for item in results:
-                    command = str(item.get("command") or "")
-                    if "lshost" in command and "vdisk" not in command:
-                        hosts = parse_fc_hosts(str(item.get("output") or ""))
-                        break
-            if not maps:
+            parsed_hosts, parsed_volumes, parsed_maps = inventory_from_command_results(
+                results,
+                device_profile=str(card.device_profile or ""),
+            )
+            if not hosts and parsed_hosts:
+                hosts = parsed_hosts
+            if not maps and parsed_maps:
+                maps = parsed_maps
+            volumes = list(parsed_volumes)
+
+            # HPE: if health suite lacked usable showhost/showvv, fetch like Hosts & Volumes.
+            profile = str(card.device_profile or "")
+            if profile in HPE_SHELL_PROFILES and (not hosts or not volumes):
+                try:
+                    host_output, vv_output = run_ssh_auth_hpe_commands(
+                        card.host,
+                        card.port,
+                        card.username,
+                        ["showhost", "showvv"],
+                        password=card.password,
+                        key_path=card.key_path,
+                        key_passphrase=card.key_passphrase,
+                    )
+                    if not hosts:
+                        hosts = parse_showhost_hosts(host_output or "")
+                    if not volumes:
+                        volumes = shape_volumes_for_lookup(
+                            parse_showvv_volumes(vv_output or "")
+                        )
+                except Exception:
+                    pass
+
+            if not volumes:
                 for item in results:
                     command = str(item.get("command") or "")
                     if (
-                        "lshostvdiskmap" in command
-                        or "lsvdiskhostmap" in command
+                        "lsvdisk" in command
+                        and "lshostvdiskmap" not in command
+                        and "lsvdiskhostmap" not in command
                     ):
-                        maps = parse_host_lun_maps(str(item.get("output") or ""))
+                        volumes = shape_volumes_for_lookup(
+                            parse_lsvdisk_volumes(str(item.get("output") or ""))
+                        )
                         break
 
             consist_groups: list[dict] = []
@@ -6996,9 +7017,11 @@ class HealthServer:
             if card is None:
                 raise KeyError(cid)
             meta = card.to_api()
+            command_results = list(card.command_results or [])
         memory = payload_from_card_cache(
             meta,
             contingency_groups=self.get_contingency_groups(),
+            command_results=command_results,
         )
         if payload_has_inventory(memory):
             return memory

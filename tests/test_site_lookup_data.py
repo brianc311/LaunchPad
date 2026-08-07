@@ -1,6 +1,7 @@
 from launchpad.flashsystem_fc import parse_lsconsistgrp
 from launchpad.site_lookup_data import (
     filter_lookup_cards,
+    inventory_from_command_results,
     match_contingency_groups,
     payload_from_card_cache,
     payload_from_live,
@@ -98,3 +99,60 @@ def test_payload_from_live_falls_back_to_contingency_groups():
     )
     assert payload["source"] == "ssh+cg_fallback"
     assert len(payload["consistency_groups"]) == 1
+
+
+def test_inventory_from_command_results_parses_hpe_showhost_showvv():
+    hosts, volumes, maps = inventory_from_command_results(
+        [
+            {
+                "label": "Hosts - host list",
+                "command": "showhost",
+                "output": "Id,Name,Persona,Port_WWN\n0,host_a,Generic,10000000AAAA\n",
+                "error": None,
+            },
+            {
+                "label": "Volumes - VV list",
+                "command": "showvv",
+                "output": "Id,Name,State,UsrCPG\n1,vv_a,normal,cpg1\n",
+                "error": None,
+            },
+        ],
+        device_profile="hpe_3par_8450",
+    )
+    assert hosts[0]["host_name"] == "host_a"
+    assert volumes[0]["name"] == "vv_a"
+    assert volumes[0]["pool"] == "cpg1"
+    assert maps == []
+
+
+def test_payload_from_card_cache_uses_hpe_command_results():
+    card = {
+        "id": 3,
+        "name": "HPE - PLN",
+        "host": "10.0.0.2",
+        "device_profile": "hpe_3par_8450",
+        "fc_hosts": [],
+        "fc_mappings": [],
+        "pools": [{"name": "cpg1", "used_pct": 10}],
+    }
+    payload = payload_from_card_cache(
+        card,
+        command_results=[
+            {
+                "label": "Hosts - host list",
+                "command": "showhost",
+                "output": "Id,Name\n0,hpe_host\n",
+                "error": None,
+            },
+            {
+                "label": "Volumes - VV list",
+                "command": "showvv",
+                "output": "Id,Name,State,UsrCPG\n1,vv1,normal,cpg1\n",
+                "error": None,
+            },
+        ],
+    )
+    assert payload["stats"]["hosts"] == 1
+    assert payload["stats"]["volumes"] == 1
+    assert payload["hosts"][0]["host_name"] == "hpe_host"
+    assert payload["volumes"][0]["name"] == "vv1"

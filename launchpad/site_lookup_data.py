@@ -4,6 +4,86 @@ from __future__ import annotations
 
 from typing import Any
 
+from launchpad.flashsystem_fc import (
+    parse_fc_hosts,
+    parse_host_lun_maps,
+    parse_lsvdisk_volumes,
+)
+from launchpad.storage_presets import HPE_SHELL_PROFILES
+from launchpad.volume_find import parse_showhost_hosts, parse_showvv_volumes
+
+
+def _command_blob(item: dict) -> str:
+    return f"{item.get('label') or ''} {item.get('command') or ''}".lower()
+
+
+def shape_volumes_for_lookup(rows: list[dict]) -> list[dict[str, Any]]:
+    shaped: list[dict[str, Any]] = []
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        shaped.append(
+            {
+                "name": name,
+                "uid": str(row.get("uid") or row.get("vdisk_UID") or ""),
+                "capacity": str(row.get("capacity") or ""),
+                "pool": str(
+                    row.get("pool")
+                    or row.get("pool_or_cpg")
+                    or row.get("mdisk_grp_name")
+                    or ""
+                ),
+                "status": str(row.get("status") or row.get("state") or ""),
+            }
+        )
+    return shaped
+
+
+def inventory_from_command_results(
+    command_results: list[dict] | None,
+    *,
+    device_profile: str = "",
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Parse hosts, volumes, and maps from health SSH command results.
+
+    Supports IBM Spectrum Virtualize (lshost / lsvdisk / maps) and HPE 3PAR/Primera
+    (showhost / showvv).
+    """
+    hosts: list[dict] = []
+    volumes: list[dict] = []
+    maps: list[dict] = []
+    profile = str(device_profile or "").strip()
+    is_hpe = profile in HPE_SHELL_PROFILES or profile.startswith("hpe_")
+
+    for item in command_results or []:
+        if not isinstance(item, dict) or item.get("error"):
+            continue
+        cmd = _command_blob(item)
+        output = str(item.get("output") or "")
+        if not output.strip():
+            continue
+        if is_hpe or "showhost" in cmd or "showvv" in cmd:
+            if not hosts and "showhost" in cmd:
+                hosts = parse_showhost_hosts(output)
+            if not volumes and "showvv" in cmd:
+                volumes = shape_volumes_for_lookup(parse_showvv_volumes(output))
+        if not hosts and ("lshost" in cmd and "vdisk" not in cmd):
+            hosts = parse_fc_hosts(output)
+        if (
+            not volumes
+            and "lsvdisk" in cmd
+            and "lshostvdiskmap" not in cmd
+            and "lsvdiskhostmap" not in cmd
+        ):
+            volumes = shape_volumes_for_lookup(parse_lsvdisk_volumes(output))
+        if not maps and (
+            "lshostvdiskmap" in cmd or "lsvdiskhostmap" in cmd or "host lun" in cmd
+        ):
+            maps = parse_host_lun_maps(output)
+
+    return hosts, volumes, maps
+
 
 def filter_lookup_cards(cards: list[dict]) -> list[dict]:
     out: list[dict] = []
@@ -198,13 +278,26 @@ def payload_from_card_cache(
     card: dict,
     *,
     contingency_groups: list[dict] | None = None,
+    command_results: list[dict] | None = None,
 ) -> dict[str, Any]:
     hosts = list(card.get("fc_hosts") or [])
     maps = list(card.get("fc_mappings") or [])
     pools = _shape_pools(card.get("pools") if isinstance(card.get("pools"), list) else [])
     matched = match_contingency_groups(contingency_groups or [], card_name=str(card.get("name") or ""))
     cgs = _normalize_cgs(matched)
-    volumes = _volumes_from_maps_and_cgs(maps, matched)
+    parsed_hosts, parsed_volumes, parsed_maps = inventory_from_command_results(
+        command_results,
+        device_profile=str(card.get("device_profile") or ""),
+    )
+    if not hosts and parsed_hosts:
+        hosts = parsed_hosts
+    if not maps and parsed_maps:
+        maps = parsed_maps
+    volumes = (
+        list(parsed_volumes)
+        if parsed_volumes
+        else _volumes_from_maps_and_cgs(maps, matched)
+    )
     return _build_payload(
         card=card,
         hosts=hosts,
