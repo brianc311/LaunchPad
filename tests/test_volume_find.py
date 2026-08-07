@@ -203,6 +203,38 @@ def test_parse_showhost_hosts_basic():
     names = {r["host_name"] for r in rows}
     assert "woo_esx_cluster" in names
     assert "other_host" in names
+    other = next(r for r in rows if r["host_name"] == "other_host")
+    assert other["type"] == "Generic"
+    assert other["port_count"] == "1"
+
+
+def test_parse_showhost_hosts_skips_preamble_and_composite_wwn_column():
+    output = (
+        "--------------- Hosts ---------------\n"
+        "Id,Name,Persona,Port_WWN/iSCSI_Name/IPAddr\n"
+        "0,ESX_hpew202sms01,Generic-ALUA,100000051EC2AAAA\n"
+        "0,ESX_hpew202sms01,Generic-ALUA,100000051EC2BBBB\n"
+    )
+    rows = parse_showhost_hosts(output)
+    assert len(rows) == 1
+    assert rows[0]["host_name"] == "ESX_hpew202sms01"
+    assert rows[0]["type"] == "Generic-ALUA"
+    assert rows[0]["port_count"] == "2"
+    assert "100000051EC2AAAA" in rows[0]["wwpns"]
+    assert "100000051EC2BBBB" in rows[0]["wwpns"]
+
+
+def test_parse_showvv_volumes_dashed_headers_and_preamble():
+    output = (
+        "---- Virtual Volumes ----\n"
+        "Id,-Name-,-State-,-UsrCPG-,-VSize_MB-\n"
+        "1,vv_prod,normal,cpg_a,10240\n"
+    )
+    vols = parse_showvv_volumes(output)
+    assert vols[0]["name"] == "vv_prod"
+    assert vols[0]["pool_or_cpg"] == "cpg_a"
+    assert vols[0]["status"] == "normal"
+    assert "10240" in vols[0]["capacity"]
 
 
 def test_hosts_from_card_ibm_fc_hosts():

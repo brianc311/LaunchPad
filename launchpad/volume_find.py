@@ -96,78 +96,135 @@ def host_name_matches(name: str, query: str) -> bool:
     return volume_name_matches(name, query)
 
 
+def _norm_hpe_col(name: str) -> str:
+    """Normalize 3PAR headers like ``-Name-`` or ``Port_WWN/iSCSI_Name``."""
+    text = str(name or "").strip().strip("-").strip().lower()
+    text = text.replace(" ", "_")
+    if "/" in text:
+        text = text.split("/", 1)[0]
+    return text
+
+
+def _hpe_col_index(cols: list[str], names: set[str]) -> int | None:
+    wanted = {n.lower() for n in names}
+    for i, col in enumerate(cols):
+        if _norm_hpe_col(col) in wanted:
+            return i
+    return None
+
+
+def _hpe_wwn_indices(cols: list[str]) -> list[int]:
+    indices: list[int] = []
+    for i, col in enumerate(cols):
+        norm = _norm_hpe_col(col)
+        raw = str(col or "").lower()
+        if norm in {"port_wwn", "wwn", "wwpn", "port_wwpn", "host_wwn"}:
+            indices.append(i)
+        elif "wwn" in norm or "wwpn" in raw:
+            indices.append(i)
+    return indices
+
+
+def _find_hpe_table_header(
+    lines: list[str],
+) -> tuple[str, list[str], int] | None:
+    """Return (delim_or_empty, columns, header_line_index) for Name tables."""
+    for idx, line in enumerate(lines):
+        if "," in line and line.count(",") >= 1:
+            cols = [c.strip() for c in line.split(",")]
+            if _hpe_col_index(cols, {"name", "hostname", "host_name", "vvname", "vv_name"}) is not None:
+                return ",", cols, idx
+        if ":" in line and line.count(":") >= 1:
+            cols = [c.strip() for c in line.split(":")]
+            if _hpe_col_index(cols, {"name", "hostname", "host_name", "vvname", "vv_name"}) is not None:
+                return ":", cols, idx
+        cols = line.split()
+        if _hpe_col_index(cols, {"name", "hostname", "host_name", "vvname", "vv_name"}) is not None:
+            return "", cols, idx
+    return None
+
+
 def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
-    """Parse HPE showhost CSV/table for Name (+ optional Port_WWN / WWN columns)."""
+    """Parse HPE showhost CSV/table for Name (+ Persona / Port_WWN / status)."""
     text = str(output or "").strip()
     if not text:
         return []
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if not lines:
         return []
-    header = lines[0]
-    delim = "," if "," in header else (":" if ":" in header else None)
-    wwn_cols = {"port_wwn", "wwn", "wwpn", "port_wwpn", "host_wwn"}
-    status_cols = {"state", "status", "host_state"}
-    hosts: list[dict[str, str]] = []
-    if delim:
-        cols = [c.strip() for c in header.split(delim)]
-        name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "hostname", "host_name"}), None)
-        wwn_indices = [i for i, c in enumerate(cols) if c.lower() in wwn_cols]
-        status_i = next((i for i, c in enumerate(cols) if c.lower() in status_cols), None)
-        if name_i is None:
-            return []
-        for line in lines[1:]:
-            parts = [p.strip() for p in line.split(delim)]
-            if len(parts) <= name_i:
-                continue
-            name = parts[name_i]
-            if not name or name.lower() == "name":
-                continue
-            wwpns = [
-                parts[i]
-                for i in wwn_indices
-                if i < len(parts) and parts[i] and parts[i] not in {"-", "--"}
-            ]
-            status = parts[status_i] if status_i is not None and len(parts) > status_i else ""
-            hosts.append({"host_name": name, "wwpns": " ".join(wwpns), "status": status})
-        return hosts
-
-    cols = header.split()
-    name_i = next((i for i, c in enumerate(cols) if c.lower() in {"name", "hostname", "host_name"}), None)
-    wwn_indices = [i for i, c in enumerate(cols) if c.lower() in wwn_cols]
-    status_i = next((i for i, c in enumerate(cols) if c.lower() in status_cols), None)
+    found = _find_hpe_table_header(lines)
+    if found is None:
+        return []
+    delim, cols, header_idx = found
+    name_i = _hpe_col_index(cols, {"name", "hostname", "host_name"})
     if name_i is None:
         return []
-    for line in lines[1:]:
-        parts = line.split()
+    wwn_indices = _hpe_wwn_indices(cols)
+    status_i = _hpe_col_index(cols, {"state", "status", "host_state"})
+    persona_i = _hpe_col_index(cols, {"persona", "host_persona", "type", "host_type"})
+    hosts: list[dict[str, str]] = []
+    for line in lines[header_idx + 1 :]:
+        parts = [p.strip() for p in line.split(delim)] if delim else line.split()
         if len(parts) <= name_i:
             continue
         name = parts[name_i]
-        if not name or name.lower() == "name":
+        if not name or _norm_hpe_col(name) in {"name", "hostname", "host_name"}:
             continue
         wwpns = [
             parts[i]
             for i in wwn_indices
-            if i < len(parts) and parts[i] and parts[i] not in {"-", "--"}
+            if i < len(parts) and parts[i] and parts[i] not in {"-", "--", "----"}
         ]
         status = parts[status_i] if status_i is not None and len(parts) > status_i else ""
-        hosts.append({"host_name": name, "wwpns": " ".join(wwpns), "status": status})
-    return hosts
+        if status in {"-", "--", "----"}:
+            status = ""
+        persona = (
+            parts[persona_i] if persona_i is not None and len(parts) > persona_i else ""
+        )
+        if persona in {"-", "--", "----"}:
+            persona = ""
+        hosts.append(
+            {
+                "host_name": name,
+                "wwpns": " ".join(wwpns),
+                "status": status,
+                "type": persona,
+                "port_count": str(len(wwpns)) if wwpns else "",
+                "protocol": "SCSI",
+            }
+        )
+    # showhost emits one row per port; merge ports onto unique host names.
+    merged: dict[str, dict[str, str]] = {}
+    for host in hosts:
+        key = host["host_name"]
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = dict(host)
+            continue
+        ports = (existing.get("wwpns") or "").split() + (host.get("wwpns") or "").split()
+        uniq = list(dict.fromkeys(p for p in ports if p))
+        existing["wwpns"] = " ".join(uniq)
+        existing["port_count"] = str(len(uniq)) if uniq else existing.get("port_count") or ""
+        if not existing.get("type") and host.get("type"):
+            existing["type"] = host["type"]
+        if not existing.get("status") and host.get("status"):
+            existing["status"] = host["status"]
+    return list(merged.values())
 
 
 def _showvv_column_index(cols: list[str], names: set[str]) -> int | None:
-    return next((i for i, c in enumerate(cols) if c.lower() in names), None)
+    return _hpe_col_index(cols, names)
 
 
 def _showvv_pick_status(parts: list[str], cols: list[str]) -> str:
     """Prefer State / Detailed_State over ownership columns like Mstr."""
-    by_name = {c.lower(): i for i, c in enumerate(cols)}
+    by_name = {_norm_hpe_col(c): i for i, c in enumerate(cols)}
     for key in ("detailed_state", "state", "status"):
         index = by_name.get(key)
         if index is None or len(parts) <= index:
             continue
         value = parts[index].strip()
-        if value and value not in {"-", "--"}:
+        if value and value not in {"-", "--", "----"}:
             return value
     return ""
 
@@ -180,69 +237,58 @@ def parse_showvv_volumes(output: str) -> list[dict[str, str]]:
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if not lines:
         return []
-    header = lines[0]
-    delim = "," if "," in header else (":" if ":" in header else None)
-    volumes: list[dict[str, str]] = []
-    if delim:
-        cols = [c.strip() for c in header.split(delim)]
-        name_i = _showvv_column_index(cols, {"name", "vvname", "vv_name"})
-        cpg_i = _showvv_column_index(
-            cols, {"usrcpg", "cpg", "snpcpg", "usr_cpg"}
-        )
-        mstr_i = _showvv_column_index(cols, {"mstr"})
-        if name_i is None:
-            return []
-        for line in lines[1:]:
-            parts = [p.strip() for p in line.split(delim)]
-            if len(parts) <= name_i:
-                continue
-            name = parts[name_i]
-            if not name or name.lower() == "name":
-                continue
-            pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
-            if pool in {"-", "--"}:
-                pool = ""
-            status = _showvv_pick_status(parts, cols)
-            mstr = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
-            if mstr in {"-", "--"}:
-                mstr = ""
-            volumes.append(
-                {
-                    "name": name,
-                    "pool_or_cpg": pool,
-                    "status": status,
-                    "mstr": mstr,
-                }
-            )
-        return volumes
-
-    # Whitespace table fallback (no comma/colon delimiters in header).
-    cols = header.split()
+    found = _find_hpe_table_header(lines)
+    if found is None:
+        return []
+    delim, cols, header_idx = found
     name_i = _showvv_column_index(cols, {"name", "vvname", "vv_name"})
-    cpg_i = _showvv_column_index(cols, {"usrcpg", "cpg", "snpcpg", "usr_cpg"})
+    cpg_i = _showvv_column_index(
+        cols, {"usrcpg", "cpg", "snpcpg", "usr_cpg"}
+    )
     mstr_i = _showvv_column_index(cols, {"mstr"})
+    capacity_i = _showvv_column_index(
+        cols, {"vsize_mb", "vsize", "size_mb", "capacity", "usr_total_mb"}
+    )
+    uid_i = _showvv_column_index(cols, {"vv_wwn", "wwn", "uid", "vvid"})
     if name_i is None:
         return []
-    for line in lines[1:]:
-        parts = line.split()
+    volumes: list[dict[str, str]] = []
+    for line in lines[header_idx + 1 :]:
+        parts = [p.strip() for p in line.split(delim)] if delim else line.split()
         if len(parts) <= name_i:
             continue
         name = parts[name_i]
-        if not name or name.lower() == "name":
+        if not name or _norm_hpe_col(name) in {"name", "vvname", "vv_name"}:
             continue
         pool = parts[cpg_i] if cpg_i is not None and len(parts) > cpg_i else ""
-        if pool in {"-", "--"}:
+        if pool in {"-", "--", "----"}:
             pool = ""
         status = _showvv_pick_status(parts, cols)
         mstr = parts[mstr_i] if mstr_i is not None and len(parts) > mstr_i else ""
-        if mstr in {"-", "--"}:
+        if mstr in {"-", "--", "----"}:
             mstr = ""
+        capacity = (
+            parts[capacity_i]
+            if capacity_i is not None and len(parts) > capacity_i
+            else ""
+        )
+        if capacity in {"-", "--", "----"}:
+            capacity = ""
+        elif capacity and capacity_i is not None:
+            col = _norm_hpe_col(cols[capacity_i])
+            if "mb" in col and not capacity.lower().endswith("mb"):
+                capacity = f"{capacity} MB"
+        uid = parts[uid_i] if uid_i is not None and len(parts) > uid_i else ""
+        if uid in {"-", "--", "----"}:
+            uid = ""
         volumes.append(
             {
                 "name": name,
                 "pool_or_cpg": pool,
                 "status": status,
                 "mstr": mstr,
+                "capacity": capacity,
+                "uid": uid,
             }
         )
     return volumes

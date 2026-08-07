@@ -40,6 +40,68 @@ def shape_volumes_for_lookup(rows: list[dict]) -> list[dict[str, Any]]:
     return shaped
 
 
+def shape_hosts_for_lookup(rows: list[dict]) -> list[dict[str, Any]]:
+    shaped: list[dict[str, Any]] = []
+    for row in rows:
+        name = str(row.get("host_name") or row.get("name") or "").strip()
+        if not name:
+            continue
+        wwpns = str(row.get("wwpns") or "").split()
+        port_count = str(row.get("port_count") or row.get("ports") or "").strip()
+        if not port_count and wwpns:
+            port_count = str(len(wwpns))
+        shaped.append(
+            {
+                "host_name": name,
+                "name": name,
+                "status": str(row.get("status") or row.get("state") or ""),
+                "type": str(row.get("type") or row.get("host_type") or row.get("persona") or ""),
+                "port_count": port_count,
+                "ports": port_count,
+                "protocol": str(row.get("protocol") or "SCSI"),
+                "wwpns": " ".join(wwpns),
+            }
+        )
+    return shaped
+
+
+def showvv_inventory_note(
+    command_results: list[dict] | None,
+    *,
+    raw_showvv: str | None = None,
+) -> str | None:
+    """Explain why HPE volumes may be empty (failed / empty / unparseable showvv)."""
+    if raw_showvv is not None:
+        text = str(raw_showvv or "").strip()
+        if not text:
+            return "Volumes empty because showvv returned no output"
+        if "permission denied" in text.lower():
+            return "Volumes empty because showvv returned Permission denied"
+        return (
+            "Volumes empty because showvv output could not be parsed "
+            "(unexpected table format)"
+        )
+    for item in command_results or []:
+        if not isinstance(item, dict):
+            continue
+        cmd = _command_blob(item)
+        if "showvv" not in cmd:
+            continue
+        err = str(item.get("error") or "").strip()
+        output = str(item.get("output") or "").strip()
+        if err:
+            return f"Volumes empty because showvv failed: {err}"
+        if output and "permission denied" in output.lower():
+            return "Volumes empty because showvv returned Permission denied"
+        if not output:
+            return "Volumes empty because showvv returned no output"
+        return (
+            "Volumes empty because showvv output could not be parsed "
+            "(unexpected table format)"
+        )
+    return "Volumes empty — showvv not in cached results; use Live Refresh"
+
+
 def inventory_from_command_results(
     command_results: list[dict] | None,
     *,
@@ -65,7 +127,7 @@ def inventory_from_command_results(
             continue
         if is_hpe or "showhost" in cmd or "showvv" in cmd:
             if not hosts and "showhost" in cmd:
-                hosts = parse_showhost_hosts(output)
+                hosts = shape_hosts_for_lookup(parse_showhost_hosts(output))
             if not volumes and "showvv" in cmd:
                 volumes = shape_volumes_for_lookup(parse_showvv_volumes(output))
         if not hosts and ("lshost" in cmd and "vdisk" not in cmd):
@@ -196,6 +258,7 @@ def _build_payload(
     source: str,
     refreshed_at: str | None,
     error: str | None = None,
+    warning: str | None = None,
 ) -> dict[str, Any]:
     return {
         "card": _card_meta(card),
@@ -214,6 +277,7 @@ def _build_payload(
         "source": source,
         "refreshed_at": refreshed_at,
         "error": error,
+        "warning": warning,
     }
 
 
@@ -298,6 +362,11 @@ def payload_from_card_cache(
         if parsed_volumes
         else _volumes_from_maps_and_cgs(maps, matched)
     )
+    profile = str(card.get("device_profile") or "")
+    is_hpe = profile in HPE_SHELL_PROFILES or profile.startswith("hpe_")
+    warning = None
+    if is_hpe and not volumes:
+        warning = showvv_inventory_note(command_results)
     return _build_payload(
         card=card,
         hosts=hosts,
@@ -307,6 +376,7 @@ def payload_from_card_cache(
         pools=pools,
         source="cache",
         refreshed_at=None,
+        warning=warning,
     )
 
 
@@ -320,6 +390,7 @@ def payload_from_live(
     pools: list[dict] | None = None,
     contingency_groups: list[dict] | None = None,
     refreshed_at: str | None = None,
+    warning: str | None = None,
 ) -> dict[str, Any]:
     shaped_pools = _shape_pools(pools if pools is not None else card.get("pools"))
     if consist_groups:
@@ -341,4 +412,5 @@ def payload_from_live(
         pools=shaped_pools,
         source=source,
         refreshed_at=refreshed_at,
+        warning=warning,
     )

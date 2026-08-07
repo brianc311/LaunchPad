@@ -290,6 +290,15 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       return profile.includes("flashsystem") || profile.includes("storwize") || profile.includes("svc");
     }
 
+    function isHpeProfile(card) {
+      const profile = String(card && card.device_profile || "").toLowerCase();
+      return profile.includes("hpe") || profile.includes("3par") || profile.includes("primera");
+    }
+
+    function poolLabel(card) {
+      return isHpeProfile(card) ? "CPGs" : "Pools";
+    }
+
     function cachePayload(card) {
       const hosts = asRows(card.fc_hosts);
       const mappings = asRows(card.fc_mappings);
@@ -347,6 +356,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         pools: asRows(data.pools),
         source: data.source || "live",
         refreshed_at: data.refreshed_at || null,
+        warning: data.warning || null,
         consistency_groups_available: profileSupportsConsistencyGroups(data.card || currentCard),
         has_cache: true,
       };
@@ -365,17 +375,23 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     }
 
     function rowStatus(status) {
-      const text = String(status || "Unknown");
+      const text = String(status || "").trim();
+      if (!text) return "—";
       const lower = text.toLowerCase();
       let css = "";
-      if (lower.includes("online") || lower.includes("active") || lower === "ok") css = " ok";
+      if (lower.includes("online") || lower.includes("active") || lower === "ok" || lower === "normal") css = " ok";
       else if (lower.includes("degrad") || lower.includes("warning")) css = " warn";
       else if (lower.includes("offline") || lower.includes("error") || lower.includes("failed")) css = " bad";
       return '<span class="pill' + css + '">' + escapeHtml(text) + "</span>";
     }
 
-    function emptyMessage(unavailable) {
-      return '<div class="empty">' + (unavailable ? "Not available for this profile" : "No rows") + "</div>";
+    function emptyMessage(unavailable, volumesHint) {
+      let text = "No rows";
+      if (unavailable) text = "Not available for this profile";
+      else if (volumesHint) {
+        text = volumesHint;
+      }
+      return '<div class="empty">' + escapeHtml(text) + "</div>";
     }
 
     function renderHosts(data) {
@@ -409,12 +425,20 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         )));
       });
       if (!rows.length) {
+        if (data.volumes.length === 0 && isHpeProfile(data.card)) {
+          return emptyMessage(
+            false,
+            data.warning
+              || "No volumes yet. Live Refresh runs showvv — if that fails with Permission denied, the SSH account needs VV list rights."
+          );
+        }
         return emptyMessage(
           data.volumes.length === 0 && !profileSupportsConsistencyGroups(data.card)
         );
       }
+      const poolCol = isHpeProfile(data.card) ? "CPG" : "Pool";
       return '<div class="table-wrap"><table><thead><tr>'
-        + "<th>Volume</th><th>Status</th><th>Capacity</th><th>Pool</th><th>UID</th>"
+        + "<th>Volume</th><th>Status</th><th>Capacity</th><th>" + poolCol + "</th><th>UID</th>"
         + "</tr></thead><tbody>" + rows.map((volume) => (
           "<tr><td>" + escapeHtml(volume.name || volume.vdisk_name || "") + "</td>"
           + "<td>" + rowStatus(volume.status || volume.state) + "</td>"
@@ -500,26 +524,28 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
     }
 
     function statusText(data) {
+      let base = "";
       if (data.refreshed_at) {
         const parsed = new Date(data.refreshed_at);
         const display = Number.isNaN(parsed.getTime()) ? data.refreshed_at : parsed.toLocaleString();
         if (data.source === "offline") {
-          return "Offline snapshot · last updated: " + display;
+          base = "Offline snapshot · last updated: " + display;
+        } else if (data.source === "offline_lun") {
+          base = "Offline LUN inventory · last updated: " + display;
+        } else {
+          base = "Last updated: " + display + " · " + (data.source || "live");
         }
-        if (data.source === "offline_lun") {
-          return "Offline LUN inventory · last updated: " + display;
-        }
-        return "Last updated: " + display + " · " + (data.source || "live");
+      } else if (data.source === "offline") {
+        base = "Showing offline Site Lookup snapshot · use Live Refresh when online.";
+      } else if (data.source === "offline_lun") {
+        base = "Showing LUN offline inventory · use Live Refresh for full Site Lookup data.";
+      } else {
+        base = data.has_cache
+          ? "Showing cached card data · use Live Refresh for full inventory."
+          : "No cached inventory · use Live Refresh.";
       }
-      if (data.source === "offline") {
-        return "Showing offline Site Lookup snapshot · use Live Refresh when online.";
-      }
-      if (data.source === "offline_lun") {
-        return "Showing LUN offline inventory · use Live Refresh for full Site Lookup data.";
-      }
-      return data.has_cache
-        ? "Showing cached card data · use Live Refresh for full inventory."
-        : "No cached inventory · use Live Refresh.";
+      if (data.warning) return base + " · " + data.warning;
+      return base;
     }
 
     function renderPayload() {
@@ -527,27 +553,38 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       const data = currentPayload;
       const card = data.card || {};
       const stats = data.stats || {};
+      const showCgs = profileSupportsConsistencyGroups(card);
+      const poolsName = poolLabel(card);
       const tabs = [
         ["hosts", "Hosts"],
         ["volumes", "Volumes"],
-        ["consistency_groups", "Consistency Groups"],
-        ["pools", "Pools"],
       ];
+      if (showCgs) tabs.push(["consistency_groups", "Consistency Groups"]);
+      tabs.push(["pools", poolsName]);
+      if (!showCgs && activeTab === "consistency_groups") activeTab = "hosts";
       let body = "";
       if (activeTab === "hosts") body = renderHosts(data);
       else if (activeTab === "volumes") body = renderVolumes(data);
       else if (activeTab === "consistency_groups") body = renderConsistencyGroups(data);
       else body = renderPools(data);
+      let statsHtml = '<div class="stat-row"><div class="stat"><b>'
+        + escapeHtml(stats.hosts == null ? data.hosts.length : stats.hosts) + "</b>Hosts</div>"
+        + '<div class="stat"><b>' + escapeHtml(stats.volumes == null ? data.volumes.length : stats.volumes) + "</b>Volumes</div>";
+      if (showCgs) {
+        statsHtml += '<div class="stat"><b>'
+          + escapeHtml(stats.consistency_groups == null ? data.consistency_groups.length : stats.consistency_groups)
+          + "</b>Consistency Groups</div>";
+      }
+      statsHtml += '<div class="stat"><b>'
+        + escapeHtml(stats.pools == null ? data.pools.length : stats.pools)
+        + "</b>" + poolsName + "</div></div>";
       resultEl.innerHTML = '<section class="header-card"><div class="header-top"><div>'
         + '<div class="site-name">' + escapeHtml(card.name || ("Card " + card.id)) + "</div>"
         + '<div class="site-sub">' + escapeHtml(card.model || card.device_profile || "Storage system")
         + (card.host ? (" · " + escapeHtml(card.host)) : "")
         + (card.serial ? (" · Serial " + escapeHtml(card.serial)) : "") + "</div></div>"
         + '<span class="badge">' + escapeHtml(sourceBadge(data.source)) + "</span></div>"
-        + '<div class="stat-row"><div class="stat"><b>' + escapeHtml(stats.hosts == null ? data.hosts.length : stats.hosts) + "</b>Hosts</div>"
-        + '<div class="stat"><b>' + escapeHtml(stats.volumes == null ? data.volumes.length : stats.volumes) + "</b>Volumes</div>"
-        + '<div class="stat"><b>' + escapeHtml(stats.consistency_groups == null ? data.consistency_groups.length : stats.consistency_groups) + "</b>Consistency Groups</div>"
-        + '<div class="stat"><b>' + escapeHtml(stats.pools == null ? data.pools.length : stats.pools) + "</b>Pools</div></div></section>"
+        + statsHtml + '</section>'
         + '<div class="result-tools"><span class="status" id="lookup-status">' + escapeHtml(statusText(data)) + "</span>"
         + '<input class="row-filter" id="row-filter" type="search" value="' + escapeHtml(rowFilter)
         + '" placeholder="Filter host or volume names…" aria-label="Filter result rows"></div>'

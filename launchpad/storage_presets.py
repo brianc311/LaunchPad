@@ -29,14 +29,16 @@ SVC_COMMANDS: list[tuple[str, str]] = [
 # Capacity first so checkhealth cannot starve/bleed into capacity SSH reads.
 # Capacity: showsys -d (MB totals) + showcpg (Usr/Free/Total). Do not use
 # showcpg -sdg — that option only shows snapshot-data autogrow settings.
+# Inventory (showhost/showvv) before checkhealth so a long health run cannot
+# starve or pollute host/volume tables used by Site Lookup.
 HP_3PAR_COMMANDS: list[tuple[str, str]] = [
     ("Capacity - System", "showsys -d"),
     ("Capacity - Raw", "showsys -space"),
     ("Capacity - CPG %", "showcpg"),
+    ("Hosts - host list", "showhost"),
+    ("Volumes - VV list", "showvv"),
     ("Health - Overall", "checkhealth"),
     ("Health - Alerts", "showalert"),
-    ("Volumes - VV list", "showvv"),
-    ("Hosts - host list", "showhost"),
     ("CPU - Load", "statcpu"),
     ("Health - Disks", "showpd"),
     ("Health - Nodes", "shownode -d"),
@@ -49,11 +51,11 @@ HPE_PRIMERA_COMMANDS: list[tuple[str, str]] = [
     ("Capacity - System", "showsys -d"),
     ("Capacity - Raw", "showsys -space"),
     ("Capacity - CPG %", "showcpg"),
+    ("Hosts - host list", "showhost"),
+    ("Volumes - VV list", "showvv"),
     ("Health - Nodes", "shownode -status"),
     ("Health - Alerts", "showalert"),
     ("Health - Disks", "showpd -status"),
-    ("Volumes - VV list", "showvv"),
-    ("Hosts - host list", "showhost"),
     ("CPU - All Nodes %", "statcpu -iter 1"),
     ("Memory - Cache %", "statcache -iter 1"),
 ]

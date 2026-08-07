@@ -9,8 +9,10 @@ def test_site_lookup_path_and_markers():
     assert "/api/site-lookup/cache?card_id=" in html
     assert "/api/site-lookup/refresh" in html
     assert "Live Refresh" in html
-    for label in ("Hosts", "Volumes", "Consistency Groups", "Pools"):
+    for label in ("Hosts", "Volumes", "Consistency Groups", "Pools", "CPGs"):
         assert label in html
+    assert "isHpeProfile" in html
+    assert "poolLabel" in html
 
 
 def test_site_lookup_page_contracts():

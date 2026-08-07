@@ -5,6 +5,7 @@ from launchpad.site_lookup_data import (
     match_contingency_groups,
     payload_from_card_cache,
     payload_from_live,
+    showvv_inventory_note,
 )
 
 
@@ -156,3 +157,49 @@ def test_payload_from_card_cache_uses_hpe_command_results():
     assert payload["stats"]["volumes"] == 1
     assert payload["hosts"][0]["host_name"] == "hpe_host"
     assert payload["volumes"][0]["name"] == "vv1"
+
+
+def test_showvv_inventory_note_for_permission_denied():
+    note = showvv_inventory_note(
+        [
+            {
+                "label": "Volumes - VV list",
+                "command": "showvv",
+                "output": "",
+                "error": "Permission denied",
+            }
+        ]
+    )
+    assert note is not None
+    assert "Permission denied" in note
+
+
+def test_payload_from_card_cache_warns_when_hpe_showvv_failed():
+    card = {
+        "id": 4,
+        "name": "HPE - PLN",
+        "device_profile": "hpe_3par_8450",
+        "fc_hosts": [],
+        "fc_mappings": [],
+        "pools": [{"name": "cpg1", "used_pct": 10}],
+    }
+    payload = payload_from_card_cache(
+        card,
+        command_results=[
+            {
+                "label": "Hosts - host list",
+                "command": "showhost",
+                "output": "Id,Name\n0,hpe_host\n",
+                "error": None,
+            },
+            {
+                "label": "Volumes - VV list",
+                "command": "showvv",
+                "output": "",
+                "error": "Permission denied",
+            },
+        ],
+    )
+    assert payload["stats"]["hosts"] == 1
+    assert payload["stats"]["volumes"] == 0
+    assert "Permission denied" in (payload.get("warning") or "")

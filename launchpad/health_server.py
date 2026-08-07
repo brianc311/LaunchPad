@@ -193,7 +193,9 @@ from launchpad.site_lookup_data import (
     payload_from_lun_offline,
     payload_from_offline_snapshot,
     payload_has_inventory,
+    shape_hosts_for_lookup,
     shape_volumes_for_lookup,
+    showvv_inventory_note,
 )
 from launchpad.site_lookup_offline import (
     SITE_LOOKUP_OFFLINE_SETTING,
@@ -6948,9 +6950,11 @@ class HealthServer:
                 maps = parsed_maps
             volumes = list(parsed_volumes)
 
-            # HPE: if health suite lacked usable showhost/showvv, fetch like Hosts & Volumes.
+            # HPE: always fetch showhost/showvv for Site Lookup (health suite may
+            # run showvv after checkhealth and return polluted/unparseable output).
             profile = str(card.device_profile or "")
-            if profile in HPE_SHELL_PROFILES and (not hosts or not volumes):
+            hpe_warning: str | None = None
+            if profile in HPE_SHELL_PROFILES:
                 try:
                     host_output, vv_output = run_ssh_auth_hpe_commands(
                         card.host,
@@ -6961,14 +6965,22 @@ class HealthServer:
                         key_path=card.key_path,
                         key_passphrase=card.key_passphrase,
                     )
-                    if not hosts:
-                        hosts = parse_showhost_hosts(host_output or "")
+                    fetched_hosts = shape_hosts_for_lookup(
+                        parse_showhost_hosts(host_output or "")
+                    )
+                    if fetched_hosts:
+                        hosts = fetched_hosts
+                    volumes = shape_volumes_for_lookup(
+                        parse_showvv_volumes(vv_output or "")
+                    )
                     if not volumes:
-                        volumes = shape_volumes_for_lookup(
-                            parse_showvv_volumes(vv_output or "")
+                        hpe_warning = showvv_inventory_note(
+                            results, raw_showvv=vv_output or ""
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    hpe_warning = f"Volumes empty because showvv fetch failed: {exc}"
+                    if not hosts and parsed_hosts:
+                        hosts = parsed_hosts
 
             if not volumes:
                 for item in results:
@@ -6993,6 +7005,13 @@ class HealthServer:
                 except Exception:
                     consist_groups = []
 
+            if (
+                profile in HPE_SHELL_PROFILES
+                and not volumes
+                and not hpe_warning
+            ):
+                hpe_warning = showvv_inventory_note(results)
+
             payload = payload_from_live(
                 card=meta,
                 hosts=hosts,
@@ -7004,6 +7023,7 @@ class HealthServer:
                 refreshed_at=datetime.now(timezone.utc).strftime(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
+                warning=hpe_warning,
             )
             self._persist_site_lookup_offline(payload)
             return payload
