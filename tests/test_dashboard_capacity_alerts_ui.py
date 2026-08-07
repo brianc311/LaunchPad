@@ -26,6 +26,15 @@ def test_capacity_badge_visible_in_compact_layout():
     assert "def _hide_capacity_alert_tip_if_away(" in CARD
     assert "def _pointer_over_capacity_tip_widgets(" in CARD
     assert 'bind("<Leave>", self._schedule_hide_capacity_alert_tip)' in CARD
+    # Sticky-tip guards: no -topmost (covers browser); watchdog + FocusOut dismiss
+    show_tip = CARD.split("def _show_capacity_alert_tip", 1)[1].split(
+        "def _hide_capacity_alert_tip", 1
+    )[0]
+    assert 'attributes("-topmost"' not in show_tip
+    assert "def _arm_capacity_alert_tip_watchdog(" in CARD
+    assert 'bind("<FocusOut>"' in CARD
+    assert "CAPACITY_ALERT_TIP_MAX_MS" in CARD
+    assert "CAPACITY_ALERT_TIP_WATCHDOG_MS" in CARD
 
 
 def test_dashboard_wires_capacity_alert_strip():
