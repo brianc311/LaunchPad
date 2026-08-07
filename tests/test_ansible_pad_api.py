@@ -36,16 +36,41 @@ def _card() -> HealthCard:
     )
 
 
-def _post(path: str, payload: dict) -> dict:
+def _get(path: str, monkeypatch, server: HealthServer) -> dict:
+    handler = object.__new__(_HealthHandler)
+    handler.path = path
+    sent: dict = {}
+
+    def _send_bytes(body, *, content_type, filename, status=200):
+        sent["body"] = body
+        sent["content_type"] = content_type
+        sent["filename"] = filename
+        sent["status"] = status
+
+    def _send_json(data, status=200):
+        sent["json"] = data
+        sent["status"] = status
+
+    handler._send_bytes = _send_bytes
+    handler._send_json = _send_json
+    monkeypatch.setattr(health_server_module, "get_health_server", lambda: server)
+    handler.do_GET()
+    return sent
+
+
+def _post(path: str, payload: dict, monkeypatch, server: HealthServer) -> dict:
     body = json.dumps(payload).encode()
-    handler = _HealthHandler.__new__(_HealthHandler)
+    handler = object.__new__(_HealthHandler)
     handler.path = path
     handler.headers = {"Content-Length": str(len(body))}
     handler.rfile = io.BytesIO(body)
-    sent = {}
-    handler._send_json = lambda response, status=200: sent.update(
-        payload=response, status=status
-    )
+    sent: dict = {}
+
+    def _send_json(response, status=200):
+        sent.update(payload=response, status=status)
+
+    handler._send_json = _send_json
+    monkeypatch.setattr(health_server_module, "get_health_server", lambda: server)
     handler.do_POST()
     return sent
 
@@ -123,24 +148,27 @@ def test_sync_run_check_uploads_and_executes_without_confirm():
     assert "cg_name" in commands[0]
 
 
+def test_get_export_zip_api_returns_pk_prefixed_zip(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card()
+
+    sent = _get("/api/ansible-pad/export.zip", monkeypatch, server)
+
+    assert sent["status"] == 200
+    assert sent["body"].startswith(b"PK")
+    assert sent["content_type"] == "application/zip"
+    assert sent["filename"] == "LaunchPad_Ansible_Pad.zip"
+
+
 def test_sync_run_mutating_without_confirm_returns_400(monkeypatch):
-    monkeypatch.setattr(
-        health_server_module,
-        "get_health_server",
-        lambda: type(
-            "FakeServer",
-            (),
-            {
-                "ansible_pad_sync_run": lambda self, **_kwargs: (_ for _ in ()).throw(
-                    ValueError("confirm=true is required for mutating ansible-playbook runs")
-                )
-            },
-        )(),
-    )
+    server = HealthServer()
+    server._cards[1] = _card()
 
     response = _post(
         "/api/ansible-pad/sync-run",
         {"playbook": "playbooks/start_fc_consistgrp.yml", "check": False, "confirm": False},
+        monkeypatch,
+        server,
     )
 
     assert response["status"] == 400
