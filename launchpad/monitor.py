@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from launchpad.hadoop_linux_promote import ensure_hadoop_linux_cards
 from launchpad.health_server import get_health_server
 from launchpad.ssh_launcher import _log
 from launchpad.ssh_utils import SshMetricsAuth, resolve_sudo_password
@@ -75,6 +76,9 @@ def build_health_dashboard_entries(db, crypto_key: bytes) -> list[HealthDashboar
 
 def ensure_health_dashboard_registered(db, crypto_key: bytes) -> int:
     """Register all SSH cards with credentials so the browser page can list them."""
+    # Promote Hadoop-named General SSH cards so Host Power / Power off work
+    # after install without a manual Admin profile edit.
+    ensure_hadoop_linux_cards(db)
     entries = build_health_dashboard_entries(db, crypto_key)
     server = get_health_server()
     server.ensure_running()
