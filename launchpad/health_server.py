@@ -15,6 +15,28 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+import paramiko
+
+from launchpad.ansible_pad_export import (
+    build_ansible_pad_files,
+    build_ansible_pad_zip_bytes,
+)
+from launchpad.ansible_pad_remote import (
+    build_ansible_playbook_argv,
+    require_confirm_for_mutate,
+    run_remote_argv,
+    sync_files_via_sftp,
+)
+from launchpad.ansible_pad_settings import (
+    ANSIBLE_PAD_DEFAULT_PLAYBOOK,
+    ANSIBLE_PAD_HOST,
+    ANSIBLE_PAD_KEY_PASSPHRASE,
+    ANSIBLE_PAD_KEY_PATH,
+    ANSIBLE_PAD_PASSWORD,
+    ANSIBLE_PAD_REMOTE_DIR,
+    ANSIBLE_PAD_USER,
+    normalize_ansible_pad_settings,
+)
 from launchpad.capacity_report import CAPACITY_REPORT_HTML, CAPACITY_REPORT_PATH
 from launchpad.command_format import resolve_card_commands
 from launchpad.config import APP_VERSION, TEMP_DIR
@@ -205,6 +227,17 @@ from launchpad.volume_find import (
 
 DEFAULT_PORT = 18765
 PREFERRED_PORTS = (18765, 18766, 18767, 18768)
+ANSIBLE_PAD_PATH = "/ansible-pad"
+
+_ANSIBLE_PAD_SETTING_FIELDS = {
+    ANSIBLE_PAD_HOST: "host",
+    ANSIBLE_PAD_USER: "user",
+    ANSIBLE_PAD_KEY_PATH: "key_path",
+    ANSIBLE_PAD_KEY_PASSPHRASE: "key_passphrase",
+    ANSIBLE_PAD_PASSWORD: "password",
+    ANSIBLE_PAD_REMOTE_DIR: "remote_dir",
+    ANSIBLE_PAD_DEFAULT_PLAYBOOK: "default_playbook",
+}
 
 
 @dataclass
@@ -2192,6 +2225,24 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == SITE_LOOKUP_PATH:
             self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == ANSIBLE_PAD_PATH:
+            self._send_html("<!doctype html><title>Ansible Pad</title><p>Ansible Pad</p>")
+            return
+        if path == "/api/ansible-pad/settings":
+            self._send_json(server.get_ansible_pad_settings())
+            return
+        if path == "/api/ansible-pad/export.zip":
+            try:
+                body = server.export_ansible_pad_zip_bytes()
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            self._send_bytes(
+                body,
+                content_type="application/zip",
+                filename="LaunchPad_Ansible_Pad.zip",
+            )
+            return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
@@ -3115,6 +3166,60 @@ class _HealthHandler(BaseHTTPRequestHandler):
             cards = server.list_cards(allow_sync=False)
             self._send_json({"synced": count, "total": len(cards)})
             return
+        if path == "/api/ansible-pad/settings":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                self._send_json(server.set_ansible_pad_settings(payload))
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
+        if path in {
+            "/api/ansible-pad/sync-run",
+            "/api/ansible-pad/run-existing",
+        }:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                if path == "/api/ansible-pad/sync-run":
+                    result = server.ansible_pad_sync_run(
+                        playbook=str(payload.get("playbook") or ""),
+                        check=payload.get("check") is True,
+                        confirm=payload.get("confirm") is True,
+                        extra_vars=payload.get("extra_vars") or {},
+                    )
+                else:
+                    result = server.ansible_pad_run_existing(
+                        playbook=str(payload.get("playbook") or ""),
+                        check=payload.get("check") is True,
+                        confirm=payload.get("confirm") is True,
+                    )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            self._send_json(result)
+            return
         if path == "/api/site-lookup/refresh":
             length = int(self.headers.get("Content-Length", "0") or "0")
             raw = self.rfile.read(length) if length else b"{}"
@@ -3669,6 +3774,15 @@ class HealthServer:
         self._sync_provider: Callable[[], int] | None = None
         self._get_setting: Callable[[str, str], str] | None = None
         self._set_setting: Callable[[str, str], None] | None = None
+        self._ansible_pad_connect: Callable[[dict], Any] = (
+            self._default_ansible_pad_connect
+        )
+        self._ansible_pad_sftp: Callable[[Any], Any] = (
+            self._default_ansible_pad_sftp
+        )
+        self._ansible_pad_execute: Callable[[Any, str], Any] = (
+            self._default_ansible_pad_execute
+        )
         self._card_patcher: Callable[..., dict] | None = None
         self._connect_card_fn: Callable[[int], str] | None = None
         self._open_gui_fn: Callable[[int], str] | None = None
@@ -3691,6 +3805,205 @@ class HealthServer:
         with self._lock:
             self._get_setting = get_setting
             self._set_setting = set_setting
+
+    @staticmethod
+    def _default_ansible_pad_connect(settings: dict) -> Any:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            hostname=settings["host"],
+            username=settings["user"] or None,
+            key_filename=settings["key_path"] or None,
+            passphrase=settings["key_passphrase"] or None,
+            password=settings["password"] or None,
+            timeout=30,
+        )
+        return client
+
+    @staticmethod
+    def _default_ansible_pad_sftp(client: Any) -> Any:
+        return client.open_sftp()
+
+    @staticmethod
+    def _default_ansible_pad_execute(client: Any, command: str) -> dict:
+        _stdin, stdout, stderr = client.exec_command(command)
+        return {
+            "returncode": stdout.channel.recv_exit_status(),
+            "stdout": stdout.read().decode("utf-8", errors="replace"),
+            "stderr": stderr.read().decode("utf-8", errors="replace"),
+        }
+
+    def set_ansible_pad_remote_backend(
+        self,
+        *,
+        connect: Callable[[dict], Any] | None = None,
+        sftp: Callable[[Any], Any] | None = None,
+        execute: Callable[[Any, str], Any] | None = None,
+    ) -> None:
+        """Set injectable Ansible Pad remote operations; None restores defaults."""
+        with self._lock:
+            self._ansible_pad_connect = connect or self._default_ansible_pad_connect
+            self._ansible_pad_sftp = sftp or self._default_ansible_pad_sftp
+            self._ansible_pad_execute = execute or self._default_ansible_pad_execute
+
+    def _ansible_pad_settings_raw(self) -> dict:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return normalize_ansible_pad_settings({})
+        return normalize_ansible_pad_settings(
+            {
+                setting: getter(setting, "")
+                for setting in _ANSIBLE_PAD_SETTING_FIELDS
+            }
+        )
+
+    @staticmethod
+    def _ansible_pad_public_settings(settings: dict) -> dict:
+        public = dict(settings)
+        for field in ("password", "key_passphrase"):
+            if public.get(field):
+                public[field] = "***"
+            else:
+                public.pop(field, None)
+        return public
+
+    def get_ansible_pad_settings(self) -> dict:
+        """Return normalized Ansible Pad settings without exposing secrets."""
+        return self._ansible_pad_public_settings(self._ansible_pad_settings_raw())
+
+    def set_ansible_pad_settings(self, settings: dict) -> dict:
+        """Normalize and persist Ansible Pad settings using the configured backend."""
+        if not isinstance(settings, dict):
+            raise ValueError("settings must be an object")
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError("LaunchPad must be unlocked to save Ansible Pad settings.")
+
+        merged = self._ansible_pad_settings_raw()
+        for field in _ANSIBLE_PAD_SETTING_FIELDS.values():
+            if field not in settings:
+                continue
+            value = settings[field]
+            if field in {"password", "key_passphrase"} and value == "***":
+                continue
+            merged[field] = value
+        cleaned = normalize_ansible_pad_settings(merged)
+        for setting, field in _ANSIBLE_PAD_SETTING_FIELDS.items():
+            setter(setting, cleaned[field])
+        return self._ansible_pad_public_settings(cleaned)
+
+    def _ansible_pad_export_cards(self) -> list[dict]:
+        with self._lock:
+            cards = list(self._cards.values())
+        return [
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+                "username": card.username,
+                "device_profile": card.device_profile,
+            }
+            for card in cards
+        ]
+
+    def export_ansible_pad_zip_bytes(self) -> bytes:
+        settings = self._ansible_pad_settings_raw()
+        return build_ansible_pad_zip_bytes(
+            cards=self._ansible_pad_export_cards(),
+            contingency_groups=self.get_contingency_groups(),
+            control_host=settings["host"],
+        )
+
+    @staticmethod
+    def _ansible_pad_relative_playbook(playbook: str) -> str:
+        clean = str(playbook or "").replace("\\", "/").strip().lstrip("/")
+        if not clean or ".." in clean.split("/"):
+            raise ValueError("playbook must be a package-relative path")
+        return clean
+
+    def _ansible_pad_run_remote(
+        self,
+        *,
+        settings: dict,
+        argv: list[str],
+        cwd: str | None,
+        files: dict[str, str] | None = None,
+    ) -> dict:
+        with self._lock:
+            connect = self._ansible_pad_connect
+            sftp_factory = self._ansible_pad_sftp
+            execute = self._ansible_pad_execute
+        client = connect(settings)
+        sftp = None
+        try:
+            if files is not None:
+                sftp = sftp_factory(client)
+                sync_files_via_sftp(sftp, settings["remote_dir"], files)
+            return run_remote_argv(
+                lambda command: execute(client, command),
+                argv,
+                cwd=cwd,
+            )
+        finally:
+            if sftp is not None and hasattr(sftp, "close"):
+                sftp.close()
+            if hasattr(client, "close"):
+                client.close()
+
+    def ansible_pad_sync_run(
+        self,
+        *,
+        playbook: str,
+        check: bool,
+        confirm: bool,
+        extra_vars: dict,
+    ) -> dict:
+        """Upload generated files, then run a generated playbook remotely."""
+        require_confirm_for_mutate(check=check, confirm=confirm)
+        if not isinstance(extra_vars, dict):
+            raise ValueError("extra_vars must be an object")
+        settings = self._ansible_pad_settings_raw()
+        remote_dir = settings["remote_dir"].rstrip("/")
+        if not remote_dir:
+            raise ValueError("remote_dir is required")
+        relative_playbook = self._ansible_pad_relative_playbook(playbook)
+        files = build_ansible_pad_files(
+            cards=self._ansible_pad_export_cards(),
+            contingency_groups=self.get_contingency_groups(),
+            control_host=settings["host"],
+        )
+        if relative_playbook not in files:
+            raise ValueError("playbook is not part of the generated package")
+        argv = build_ansible_playbook_argv(
+            playbook=f"{remote_dir}/{relative_playbook}",
+            inventory=f"{remote_dir}/inventory/hosts.yml",
+            check=check,
+        )
+        if extra_vars:
+            argv.extend(["--extra-vars", json.dumps(extra_vars)])
+        return self._ansible_pad_run_remote(
+            settings=settings, argv=argv, cwd=remote_dir, files=files
+        )
+
+    def ansible_pad_run_existing(
+        self, *, playbook: str, check: bool, confirm: bool
+    ) -> dict:
+        """Run an existing playbook path on the configured control host."""
+        require_confirm_for_mutate(check=check, confirm=confirm)
+        remote_playbook = str(playbook or "").strip()
+        if not remote_playbook:
+            raise ValueError("playbook is required")
+        settings = self._ansible_pad_settings_raw()
+        remote_dir = settings["remote_dir"].rstrip("/")
+        inventory = f"{remote_dir}/inventory/hosts.yml" if remote_dir else None
+        argv = build_ansible_playbook_argv(
+            playbook=remote_playbook, inventory=inventory, check=check
+        )
+        return self._ansible_pad_run_remote(
+            settings=settings, argv=argv, cwd=remote_dir or None
+        )
 
     def set_card_patcher(self, patcher: Callable[..., dict] | None) -> None:
         with self._lock:
@@ -6231,6 +6544,10 @@ class HealthServer:
     def site_lookup_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{SITE_LOOKUP_PATH}"
 
+    @property
+    def ansible_pad_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{ANSIBLE_PAD_PATH}"
+
     def ensure_running(self) -> None:
         with self._lock:
             if self._started:
@@ -6867,6 +7184,13 @@ class HealthServer:
         webbrowser.open(self.site_lookup_url)
         _log(f"Opened Site Lookup in browser: {self.site_lookup_url}")
         return self.site_lookup_url
+
+    def open_ansible_pad(self) -> str:
+        """Open Ansible Pad in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.ansible_pad_url)
+        _log(f"Opened Ansible Pad in browser: {self.ansible_pad_url}")
+        return self.ansible_pad_url
 
     def open_contingency_groups(self) -> str:
         """Open the contingency groups reference page in the default browser."""
