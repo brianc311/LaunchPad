@@ -20,6 +20,18 @@ def test_ensure_sudo_dash_s():
     assert ensure_sudo_dash_s("uptime") == "uptime"
 
 
+def test_ensure_sudo_dash_s_no_duplicate_when_s_present():
+    assert ensure_sudo_dash_s("sudo -n -S id") == "sudo -n -S id"
+    assert ensure_sudo_dash_s("sudo -nS id") == "sudo -nS id"
+    assert ensure_sudo_dash_s("sudo -u root -S id") == "sudo -u root -S id"
+    assert ensure_sudo_dash_s("sudo --user root -S id") == "sudo --user root -S id"
+
+
+def test_ensure_sudo_dash_s_inserts_after_option_args():
+    assert ensure_sudo_dash_s("sudo -u root id") == "sudo -S -u root id"
+    assert ensure_sudo_dash_s("sudo --user=root id") == "sudo -S --user=root id"
+
+
 def test_prepare_feeds_stdin_or_errors():
     cmd, payload = prepare_hadoop_sudo_command("sudo shutdown -h now", sudo_password="secret")
     assert cmd == "sudo -S shutdown -h now"
