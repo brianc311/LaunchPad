@@ -17,7 +17,6 @@ class Card:
     serial_number: str
     username: str
     encrypted_password: str
-    encrypted_sudo_password: str
     encrypted_key_passphrase: str
     encrypted_key: str
     url: str
@@ -28,6 +27,7 @@ class Card:
     key_file_path: str
     device_profile: str
     custom_commands: str
+    encrypted_sudo_password: str = ""
 
 
 class Database:

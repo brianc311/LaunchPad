@@ -4780,6 +4780,7 @@ class HealthServer:
             key_passphrase=card.key_passphrase,
             password=card.password,
             timeout=120,
+            device_profile=card.device_profile,
             sudo_password=card.sudo_password if card.device_profile == "hadoop_linux" else "",
         )
 

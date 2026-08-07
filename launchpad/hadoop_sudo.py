@@ -2,7 +2,9 @@ import re
 
 SUDO_PASSWORD_REQUIRED = "Sudo password required for this Hadoop command"
 
-_SUDO_TOKEN = re.compile(r"\bsudo\b")
+_SUDO_TOKEN = re.compile(
+    r"(?P<prefix>(?:^|&&|\|\||[|;(\n]|\$\()\s*)(?P<sudo>\bsudo\b)"
+)
 _SUDO_SHORT_OPTS_WITH_ARG = frozenset("CDghprRtTUu")
 _SUDO_LONG_OPTS_WITH_ARG = frozenset(
     {
@@ -93,8 +95,19 @@ def ensure_sudo_dash_s(command: str) -> str:
     if not command_needs_sudo(command):
         return command
     if _sudo_has_dash_s(command):
-        return command
-    return _SUDO_TOKEN.sub("sudo -S", command, count=1)
+        match = _SUDO_TOKEN.search(command)
+        if match is not None and re.search(r"(?:^|\s)-p\s+''(?:\s|$)", command[match.end() :]):
+            return command
+        return _SUDO_TOKEN.sub(
+            lambda match: f"{match.group('prefix')}sudo -p ''",
+            command,
+            count=1,
+        )
+    return _SUDO_TOKEN.sub(
+        lambda match: f"{match.group('prefix')}sudo -S -p ''",
+        command,
+        count=1,
+    )
 
 
 def prepare_hadoop_sudo_command(

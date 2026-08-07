@@ -102,6 +102,32 @@ def test_host_power_runner_passes_sudo_password_for_hadoop(monkeypatch):
     assert captured["sudo_password"] == "sudo-secret"
 
 
+def test_host_power_runner_ignores_sudo_password_for_non_hadoop(monkeypatch):
+    card = HealthCard(
+        card_id=1,
+        name="Linux node",
+        host="10.0.0.1",
+        port=22,
+        username="operator",
+        key_path="",
+        password="ssh-secret",
+        device_profile="generic_ssh",
+        sudo_password="sudo-secret",
+    )
+    captured: dict = {}
+
+    def run_command(*args, **kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr("launchpad.health_server.run_remote_ssh_command", run_command)
+
+    HealthServer._snap_run_command(card)("sudo systemctl status service")
+
+    assert captured["device_profile"] == "generic_ssh"
+    assert captured["sudo_password"] == ""
+
+
 def test_version_133():
     from launchpad.config import APP_VERSION
 

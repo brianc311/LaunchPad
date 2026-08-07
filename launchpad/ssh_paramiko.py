@@ -181,9 +181,12 @@ def run_ssh_command(
     with password_ssh_client(host, port, username, password) as client:
         stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
         if stdin_data:
-            stdin.write(stdin_data)
-            stdin.flush()
-            stdin.channel.shutdown_write()
+            try:
+                stdin.write(stdin_data)
+                stdin.flush()
+                stdin.channel.shutdown_write()
+            except OSError:
+                pass
         exit_status = stdout.channel.recv_exit_status()
         return _read_command_output(stdout, stderr, exit_status=exit_status)
 
@@ -210,9 +213,12 @@ def run_ssh_auth_command(
     ) as client:
         stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
         if stdin_data:
-            stdin.write(stdin_data)
-            stdin.flush()
-            stdin.channel.shutdown_write()
+            try:
+                stdin.write(stdin_data)
+                stdin.flush()
+                stdin.channel.shutdown_write()
+            except OSError:
+                pass
         exit_status = stdout.channel.recv_exit_status()
         return _read_command_output(stdout, stderr, exit_status=exit_status)
 

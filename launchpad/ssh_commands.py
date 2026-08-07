@@ -65,6 +65,7 @@ def run_remote_ssh_command(
     password: str = "",
     *,
     timeout: int = 45,
+    device_profile: str = "",
     sudo_password: str = "",
 ) -> str:
     if not remote_command.strip():
@@ -76,10 +77,12 @@ def run_remote_ssh_command(
     if not key_path and not password:
         raise ValueError("SSH password or key is required to run commands.")
 
-    remote_command, stdin_data = prepare_hadoop_sudo_command(
-        remote_command,
-        sudo_password=sudo_password,
-    )
+    stdin_data = None
+    if device_profile == "hadoop_linux":
+        remote_command, stdin_data = prepare_hadoop_sudo_command(
+            remote_command,
+            sudo_password=sudo_password,
+        )
     target = f"{username}@{host}" if username else host
     _log(f"SSH command on {target}: {remote_command}")
 
@@ -250,6 +253,7 @@ def run_remote_command_suite(
                     key_path,
                     key_passphrase,
                     password,
+                    device_profile=device_profile,
                     sudo_password=sudo_password,
                 )
 
@@ -261,6 +265,7 @@ def run_remote_command_suite(
                 key_path,
                 key_passphrase,
                 password,
+                device_profile=device_profile,
                 sudo_password=sudo_password,
             )
             output = _apply_command_fallbacks(

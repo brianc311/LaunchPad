@@ -36,7 +36,7 @@ def _register_entry(server, entry: HealthDashboardEntry) -> None:
         entry.serial_number,
         entry.category,
         entry.url,
-        sudo_password=entry.sudo_password,
+        entry.sudo_password,
     )
 
 
