@@ -7,8 +7,8 @@ from typing import Any
 ANSIBLE_PAD_HOST = "ansible_pad_host"
 ANSIBLE_PAD_USER = "ansible_pad_user"
 ANSIBLE_PAD_KEY_PATH = "ansible_pad_key_path"
-ANSIBLE_PAD_KEY_PASSPHRASE = "ansible_pad_key_passphrase"
-ANSIBLE_PAD_PASSWORD = "ansible_pad_password"
+ANSIBLE_PAD_KEY_PASSPHRASE_ENCRYPTED = "ansible_pad_key_passphrase_encrypted"
+ANSIBLE_PAD_PASSWORD_ENCRYPTED = "ansible_pad_password_encrypted"
 ANSIBLE_PAD_REMOTE_DIR = "ansible_pad_remote_dir"
 ANSIBLE_PAD_DEFAULT_PLAYBOOK = "ansible_pad_default_playbook"
 
@@ -18,8 +18,6 @@ _SETTING_TO_FIELD = {
     ANSIBLE_PAD_HOST: "host",
     ANSIBLE_PAD_USER: "user",
     ANSIBLE_PAD_KEY_PATH: "key_path",
-    ANSIBLE_PAD_KEY_PASSPHRASE: "key_passphrase",
-    ANSIBLE_PAD_PASSWORD: "password",
     ANSIBLE_PAD_REMOTE_DIR: "remote_dir",
     ANSIBLE_PAD_DEFAULT_PLAYBOOK: "default_playbook",
 }
@@ -55,4 +53,7 @@ def normalize_ansible_pad_settings(raw: dict) -> dict:
         if field == "host" and not val:
             continue
         out[field] = val
+    for field in ("key_passphrase", "password"):
+        if field in data:
+            out[field] = _clean_str(data[field])
     return out

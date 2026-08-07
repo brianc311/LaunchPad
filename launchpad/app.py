@@ -178,7 +178,9 @@ class LaunchPadApp(ctk.CTk):
             }
 
         get_health_server().set_sync_provider(provider)
-        get_health_server().set_settings_backend(db.get_setting, db.set_setting)
+        get_health_server().set_settings_backend(
+            db.get_setting, db.set_setting, crypto_key=crypto_key
+        )
         get_health_server().set_card_patcher(patch_card)
         get_health_server().set_card_launch_backend(connect_card, open_card_gui)
 

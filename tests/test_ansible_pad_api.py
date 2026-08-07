@@ -1,10 +1,13 @@
 import io
 import json
 
+from cryptography.fernet import Fernet
+
 import launchpad.health_server as health_server_module
 from launchpad.ansible_pad_settings import (
     ANSIBLE_PAD_HOST,
-    ANSIBLE_PAD_PASSWORD,
+    ANSIBLE_PAD_KEY_PASSPHRASE_ENCRYPTED,
+    ANSIBLE_PAD_PASSWORD_ENCRYPTED,
     ANSIBLE_PAD_REMOTE_DIR,
     ANSIBLE_PAD_USER,
 )
@@ -87,13 +90,14 @@ def test_export_ansible_pad_zip_contains_package_files():
 def test_ansible_pad_settings_persist_and_mask_password():
     settings, getter, setter = _settings_backend()
     server = HealthServer()
-    server.set_settings_backend(getter, setter)
+    server.set_settings_backend(getter, setter, crypto_key=Fernet.generate_key())
 
     saved = server.set_ansible_pad_settings(
         {
             "host": "control.example",
             "user": "ansible",
             "password": "control-secret",
+            "key_passphrase": "key-secret",
             "remote_dir": "/srv/launchpad",
         }
     )
@@ -101,7 +105,10 @@ def test_ansible_pad_settings_persist_and_mask_password():
     assert saved["password"] == "***"
     assert settings[ANSIBLE_PAD_HOST] == "control.example"
     assert settings[ANSIBLE_PAD_USER] == "ansible"
-    assert settings[ANSIBLE_PAD_PASSWORD] == "control-secret"
+    assert settings[ANSIBLE_PAD_PASSWORD_ENCRYPTED] != "control-secret"
+    assert settings[ANSIBLE_PAD_KEY_PASSPHRASE_ENCRYPTED] != "key-secret"
+    assert "ansible_pad_password" not in settings
+    assert "ansible_pad_key_passphrase" not in settings
     assert settings[ANSIBLE_PAD_REMOTE_DIR] == "/srv/launchpad"
     assert server.get_ansible_pad_settings()["password"] == "***"
 
@@ -139,7 +146,7 @@ def test_sync_run_check_uploads_and_executes_without_confirm():
         playbook="playbooks/start_fc_consistgrp.yml",
         check=True,
         confirm=False,
-        extra_vars={"cg_name": "CG_A"},
+        extra_vars={"cg_name": "CG_A", "target_hosts": ["Array_A"]},
     )
 
     assert result["returncode"] == 0
@@ -193,8 +200,70 @@ def test_run_existing_executes_requested_remote_playbook():
     )
 
     result = server.ansible_pad_run_existing(
-        playbook="/opt/runbooks/existing.yml", check=True, confirm=False
+        playbook="/opt/runbooks/existing.yml",
+        check=True,
+        confirm=False,
+        extra_vars={"cg_name": "CG_A"},
     )
 
     assert result["returncode"] == 0
     assert "/opt/runbooks/existing.yml" in commands[0]
+    assert "-i /srv/launchpad/inventory/hosts.yml" not in commands[0]
+    assert "cd /srv/launchpad" not in commands[0]
+    assert "--extra-vars" in commands[0]
+
+
+def test_sync_run_rejects_unsafe_extra_vars():
+    _settings, getter, setter = _settings_backend(
+        {
+            ANSIBLE_PAD_HOST: "control.example",
+            ANSIBLE_PAD_REMOTE_DIR: "/srv/launchpad",
+        }
+    )
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+
+    try:
+        server.ansible_pad_sync_run(
+            playbook="playbooks/start_fc_consistgrp.yml",
+            check=True,
+            confirm=False,
+            extra_vars={"cg_name": "CG_A; rm -rf /"},
+        )
+    except ValueError as exc:
+        assert "Unsafe CLI token" in str(exc)
+    else:
+        raise AssertionError("unsafe cg_name must be rejected")
+
+
+def test_sync_run_ssh_failure_returns_json_502(monkeypatch):
+    class FailingServer:
+        def ansible_pad_sync_run(self, **_kwargs):
+            raise OSError("SSH auth failed")
+
+    response = _post(
+        "/api/ansible-pad/sync-run",
+        {
+            "playbook": "playbooks/start_fc_consistgrp.yml",
+            "check": True,
+            "confirm": False,
+            "extra_vars": {"cg_name": "CG_A"},
+        },
+        monkeypatch,
+        FailingServer(),
+    )
+
+    assert response == {"payload": {"error": "SSH auth failed"}, "status": 502}
+
+
+def test_settings_get_failure_returns_json_error(monkeypatch):
+    class FailingServer:
+        def get_ansible_pad_settings(self):
+            raise OSError("settings backend unavailable")
+
+    response = _get("/api/ansible-pad/settings", monkeypatch, FailingServer())
+
+    assert response == {
+        "json": {"error": "settings backend unavailable"},
+        "status": 500,
+    }

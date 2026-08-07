@@ -67,7 +67,10 @@ ANSIBLE_PAD_HTML = """<!doctype html>
           </select>
         </label>
         <label>Existing remote playbook<input id="existing-playbook" placeholder="/opt/runbooks/playbook.yml"></label>
+        <label>Consistency group name<input id="cg-name" placeholder="MY_CG"></label>
+        <label>Target inventory host(s)<input id="target-hosts" placeholder="site_a, site_b"></label>
       </div>
+      <p class="hint">Choose explicit generated-inventory hosts for Sync &amp; Run. Existing playbooks use their own inventory unless that playbook consumes supplied extra vars.</p>
       <div class="checks">
         <label><input id="check-mode" type="checkbox" checked> Check mode / dry run</label>
         <label><input id="confirm-mutate" type="checkbox"> I confirm this mutating run</label>
@@ -84,6 +87,7 @@ ANSIBLE_PAD_HTML = """<!doctype html>
       <h2>Run log</h2>
       <pre id="log" aria-live="polite">Ready. Check mode is on by default.</pre>
     </section>
+    <p class="hint">LaunchPad {{APP_VERSION}}</p>
   </main>
   <script>
     const fields = ["host", "user", "key_path", "key_passphrase", "password", "remote_dir", "default_playbook"];
@@ -146,12 +150,18 @@ ANSIBLE_PAD_HTML = """<!doctype html>
         writeLog("Mutating runs require \"I confirm this mutating run\".");
         return;
       }
+      const extraVars = {};
+      const cgName = formValue("cg-name");
+      const targetHosts = formValue("target-hosts")
+        .split(",").map((host) => host.trim()).filter(Boolean);
+      if (cgName) extraVars.cg_name = cgName;
+      if (targetHosts.length) extraVars.target_hosts = targetHosts;
       writeLog(`Running ${playbook}${check ? " in check mode" : ""}...`);
       try {
         const result = await requestJson(path, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({playbook, check, confirm}),
+          body: JSON.stringify({playbook, check, confirm, extra_vars: extraVars}),
         });
         writeLog([`Exit code: ${result.returncode}`, result.stdout, result.stderr].filter(Boolean).join("\\n\\n"));
       } catch (error) {

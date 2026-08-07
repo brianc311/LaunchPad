@@ -31,9 +31,9 @@ from launchpad.ansible_pad_remote import (
 from launchpad.ansible_pad_settings import (
     ANSIBLE_PAD_DEFAULT_PLAYBOOK,
     ANSIBLE_PAD_HOST,
-    ANSIBLE_PAD_KEY_PASSPHRASE,
+    ANSIBLE_PAD_KEY_PASSPHRASE_ENCRYPTED,
     ANSIBLE_PAD_KEY_PATH,
-    ANSIBLE_PAD_PASSWORD,
+    ANSIBLE_PAD_PASSWORD_ENCRYPTED,
     ANSIBLE_PAD_REMOTE_DIR,
     ANSIBLE_PAD_USER,
     normalize_ansible_pad_settings,
@@ -57,10 +57,12 @@ from launchpad.contingency_snap_create import (
     SnapStep,
     append_snap_cg_assign_steps,
     build_snap_steps,
+    cli_token,
     collect_inventory,
     resolve_card_by_storage_hint,
     run_snap_steps,
 )
+from launchpad.crypto import decrypt_text, encrypt_text
 from launchpad.fc_cg_summary import (
     build_cg_summaries,
     schedule_context_from_capacity,
@@ -233,10 +235,12 @@ _ANSIBLE_PAD_SETTING_FIELDS = {
     ANSIBLE_PAD_HOST: "host",
     ANSIBLE_PAD_USER: "user",
     ANSIBLE_PAD_KEY_PATH: "key_path",
-    ANSIBLE_PAD_KEY_PASSPHRASE: "key_passphrase",
-    ANSIBLE_PAD_PASSWORD: "password",
     ANSIBLE_PAD_REMOTE_DIR: "remote_dir",
     ANSIBLE_PAD_DEFAULT_PLAYBOOK: "default_playbook",
+}
+_ANSIBLE_PAD_SECRET_SETTINGS = {
+    ANSIBLE_PAD_KEY_PASSPHRASE_ENCRYPTED: "key_passphrase",
+    ANSIBLE_PAD_PASSWORD_ENCRYPTED: "password",
 }
 
 
@@ -2229,7 +2233,10 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self._send_html(ANSIBLE_PAD_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
         if path == "/api/ansible-pad/settings":
-            self._send_json(server.get_ansible_pad_settings())
+            try:
+                self._send_json(server.get_ansible_pad_settings())
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
             return
         if path == "/api/ansible-pad/export.zip":
             try:
@@ -3211,11 +3218,15 @@ class _HealthHandler(BaseHTTPRequestHandler):
                         playbook=str(payload.get("playbook") or ""),
                         check=payload.get("check") is True,
                         confirm=payload.get("confirm") is True,
+                        extra_vars=payload.get("extra_vars") or {},
                     )
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
             except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            except Exception as exc:
                 self._send_json({"error": str(exc)}, status=502)
                 return
             self._send_json(result)
@@ -3774,6 +3785,7 @@ class HealthServer:
         self._sync_provider: Callable[[], int] | None = None
         self._get_setting: Callable[[str, str], str] | None = None
         self._set_setting: Callable[[str, str], None] | None = None
+        self._crypto_key: bytes | None = None
         self._ansible_pad_connect: Callable[[dict], Any] = (
             self._default_ansible_pad_connect
         )
@@ -3801,10 +3813,13 @@ class HealthServer:
         self,
         get_setting: Callable[[str, str], str] | None,
         set_setting: Callable[[str, str], None] | None,
+        *,
+        crypto_key: bytes | None = None,
     ) -> None:
         with self._lock:
             self._get_setting = get_setting
             self._set_setting = set_setting
+            self._crypto_key = crypto_key
 
     @staticmethod
     def _default_ansible_pad_connect(settings: dict) -> Any:
@@ -3849,14 +3864,24 @@ class HealthServer:
     def _ansible_pad_settings_raw(self) -> dict:
         with self._lock:
             getter = self._get_setting
+            crypto_key = self._crypto_key
         if not getter:
             return normalize_ansible_pad_settings({})
-        return normalize_ansible_pad_settings(
+        settings = normalize_ansible_pad_settings(
             {
                 setting: getter(setting, "")
                 for setting in _ANSIBLE_PAD_SETTING_FIELDS
             }
         )
+        for setting, field in _ANSIBLE_PAD_SECRET_SETTINGS.items():
+            encrypted = getter(setting, "")
+            if encrypted:
+                if crypto_key is None:
+                    raise RuntimeError(
+                        "LaunchPad must be unlocked to read Ansible Pad credentials."
+                    )
+                settings[field] = decrypt_text(crypto_key, encrypted)
+        return settings
 
     @staticmethod
     def _ansible_pad_public_settings(settings: dict) -> dict:
@@ -3878,11 +3903,16 @@ class HealthServer:
             raise ValueError("settings must be an object")
         with self._lock:
             setter = self._set_setting
+            crypto_key = self._crypto_key
         if not setter:
             raise RuntimeError("LaunchPad must be unlocked to save Ansible Pad settings.")
 
         merged = self._ansible_pad_settings_raw()
-        for field in _ANSIBLE_PAD_SETTING_FIELDS.values():
+        fields = (
+            tuple(_ANSIBLE_PAD_SETTING_FIELDS.values())
+            + tuple(_ANSIBLE_PAD_SECRET_SETTINGS.values())
+        )
+        for field in fields:
             if field not in settings:
                 continue
             value = settings[field]
@@ -3890,8 +3920,14 @@ class HealthServer:
                 continue
             merged[field] = value
         cleaned = normalize_ansible_pad_settings(merged)
+        if crypto_key is None and any(
+            cleaned[field] for field in _ANSIBLE_PAD_SECRET_SETTINGS.values()
+        ):
+            raise RuntimeError("LaunchPad must be unlocked to save Ansible Pad credentials.")
         for setting, field in _ANSIBLE_PAD_SETTING_FIELDS.items():
             setter(setting, cleaned[field])
+        for setting, field in _ANSIBLE_PAD_SECRET_SETTINGS.items():
+            setter(setting, encrypt_text(crypto_key, cleaned[field]) if crypto_key else "")
         return self._ansible_pad_public_settings(cleaned)
 
     def _ansible_pad_export_cards(self) -> list[dict]:
@@ -3952,6 +3988,31 @@ class HealthServer:
             if hasattr(client, "close"):
                 client.close()
 
+    @staticmethod
+    def _ansible_pad_generated_extra_vars(extra_vars: dict) -> dict:
+        """Validate raw-task inputs and normalize explicit inventory targets."""
+        if not isinstance(extra_vars, dict):
+            raise ValueError("extra_vars must be an object")
+
+        normalized: dict[str, Any] = {}
+        for name, value in extra_vars.items():
+            if name == "target_hosts":
+                values = value.split(",") if isinstance(value, str) else value
+                if not isinstance(values, list) or not values:
+                    raise ValueError("target_hosts must name at least one inventory host")
+                normalized[name] = [cli_token(str(host)) for host in values if str(host).strip()]
+                if not normalized[name]:
+                    raise ValueError("target_hosts must name at least one inventory host")
+            elif name in {"cg_name", "source_volume", "snap_volume", "fc_map_name"}:
+                normalized[name] = cli_token(str(value))
+            elif name == "perform_changes" and isinstance(value, bool):
+                normalized[name] = value
+            else:
+                raise ValueError(f"Unsupported Ansible Pad extra var: {name}")
+        if not normalized.get("target_hosts"):
+            raise ValueError("target_hosts must name at least one inventory host")
+        return normalized
+
     def ansible_pad_sync_run(
         self,
         *,
@@ -3962,8 +4023,7 @@ class HealthServer:
     ) -> dict:
         """Upload generated files, then run a generated playbook remotely."""
         require_confirm_for_mutate(check=check, confirm=confirm)
-        if not isinstance(extra_vars, dict):
-            raise ValueError("extra_vars must be an object")
+        extra_vars = self._ansible_pad_generated_extra_vars(extra_vars)
         settings = self._ansible_pad_settings_raw()
         remote_dir = settings["remote_dir"].rstrip("/")
         if not remote_dir:
@@ -3988,21 +4048,23 @@ class HealthServer:
         )
 
     def ansible_pad_run_existing(
-        self, *, playbook: str, check: bool, confirm: bool
+        self, *, playbook: str, check: bool, confirm: bool, extra_vars: dict
     ) -> dict:
         """Run an existing playbook path on the configured control host."""
         require_confirm_for_mutate(check=check, confirm=confirm)
+        if not isinstance(extra_vars, dict):
+            raise ValueError("extra_vars must be an object")
         remote_playbook = str(playbook or "").strip()
         if not remote_playbook:
             raise ValueError("playbook is required")
         settings = self._ansible_pad_settings_raw()
-        remote_dir = settings["remote_dir"].rstrip("/")
-        inventory = f"{remote_dir}/inventory/hosts.yml" if remote_dir else None
         argv = build_ansible_playbook_argv(
-            playbook=remote_playbook, inventory=inventory, check=check
+            playbook=remote_playbook, inventory=None, check=check
         )
+        if extra_vars:
+            argv.extend(["--extra-vars", json.dumps(extra_vars)])
         return self._ansible_pad_run_remote(
-            settings=settings, argv=argv, cwd=remote_dir or None
+            settings=settings, argv=argv, cwd=None
         )
 
     def set_card_patcher(self, patcher: Callable[..., dict] | None) -> None:

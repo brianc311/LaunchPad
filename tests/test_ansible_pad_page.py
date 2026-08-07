@@ -10,6 +10,10 @@ def test_ansible_pad_markers():
     assert "/api/ansible-pad/sync-run" in ANSIBLE_PAD_HTML
     assert "/api/ansible-pad/run-existing" in ANSIBLE_PAD_HTML
     assert "plp5-dz5-nw" in ANSIBLE_PAD_HTML
+    assert 'id="cg-name"' in ANSIBLE_PAD_HTML
+    assert 'id="target-hosts"' in ANSIBLE_PAD_HTML
+    assert "extra_vars" in ANSIBLE_PAD_HTML
+    assert "{{APP_VERSION}}" in ANSIBLE_PAD_HTML
 
 
 def test_dashboard_lists_ansible_pad_tool():

@@ -40,6 +40,7 @@ def _build_inventory(cards: list[dict]) -> str:
         "all:",
         "  hosts:",
     ]
+    emitted_names: set[str] = set()
     for card in cards:
         if not isinstance(card, dict):
             continue
@@ -47,8 +48,19 @@ def _build_inventory(cards: list[dict]) -> str:
         if not host:
             continue
         inv_name = _inventory_hostname(card)
+        if inv_name in emitted_names:
+            card_id = str(card.get("id") or "").strip()
+            suffix = f"_card_{card_id}" if card_id else "_card"
+            candidate = f"{inv_name}{suffix}"
+            counter = 2
+            while candidate in emitted_names:
+                candidate = f"{inv_name}{suffix}_{counter}"
+                counter += 1
+            inv_name = candidate
+        emitted_names.add(inv_name)
         lines.append(f"    {inv_name}:")
         lines.append(f"      ansible_host: {_yaml_quote(host)}")
+        lines.append("      ansible_connection: ssh")
         username = str(card.get("username") or "").strip()
         if username:
             lines.append(f"      ansible_user: {_yaml_quote(username)}")
@@ -84,6 +96,14 @@ ansible-playbook -i inventory/hosts.yml playbooks/snap_copy_stub.yml --check
 
 Use `--check` for dry-run. Private keys and array passwords are not included in
 this ZIP; configure SSH/auth on `{control_host}` separately.
+
+## Array connection and targeting
+
+The included tasks use `ansible.builtin.raw`, so the array does not need Python.
+The generated inventory sets `ansible_connection: ssh`; configure its SSH
+authentication on `{control_host}`. Generated playbooks require an explicit
+target, for example `-e 'target_hosts=["site_a"]'`, or use
+`--limit site_a`. Do not run a mutating playbook without choosing its target.
 """
 
 
@@ -92,7 +112,7 @@ def _build_start_fc_consistgrp_playbook() -> str:
 # Start a FlashCopy consistency group (aligned with LaunchPad FlashCopy CG start_group).
 # Array SSH is via Ansible inventory on the control host — not from LaunchPad.
 - name: Start FlashCopy consistency group
-  hosts: all
+  hosts: "{{ target_hosts | default([]) }}"
   gather_facts: false
   vars:
     cg_name: ""  # required: consistency group name
@@ -104,11 +124,11 @@ def _build_start_fc_consistgrp_playbook() -> str:
         fail_msg: "Set cg_name (e.g. -e cg_name=MY_CG)"
 
     - name: Prepare consistency group start
-      ansible.builtin.shell: "svctask prestartfcconsistgrp {{ cg_name }}"
+      ansible.builtin.raw: "svctask prestartfcconsistgrp {{ cg_name | quote }}"
       changed_when: true
 
     - name: Start consistency group
-      ansible.builtin.shell: "svctask startfcconsistgrp {{ cg_name }}"
+      ansible.builtin.raw: "svctask startfcconsistgrp {{ cg_name | quote }}"
       changed_when: true
 """
 
@@ -118,7 +138,7 @@ def _build_snap_copy_stub_playbook() -> str:
 # Snap-copy stub — align tasks with LaunchPad Contingency Preview steps before running.
 # See Contingency Groups Preview in LaunchPad for the authoritative step list.
 - name: Snap copy stub
-  hosts: all
+  hosts: "{{ target_hosts | default([]) }}"
   gather_facts: false
   vars:
     perform_changes: false  # set true to allow mutating tasks (ignored in --check)
@@ -127,14 +147,14 @@ def _build_snap_copy_stub_playbook() -> str:
     fc_map_name: ""         # example: FlashCopy map name
   tasks:
     - name: Example snap copy map (stub)
-      ansible.builtin.shell: >-
-        svctask mkfcmap -source {{ source_volume }} -target {{ snap_volume }}
-        -name {{ fc_map_name }}
+      ansible.builtin.raw: >-
+        svctask mkfcmap -source {{ source_volume | quote }} -target {{ snap_volume | quote }}
+        -name {{ fc_map_name | quote }}
       when: perform_changes | bool and not ansible_check_mode
       changed_when: true
 
     - name: Example start FlashCopy map (stub)
-      ansible.builtin.shell: "svctask startfcmap {{ fc_map_name }}"
+      ansible.builtin.raw: "svctask startfcmap {{ fc_map_name | quote }}"
       when: perform_changes | bool and not ansible_check_mode
       changed_when: true
 """
