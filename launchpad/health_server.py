@@ -229,12 +229,14 @@ from launchpad.storage_presets import (
 )
 from launchpad.volume_find import (
     anderson_rename_plan,
+    apply_pathsum_status_to_hosts,
     find_hosts_in_cards,
     find_volumes_in_cards,
     host_name_matches,
     is_volume_find_eligible,
     normalize_site_host,
     parse_showhost_hosts,
+    parse_showhost_pathsum_status,
     parse_showvv_volumes,
     vendor_for_profile,
     volume_name_matches,
@@ -6956,11 +6958,11 @@ class HealthServer:
             hpe_warning: str | None = None
             if profile in HPE_SHELL_PROFILES:
                 try:
-                    host_output, vv_output = run_ssh_auth_hpe_commands(
+                    host_output, pathsum_output, vv_output = run_ssh_auth_hpe_commands(
                         card.host,
                         card.port,
                         card.username,
-                        ["showhost", "showvv"],
+                        ["showhost", "showhost -pathsum", "showvv"],
                         password=card.password,
                         key_path=card.key_path,
                         key_passphrase=card.key_passphrase,
@@ -6969,6 +6971,10 @@ class HealthServer:
                         parse_showhost_hosts(host_output or "")
                     )
                     if fetched_hosts:
+                        apply_pathsum_status_to_hosts(
+                            fetched_hosts,
+                            parse_showhost_pathsum_status(pathsum_output or ""),
+                        )
                         hosts = fetched_hosts
                     volumes = shape_volumes_for_lookup(
                         parse_showvv_volumes(vv_output or "")

@@ -237,6 +237,38 @@ def test_parse_showvv_volumes_dashed_headers_and_preamble():
     assert "10240" in vols[0]["capacity"]
 
 
+def test_parse_showhost_pathsum_derives_online_offline_degraded():
+    from launchpad.volume_find import (
+        apply_pathsum_status_to_hosts,
+        parse_showhost_pathsum_status,
+    )
+
+    output = (
+        "Id,Name,Persona,Host_WWN,Port,Host_Paths\n"
+        "0,esx_online,VMware,10000000AAAA,1:2:1,1--- ----\n"
+        "0,esx_online,VMware,10000000BBBB,0:2:1,1--- ----\n"
+        "1,esx_degraded,VMware,10000000CCCC,1:2:2,1--- ----\n"
+        "1,esx_degraded,VMware,10000000DDDD,---,---- ----\n"
+        "2,esx_offline,Generic,10000000EEEE,---,---- ----\n"
+    )
+    status_by_host = parse_showhost_pathsum_status(output)
+    assert status_by_host["esx_online"] == "online"
+    assert status_by_host["esx_degraded"] == "degraded"
+    assert status_by_host["esx_offline"] == "offline"
+
+    hosts = [
+        {"host_name": "esx_online", "status": "", "type": "VMware"},
+        {"host_name": "esx_degraded", "status": "", "type": "VMware"},
+        {"host_name": "esx_offline", "status": "", "type": "Generic"},
+        {"host_name": "other", "status": "kept", "type": "X"},
+    ]
+    apply_pathsum_status_to_hosts(hosts, status_by_host)
+    assert hosts[0]["status"] == "online"
+    assert hosts[1]["status"] == "degraded"
+    assert hosts[2]["status"] == "offline"
+    assert hosts[3]["status"] == "kept"
+
+
 def test_hosts_from_card_ibm_fc_hosts():
     card = {
         "id": 1,

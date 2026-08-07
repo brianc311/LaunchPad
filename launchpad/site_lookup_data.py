@@ -10,7 +10,12 @@ from launchpad.flashsystem_fc import (
     parse_lsvdisk_volumes,
 )
 from launchpad.storage_presets import HPE_SHELL_PROFILES
-from launchpad.volume_find import parse_showhost_hosts, parse_showvv_volumes
+from launchpad.volume_find import (
+    parse_showhost_hosts,
+    parse_showhost_pathsum_status,
+    parse_showvv_volumes,
+    apply_pathsum_status_to_hosts,
+)
 
 
 def _command_blob(item: dict) -> str:
@@ -115,6 +120,7 @@ def inventory_from_command_results(
     hosts: list[dict] = []
     volumes: list[dict] = []
     maps: list[dict] = []
+    path_status: dict[str, str] = {}
     profile = str(device_profile or "").strip()
     is_hpe = profile in HPE_SHELL_PROFILES or profile.startswith("hpe_")
 
@@ -126,7 +132,9 @@ def inventory_from_command_results(
         if not output.strip():
             continue
         if is_hpe or "showhost" in cmd or "showvv" in cmd:
-            if not hosts and "showhost" in cmd:
+            if "showhost" in cmd and "pathsum" in cmd:
+                path_status = parse_showhost_pathsum_status(output) or path_status
+            elif not hosts and "showhost" in cmd:
                 hosts = shape_hosts_for_lookup(parse_showhost_hosts(output))
             if not volumes and "showvv" in cmd:
                 volumes = shape_volumes_for_lookup(parse_showvv_volumes(output))
@@ -143,6 +151,9 @@ def inventory_from_command_results(
             "lshostvdiskmap" in cmd or "lsvdiskhostmap" in cmd or "host lun" in cmd
         ):
             maps = parse_host_lun_maps(output)
+
+    if hosts and path_status:
+        apply_pathsum_status_to_hosts(hosts, path_status)
 
     return hosts, volumes, maps
 

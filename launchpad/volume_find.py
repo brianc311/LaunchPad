@@ -212,6 +212,99 @@ def parse_showhost_hosts(output: str) -> list[dict[str, str]]:
     return list(merged.values())
 
 
+_PORT_ACTIVE_RE = re.compile(r"^\d+:\d+:\d+$")
+
+
+def _hpe_port_is_active(port: str) -> bool:
+    return bool(_PORT_ACTIVE_RE.match(str(port or "").strip()))
+
+
+def _hpe_paths_blob_active(paths: str) -> bool:
+    """True when Host_Paths summary contains a logged-in path count (digit 1-9)."""
+    return bool(re.search(r"[1-9]", str(paths or "")))
+
+
+def parse_showhost_pathsum_status(output: str) -> dict[str, str]:
+    """Derive online/degraded/offline from ``showhost -pathsum`` rows.
+
+    HPE has no IBM-style host Status on plain ``showhost``. Pathsum Port /
+    Host_Paths columns indicate whether initiators are logged in.
+    """
+    text = str(output or "").strip()
+    if not text:
+        return {}
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return {}
+    found = _find_hpe_table_header(lines)
+    if found is None:
+        return {}
+    delim, cols, header_idx = found
+    name_i = _hpe_col_index(cols, {"name", "hostname", "host_name"})
+    if name_i is None:
+        return {}
+    port_i = _hpe_col_index(cols, {"port", "ports"})
+    paths_indices = [
+        i
+        for i, col in enumerate(cols)
+        if "path" in _norm_hpe_col(col)
+    ]
+    # Aggregate defined initiator rows vs active path rows per host name.
+    defined: dict[str, int] = {}
+    active: dict[str, int] = {}
+    for line in lines[header_idx + 1 :]:
+        parts = [p.strip() for p in line.split(delim)] if delim else line.split()
+        if len(parts) <= name_i:
+            continue
+        name = parts[name_i]
+        if not name or _norm_hpe_col(name) in {"name", "hostname", "host_name"}:
+            continue
+        # Skip ULNL legend rows that somehow include commas.
+        if name.upper() == "ULNL" or set(name) <= {"-", "U", "L", "N"}:
+            continue
+        defined[name] = defined.get(name, 0) + 1
+        port = parts[port_i] if port_i is not None and len(parts) > port_i else ""
+        if paths_indices:
+            start = min(paths_indices)
+            paths_blob = " ".join(parts[start:])
+        else:
+            # No Host_Paths header — use everything after Port when present.
+            paths_blob = (
+                " ".join(parts[port_i + 1 :]) if port_i is not None else ""
+            )
+        if _hpe_port_is_active(port) or _hpe_paths_blob_active(paths_blob):
+            active[name] = active.get(name, 0) + 1
+        else:
+            active.setdefault(name, 0)
+
+    status_by_host: dict[str, str] = {}
+    for name, defined_count in defined.items():
+        active_count = active.get(name, 0)
+        if active_count <= 0:
+            status_by_host[name] = "offline"
+        elif active_count < defined_count:
+            status_by_host[name] = "degraded"
+        else:
+            status_by_host[name] = "online"
+    return status_by_host
+
+
+def apply_pathsum_status_to_hosts(
+    hosts: list[dict],
+    status_by_host: dict[str, str],
+) -> list[dict]:
+    """Fill empty host status from pathsum-derived map (mutates and returns)."""
+    for host in hosts:
+        if not isinstance(host, dict):
+            continue
+        if str(host.get("status") or host.get("state") or "").strip():
+            continue
+        name = str(host.get("host_name") or host.get("name") or "").strip()
+        if name and name in status_by_host:
+            host["status"] = status_by_host[name]
+    return hosts
+
+
 def _showvv_column_index(cols: list[str], names: set[str]) -> int | None:
     return _hpe_col_index(cols, names)
 

@@ -159,6 +159,32 @@ def test_payload_from_card_cache_uses_hpe_command_results():
     assert payload["volumes"][0]["name"] == "vv1"
 
 
+def test_inventory_applies_showhost_pathsum_status():
+    hosts, volumes, _maps = inventory_from_command_results(
+        [
+            {
+                "label": "Hosts - host list",
+                "command": "showhost",
+                "output": "Id,Name,Persona,Port_WWN\n0,esx_a,VMware,10000000AAAA\n",
+                "error": None,
+            },
+            {
+                "label": "Hosts - path summary",
+                "command": "showhost -pathsum",
+                "output": (
+                    "Id,Name,Persona,Host_WWN,Port,Host_Paths\n"
+                    "0,esx_a,VMware,10000000AAAA,1:2:1,1--- ----\n"
+                ),
+                "error": None,
+            },
+        ],
+        device_profile="hpe_3par_8200",
+    )
+    assert hosts[0]["host_name"] == "esx_a"
+    assert hosts[0]["status"] == "online"
+    assert volumes == []
+
+
 def test_showvv_inventory_note_for_permission_denied():
     note = showvv_inventory_note(
         [
