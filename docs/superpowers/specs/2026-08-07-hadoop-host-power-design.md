@@ -117,3 +117,4 @@ Exact path names may match repo conventions; behavior above is normative.
 - Rich HDFS/YARN capacity parsing beyond raw command output.
 - Sudo password UI.
 - Ansible export of Host Power sequences.
+- Host Power A–F clickable prechecks (see `2026-08-07-host-power-af-prechecks-design.md`).
