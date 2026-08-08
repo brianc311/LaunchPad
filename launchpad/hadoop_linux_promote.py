@@ -53,13 +53,13 @@ def _merge_hadoop_linux_presets(custom_commands: str) -> str:
     if not existing:
         return preset_command_text("hadoop_linux")
     additions: list[tuple[str, str]] = []
+    additions.extend(_missing_precheck_tuples(custom_commands))
     if not _has_power_commands(custom_commands):
         additions.extend(
             (label, command)
             for label, command in HADOOP_LINUX_COMMANDS
             if label.startswith(POWER_LABEL_PREFIX)
         )
-    additions.extend(_missing_precheck_tuples(custom_commands))
     if not additions:
         return custom_commands
     body = custom_commands.rstrip()
@@ -73,9 +73,10 @@ def ensure_hadoop_linux_cards(db) -> int:
     """Set device_profile/commands so Host Power can list Hadoop SSH cards.
 
     - General SSH cards (empty profile) whose name/category/host looks like
-      Hadoop are promoted to ``hadoop_linux`` with Power - presets merged in.
-    - Existing ``hadoop_linux`` cards missing Power - commands get those
-      presets appended (existing custom lines kept).
+      Hadoop are promoted to ``hadoop_linux`` with missing Precheck - A…F and
+      Power - presets merged in (Precheck before Power, matching the preset).
+    - Existing ``hadoop_linux`` cards missing Precheck - A…F and/or Power -
+      commands get those presets appended (existing custom lines kept).
     - Storage/other profiles are left alone even if the name mentions Hadoop.
     """
     updated = 0

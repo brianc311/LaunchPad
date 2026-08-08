@@ -81,6 +81,26 @@ def test_ensure_hadoop_linux_cards_adds_missing_power_commands(tmp_path):
     assert any(label.startswith("Power -") for label in labels)
 
 
+def test_ensure_hadoop_linux_cards_merge_appends_precheck_before_power(tmp_path):
+    db = Database(tmp_path / "launchpad.db")
+    card_id = _ssh_card(
+        db,
+        name="Hadoop node",
+        device_profile="hadoop_linux",
+        custom_commands="Health - Uptime|uptime",
+    )
+
+    assert ensure_hadoop_linux_cards(db) == 1
+    card = db.get_card(card_id)
+    labels = [label for label, _ in parse_command_lines(card.custom_commands)]
+    assert any(label.startswith("Precheck - ") for label in labels)
+    assert any(label.startswith("Power -") for label in labels)
+    precheck_indexes = [i for i, label in enumerate(labels) if label.startswith("Precheck - ")]
+    power_indexes = [i for i, label in enumerate(labels) if label.startswith("Power -")]
+    assert precheck_indexes and power_indexes
+    assert max(precheck_indexes) < min(power_indexes)
+
+
 def test_ensure_hadoop_linux_cards_appends_missing_prechecks(tmp_path):
     db = Database(tmp_path / "launchpad.db")
     card_id = _ssh_card(
