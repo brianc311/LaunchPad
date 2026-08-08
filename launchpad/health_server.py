@@ -97,6 +97,7 @@ from launchpad.host_volume_health_page import (
 )
 from launchpad.host_power import HOST_POWER_HTML, HOST_POWER_PATH
 from launchpad.host_power_ops import (
+    HOST_POWER_MODE_SHUTDOWN_ONLY,
     HOST_POWER_MUTATE_SSH_TIMEOUT,
     HOST_POWER_PRECHECK_SSH_TIMEOUT,
     build_host_power_preview,
@@ -4952,7 +4953,7 @@ class HealthServer:
                 extract_power_steps(payload["commands"]),
                 mode_n,
             )
-            if mode_n == "shutdown_only" and not steps:
+            if mode_n == HOST_POWER_MODE_SHUTDOWN_ONLY and not steps:
                 hosts.append(
                     {
                         "card_id": card.card_id,

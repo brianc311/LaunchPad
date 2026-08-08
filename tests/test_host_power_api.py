@@ -2,6 +2,10 @@ import io
 import json
 
 import launchpad.health_server as health_server_module
+from launchpad.host_power_ops import (
+    HOST_POWER_MUTATE_SSH_TIMEOUT,
+    HOST_POWER_PRECHECK_SSH_TIMEOUT,
+)
 from launchpad.health_server import HealthCard, HealthServer, _HealthHandler
 
 
@@ -409,14 +413,39 @@ def test_host_power_run_stop_then_shutdown_still_runs_all_steps(monkeypatch):
     ]
 
 
-def test_snap_run_command_timeouts():
-    from launchpad.host_power_ops import (
-        HOST_POWER_MUTATE_SSH_TIMEOUT,
-        HOST_POWER_PRECHECK_SSH_TIMEOUT,
-    )
-    from launchpad.health_server import HealthServer
-
+def test_snap_run_command_timeouts(monkeypatch):
     assert HOST_POWER_PRECHECK_SSH_TIMEOUT == 45
     assert HOST_POWER_MUTATE_SSH_TIMEOUT == 120
     source = HealthServer._snap_run_command.__code__.co_varnames
     assert "timeout" in source
+
+    server = HealthServer()
+    server._cards[1] = _card(
+        1,
+        custom_commands=(
+            "Power - Stop Hadoop|sudo systemctl stop hadoop\n"
+            "Power - OS Shutdown|sudo shutdown -h now"
+        ),
+    )
+    snap_calls: list[dict] = []
+
+    def recording_snap_run_command(_card, **kwargs):
+        snap_calls.append(kwargs)
+
+        def run_command(command: str) -> str:
+            return "ok"
+
+        return run_command
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(recording_snap_run_command),
+    )
+
+    server.host_power_precheck([1], letter="A")
+    assert snap_calls[-1]["timeout"] == HOST_POWER_PRECHECK_SSH_TIMEOUT
+
+    snap_calls.clear()
+    server.host_power_run([1], confirm=True, mode="stop_then_shutdown")
+    assert snap_calls[-1]["timeout"] == HOST_POWER_MUTATE_SSH_TIMEOUT
