@@ -23,6 +23,39 @@ def test_host_power_precheck_markers():
     assert "read-only" in HOST_POWER_HTML.lower() or "Precheck" in HOST_POWER_HTML
 
 
+def test_host_power_script_js_strings_do_not_span_lines():
+    """Python \"\"\" + JS \"\\n\" becomes a real newline and breaks loadCards()."""
+    start = HOST_POWER_HTML.index("<script>")
+    end = HOST_POWER_HTML.index("</script>", start)
+    script = HOST_POWER_HTML[start:end]
+    in_string = False
+    escaped = False
+    quote = ""
+    for index, char in enumerate(script):
+        if not in_string:
+            if char in {'"', "'"}:
+                in_string = True
+                quote = char
+            continue
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == quote:
+            in_string = False
+            quote = ""
+            continue
+        if char == "\n":
+            snippet = script[max(0, index - 40) : index + 20]
+            raise AssertionError(
+                "JS string spans a newline; escape as \\\\n in the Python source. "
+                f"Near: {snippet!r}"
+            )
+    assert "loadCards();" in script
+
+
 def test_dashboard_lists_host_power_tool():
     path = Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
     text = path.read_text(encoding="utf-8")

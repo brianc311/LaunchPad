@@ -76,7 +76,7 @@ HOST_POWER_HTML = """<!doctype html>
     function appendLog(value) {
       const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
       const existing = log.textContent || "";
-      log.textContent = existing ? existing + "\n" + text : text;
+      log.textContent = existing ? existing + "\\n" + text : text;
     }
 
     function selectedIds() {
