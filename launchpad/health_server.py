@@ -100,8 +100,11 @@ from launchpad.host_power_ops import (
     build_host_power_preview,
     coerce_card_ids,
     extract_power_steps,
+    host_power_precheck_catalog_payload,
+    normalize_precheck_letter,
     require_host_power_confirm,
     run_host_power_for_card,
+    run_host_power_precheck_for_card,
 )
 from launchpad.snapcopy_summary_page import (
     SNAPCOPY_SUMMARY_HTML,
@@ -2271,6 +2274,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == "/api/host-power/cards":
             self._send_json({"cards": server.host_power_cards()})
             return
+        if path == "/api/host-power/prechecks":
+            self._send_json({"prechecks": host_power_precheck_catalog_payload()})
+            return
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
@@ -3275,6 +3281,35 @@ class _HealthHandler(BaseHTTPRequestHandler):
                         card_ids,
                         confirm=payload.get("confirm") is True,
                     )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except (RuntimeError, OSError) as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=502)
+                return
+            self._send_json(result)
+            return
+        if path == "/api/host-power/precheck":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            card_ids = payload.get("card_ids") or []
+            if not isinstance(card_ids, list):
+                self._send_json({"error": "card_ids must be a list"}, status=400)
+                return
+            letter = payload.get("letter")
+            try:
+                result = server.host_power_precheck(card_ids, letter=letter)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
                 return
@@ -4915,6 +4950,41 @@ class HealthServer:
             )
         response: dict[str, Any] = {
             "ok": all(host["ok"] for host in hosts),
+            "hosts": hosts,
+        }
+        if selection_warnings:
+            response["warnings"] = selection_warnings
+        return response
+
+    def host_power_precheck(self, card_ids: list[Any], *, letter: str) -> dict[str, Any]:
+        letter_n = normalize_precheck_letter(letter)
+        cards, selection_warnings = self._host_power_selection(card_ids)
+        if not cards:
+            return {
+                "ok": False,
+                "letter": letter_n,
+                "warnings": selection_warnings,
+                "hosts": [],
+            }
+        hosts: list[dict[str, Any]] = []
+        for card in cards:
+            payload = self._host_power_card_payload(card)
+            result = run_host_power_precheck_for_card(
+                letter=letter_n,
+                commands=payload["commands"],
+                run_command=self._snap_run_command(card),
+            )
+            hosts.append(
+                {
+                    "card_id": card.card_id,
+                    "name": card.name,
+                    "host": card.host,
+                    **result,
+                }
+            )
+        response: dict[str, Any] = {
+            "ok": all(host["ok"] for host in hosts),
+            "letter": letter_n,
             "hosts": hosts,
         }
         if selection_warnings:

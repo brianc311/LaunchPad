@@ -26,6 +26,20 @@ def _card(
     )
 
 
+def _get(path: str, monkeypatch, server: HealthServer) -> dict:
+    handler = object.__new__(_HealthHandler)
+    handler.path = path
+    sent: dict = {}
+
+    def _send_json(response, status=200):
+        sent.update(payload=response, status=status)
+
+    handler._send_json = _send_json
+    monkeypatch.setattr(health_server_module, "get_health_server", lambda: server)
+    handler.do_GET()
+    return sent
+
+
 def _post(path: str, payload: dict, monkeypatch, server: HealthServer) -> dict:
     body = json.dumps(payload).encode()
     handler = object.__new__(_HealthHandler)
@@ -187,6 +201,80 @@ def test_host_power_preview_coerces_string_ids():
     result = server.host_power_preview(["1"])
     assert result["ok"] is True
     assert len(result["hosts"]) == 1
+
+
+def test_host_power_prechecks_catalog_get(monkeypatch):
+    server = HealthServer()
+    response = _get("/api/host-power/prechecks", monkeypatch, server)
+    assert response["status"] == 200
+    letters = [row["letter"] for row in response["payload"]["prechecks"]]
+    assert letters == ["A", "B", "C", "D", "E", "F"]
+    assert "command" not in response["payload"]["prechecks"][0]
+
+
+def test_host_power_precheck_runs_without_confirm(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(1)
+    commands: list[str] = []
+
+    def run_command(command: str) -> str:
+        commands.append(command)
+        return " 12:00:01 up 1 day"
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(lambda _card: run_command),
+    )
+    result = server.host_power_precheck([1], letter="a")
+    assert result["ok"] is True
+    assert result["letter"] == "A"
+    assert result["hosts"][0]["ok"] is True
+    assert commands == ["uptime; cat /proc/loadavg"]
+
+
+def test_host_power_precheck_invalid_letter_is_400(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(1)
+    response = _post(
+        "/api/host-power/precheck",
+        {"card_ids": [1], "letter": "Z"},
+        monkeypatch,
+        server,
+    )
+    assert response["status"] == 400
+    assert "A" in response["payload"]["error"] or "letter" in response["payload"]["error"].lower()
+
+
+def test_host_power_precheck_empty_selection_not_ok():
+    server = HealthServer()
+    result = server.host_power_precheck([], letter="A")
+    assert result["ok"] is False
+    assert result["hosts"] == []
+    assert "No hosts selected" in result["warnings"]
+
+
+def test_host_power_precheck_continues_after_one_host_fails(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(1, name="Failed host")
+    server._cards[2] = _card(2, name="Healthy host", host="10.0.0.2")
+
+    def runner_for(card: HealthCard):
+        def run_command(command: str) -> str:
+            return "ERROR: refused" if card.card_id == 1 else "ok"
+
+        return run_command
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(runner_for),
+    )
+    result = server.host_power_precheck([1, 2], letter="E")
+    assert result["ok"] is False
+    assert [host["card_id"] for host in result["hosts"]] == [1, 2]
+    assert result["hosts"][0]["ok"] is False
+    assert result["hosts"][1]["ok"] is True
 
 
 def test_host_power_api_empty_selection_not_ok(monkeypatch):
