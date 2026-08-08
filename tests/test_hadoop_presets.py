@@ -29,3 +29,18 @@ def test_hadoop_linux_presets_include_os_hadoop_and_power():
     # Power defaults must not swallow failures
     for label, cmd in power:
         assert "|| true" not in cmd, f"{label} must not use || true"
+
+
+def test_hadoop_linux_presets_include_precheck_a_through_f_before_power():
+    cmds = preset_commands_for_profile("hadoop_linux")
+    labels = [label for label, _ in cmds]
+    letters = []
+    for label in labels:
+        if label.startswith("Precheck - ") and len(label) >= 12:
+            letter = label[11]
+            if letter in "ABCDEF" and letter not in letters:
+                letters.append(letter)
+    assert letters == ["A", "B", "C", "D", "E", "F"]
+    first_power = next(i for i, label in enumerate(labels) if label.startswith("Power -"))
+    last_precheck = max(i for i, label in enumerate(labels) if label.startswith("Precheck - "))
+    assert last_precheck < first_power

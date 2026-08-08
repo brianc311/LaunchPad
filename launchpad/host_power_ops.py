@@ -8,9 +8,55 @@ string as output.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 POWER_LABEL_PREFIX = "Power -"
+PRECHECK_LABEL_PREFIX = "Precheck -"
+PRECHECK_LETTERS = ("A", "B", "C", "D", "E", "F")
+
+
+@dataclass(frozen=True)
+class HostPowerPrecheck:
+    letter: str
+    hint: str
+    label: str
+    command: str
+
+
+def host_power_precheck_catalog() -> list[HostPowerPrecheck]:
+    rows = (
+        ("A", "Uptime / load", "uptime; cat /proc/loadavg"),
+        ("B", "Failed systemd units", "systemctl --failed --no-pager 2>/dev/null || true"),
+        (
+            "C",
+            "Hadoop / HDFS / YARN units",
+            "systemctl list-units 'hadoop*' 'hdfs*' 'yarn*' --no-pager 2>/dev/null || true",
+        ),
+        (
+            "D",
+            "HDFS dfsadmin report",
+            "hdfs dfsadmin -report 2>/dev/null | head -n 40 || true",
+        ),
+        ("E", "YARN node list", "yarn node -list 2>/dev/null || true"),
+        ("F", "YARN running apps", "yarn application -list 2>/dev/null || true"),
+    )
+    return [
+        HostPowerPrecheck(
+            letter=letter,
+            hint=hint,
+            label=f"Precheck - {letter} {hint}",
+            command=command,
+        )
+        for letter, hint, command in rows
+    ]
+
+
+def host_power_precheck_catalog_payload() -> list[dict[str, str]]:
+    return [
+        {"letter": item.letter, "label": item.label, "hint": item.hint}
+        for item in host_power_precheck_catalog()
+    ]
 
 
 def extract_power_steps(commands: list[tuple[str, str]]) -> list[dict[str, str]]:

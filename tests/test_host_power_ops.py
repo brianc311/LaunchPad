@@ -1,9 +1,12 @@
 import pytest
 
 from launchpad.host_power_ops import (
+    PRECHECK_LETTERS,
     POWER_LABEL_PREFIX,
     build_host_power_preview,
     extract_power_steps,
+    host_power_precheck_catalog,
+    host_power_precheck_catalog_payload,
     require_host_power_confirm,
     run_host_power_for_card,
 )
@@ -89,3 +92,26 @@ def test_run_aborts_remaining_after_error_string():
     assert result["results"][0]["error"] == "ERROR: unit not found"
     assert calls == ["sudo systemctl stop yarn"]
     assert "shutdown" not in "".join(calls)
+
+
+def test_precheck_catalog_is_a_through_f():
+    catalog = host_power_precheck_catalog()
+    assert [item.letter for item in catalog] == list(PRECHECK_LETTERS)
+    by_letter = {item.letter: item for item in catalog}
+    assert by_letter["A"].hint == "Uptime / load"
+    assert by_letter["A"].command == "uptime; cat /proc/loadavg"
+    assert by_letter["B"].command == "systemctl --failed --no-pager 2>/dev/null || true"
+    assert by_letter["C"].command == (
+        "systemctl list-units 'hadoop*' 'hdfs*' 'yarn*' --no-pager 2>/dev/null || true"
+    )
+    assert by_letter["D"].command == "hdfs dfsadmin -report 2>/dev/null | head -n 40 || true"
+    assert by_letter["E"].command == "yarn node -list 2>/dev/null || true"
+    assert by_letter["F"].command == "yarn application -list 2>/dev/null || true"
+    assert by_letter["A"].label.startswith("Precheck - A")
+    payload = host_power_precheck_catalog_payload()
+    assert payload[0] == {
+        "letter": "A",
+        "label": by_letter["A"].label,
+        "hint": "Uptime / load",
+    }
+    assert "command" not in payload[0]
