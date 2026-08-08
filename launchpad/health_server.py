@@ -97,14 +97,19 @@ from launchpad.host_volume_health_page import (
 )
 from launchpad.host_power import HOST_POWER_HTML, HOST_POWER_PATH
 from launchpad.host_power_ops import (
+    HOST_POWER_MODE_SHUTDOWN_ONLY,
+    HOST_POWER_MUTATE_SSH_TIMEOUT,
+    HOST_POWER_PRECHECK_SSH_TIMEOUT,
     build_host_power_preview,
     coerce_card_ids,
     extract_power_steps,
     host_power_precheck_catalog_payload,
+    normalize_host_power_mode,
     normalize_precheck_letter,
     require_host_power_confirm,
     run_host_power_for_card,
     run_host_power_precheck_for_card,
+    steps_for_host_power_mode,
 )
 from launchpad.snapcopy_summary_page import (
     SNAPCOPY_SUMMARY_HTML,
@@ -3277,9 +3282,11 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 if path == "/api/host-power/preview":
                     result = server.host_power_preview(card_ids)
                 else:
+                    mode = normalize_host_power_mode(payload.get("mode"))
                     result = server.host_power_run(
                         card_ids,
                         confirm=payload.get("confirm") is True,
+                        mode=mode,
                     )
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
@@ -4842,7 +4849,11 @@ class HealthServer:
         ]
 
     @staticmethod
-    def _snap_run_command(card: HealthCard) -> Callable[[str], str]:
+    def _snap_run_command(
+        card: HealthCard,
+        *,
+        timeout: int = HOST_POWER_MUTATE_SSH_TIMEOUT,
+    ) -> Callable[[str], str]:
         return lambda command: run_remote_ssh_command(
             card.host,
             card.port,
@@ -4851,7 +4862,7 @@ class HealthServer:
             key_path=card.key_path,
             key_passphrase=card.key_passphrase,
             password=card.password,
-            timeout=120,
+            timeout=timeout,
             device_profile=card.device_profile,
             sudo_password=card.sudo_password if card.device_profile == "hadoop_linux" else "",
         )
@@ -4928,17 +4939,38 @@ class HealthServer:
         card_ids: list[Any],
         *,
         confirm: bool,
+        mode: str,
     ) -> dict[str, Any]:
         require_host_power_confirm(confirm)
+        mode_n = normalize_host_power_mode(mode)
         cards, selection_warnings = self._host_power_selection(card_ids)
         if not cards:
             return {"ok": False, "warnings": selection_warnings, "hosts": []}
         hosts: list[dict[str, Any]] = []
         for card in cards:
             payload = self._host_power_card_payload(card)
+            steps = steps_for_host_power_mode(
+                extract_power_steps(payload["commands"]),
+                mode_n,
+            )
+            if mode_n == HOST_POWER_MODE_SHUTDOWN_ONLY and not steps:
+                hosts.append(
+                    {
+                        "card_id": card.card_id,
+                        "name": card.name,
+                        "host": card.host,
+                        "ok": False,
+                        "error": "No OS shutdown Power - step",
+                        "results": [],
+                        "aborted": False,
+                    }
+                )
+                continue
             result = run_host_power_for_card(
-                steps=extract_power_steps(payload["commands"]),
-                run_command=self._snap_run_command(card),
+                steps=steps,
+                run_command=self._snap_run_command(
+                    card, timeout=HOST_POWER_MUTATE_SSH_TIMEOUT
+                ),
             )
             hosts.append(
                 {
@@ -4972,7 +5004,9 @@ class HealthServer:
             result = run_host_power_precheck_for_card(
                 letter=letter_n,
                 commands=payload["commands"],
-                run_command=self._snap_run_command(card),
+                run_command=self._snap_run_command(
+                    card, timeout=HOST_POWER_PRECHECK_SSH_TIMEOUT
+                ),
             )
             hosts.append(
                 {

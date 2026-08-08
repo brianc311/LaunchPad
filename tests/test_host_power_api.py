@@ -2,6 +2,10 @@ import io
 import json
 
 import launchpad.health_server as health_server_module
+from launchpad.host_power_ops import (
+    HOST_POWER_MUTATE_SSH_TIMEOUT,
+    HOST_POWER_PRECHECK_SSH_TIMEOUT,
+)
 from launchpad.health_server import HealthCard, HealthServer, _HealthHandler
 
 
@@ -79,7 +83,7 @@ def test_host_power_run_requires_confirm(monkeypatch):
 
     response = _post(
         "/api/host-power/run",
-        {"card_ids": [1], "confirm": False},
+        {"card_ids": [1], "confirm": False, "mode": "stop_then_shutdown"},
         monkeypatch,
         server,
     )
@@ -106,10 +110,10 @@ def test_host_power_run_skips_shutdown_after_stop_failure(monkeypatch):
     monkeypatch.setattr(
         HealthServer,
         "_snap_run_command",
-        staticmethod(lambda _card: run_command),
+        staticmethod(lambda _card, **_kwargs: run_command),
     )
 
-    result = server.host_power_run([1], confirm=True)
+    result = server.host_power_run([1], confirm=True, mode="stop_then_shutdown")
 
     assert result["ok"] is False
     assert commands == ["sudo systemctl stop hadoop"]
@@ -122,7 +126,7 @@ def test_host_power_run_continues_after_other_host_fails(monkeypatch):
     server._cards[2] = _card(2, name="Healthy host", host="10.0.0.2")
     seen: list[tuple[str, str]] = []
 
-    def runner_for(card: HealthCard):
+    def runner_for(card: HealthCard, **_kwargs):
         def run_command(command: str) -> str:
             seen.append((card.name, command))
             return "ERROR: refused" if card.card_id == 1 else "ok"
@@ -135,7 +139,7 @@ def test_host_power_run_continues_after_other_host_fails(monkeypatch):
         staticmethod(runner_for),
     )
 
-    result = server.host_power_run([1, 2], confirm=True)
+    result = server.host_power_run([1, 2], confirm=True, mode="stop_then_shutdown")
 
     assert result["ok"] is False
     assert [host["card_id"] for host in result["hosts"]] == [1, 2]
@@ -144,7 +148,7 @@ def test_host_power_run_continues_after_other_host_fails(monkeypatch):
 
 def test_host_power_run_empty_selection_not_ok():
     server = HealthServer()
-    result = server.host_power_run([], confirm=True)
+    result = server.host_power_run([], confirm=True, mode="stop_then_shutdown")
     assert result["ok"] is False
     assert result["hosts"] == []
     assert "No hosts selected" in result["warnings"]
@@ -153,7 +157,7 @@ def test_host_power_run_empty_selection_not_ok():
 def test_host_power_run_unmatched_ids_not_ok():
     server = HealthServer()
     server._cards[1] = _card(1, profile="flashsystem_5200")
-    result = server.host_power_run([1], confirm=True)
+    result = server.host_power_run([1], confirm=True, mode="stop_then_shutdown")
     assert result["ok"] is False
     assert result["hosts"] == []
     assert "No eligible Hadoop hosts matched the selection" in result["warnings"]
@@ -171,10 +175,10 @@ def test_host_power_run_coerces_string_ids(monkeypatch):
     monkeypatch.setattr(
         HealthServer,
         "_snap_run_command",
-        staticmethod(lambda _card: run_command),
+        staticmethod(lambda _card, **_kwargs: run_command),
     )
 
-    result = server.host_power_run(["1"], confirm=True)
+    result = server.host_power_run(["1"], confirm=True, mode="stop_then_shutdown")
 
     assert result["ok"] is True
     assert len(result["hosts"]) == 1
@@ -182,7 +186,7 @@ def test_host_power_run_coerces_string_ids(monkeypatch):
 
 def test_host_power_run_rejects_invalid_ids():
     server = HealthServer()
-    result = server.host_power_run(["not-an-id"], confirm=True)
+    result = server.host_power_run(["not-an-id"], confirm=True, mode="stop_then_shutdown")
     assert result["ok"] is False
     assert any("Ignored invalid card_id" in w for w in result["warnings"])
 
@@ -224,7 +228,7 @@ def test_host_power_precheck_runs_without_confirm(monkeypatch):
     monkeypatch.setattr(
         HealthServer,
         "_snap_run_command",
-        staticmethod(lambda _card: run_command),
+        staticmethod(lambda _card, **_kwargs: run_command),
     )
     result = server.host_power_precheck([1], letter="a")
     assert result["ok"] is True
@@ -259,7 +263,7 @@ def test_host_power_precheck_continues_after_one_host_fails(monkeypatch):
     server._cards[1] = _card(1, name="Failed host")
     server._cards[2] = _card(2, name="Healthy host", host="10.0.0.2")
 
-    def runner_for(card: HealthCard):
+    def runner_for(card: HealthCard, **_kwargs):
         def run_command(command: str) -> str:
             return "ERROR: refused" if card.card_id == 1 else "ok"
 
@@ -292,10 +296,156 @@ def test_host_power_api_empty_selection_not_ok(monkeypatch):
 
     run = _post(
         "/api/host-power/run",
-        {"card_ids": [], "confirm": True},
+        {"card_ids": [], "confirm": True, "mode": "stop_then_shutdown"},
         monkeypatch,
         server,
     )
     assert run["status"] == 200
     assert run["payload"]["ok"] is False
     assert "No hosts selected" in run["payload"]["warnings"]
+
+
+def test_host_power_run_requires_mode(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(1)
+    response = _post(
+        "/api/host-power/run",
+        {"card_ids": [1], "confirm": True},
+        monkeypatch,
+        server,
+    )
+    assert response["status"] == 400
+    assert "mode" in response["payload"]["error"].lower()
+
+
+def test_host_power_run_rejects_invalid_mode(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(1)
+    response = _post(
+        "/api/host-power/run",
+        {"card_ids": [1], "confirm": True, "mode": "reboot"},
+        monkeypatch,
+        server,
+    )
+    assert response["status"] == 400
+    assert "mode" in response["payload"]["error"].lower()
+
+
+def test_host_power_run_shutdown_only_skips_stop_steps(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(
+        1,
+        custom_commands=(
+            "Power - Stop Hadoop|sudo systemctl stop hadoop\n"
+            "Power - OS Shutdown|sudo shutdown -h now"
+        ),
+    )
+    commands: list[str] = []
+
+    def run_command(command: str) -> str:
+        commands.append(command)
+        return "ok"
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(lambda _card, **_kwargs: run_command),
+    )
+    result = server.host_power_run(
+        [1], confirm=True, mode="shutdown_only"
+    )
+    assert result["ok"] is True
+    assert commands == ["sudo shutdown -h now"]
+
+
+def test_host_power_run_shutdown_only_fails_without_shutdown_step(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(
+        1,
+        custom_commands="Power - Stop Hadoop|sudo systemctl stop hadoop",
+    )
+    commands: list[str] = []
+
+    def run_command(command: str) -> str:
+        commands.append(command)
+        return "ok"
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(lambda _card, **_kwargs: run_command),
+    )
+    result = server.host_power_run(
+        [1], confirm=True, mode="shutdown_only"
+    )
+    assert result["ok"] is False
+    assert commands == []
+    assert "shutdown" in result["hosts"][0]["error"].lower()
+
+
+def test_host_power_run_stop_then_shutdown_still_runs_all_steps(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card(
+        1,
+        custom_commands=(
+            "Power - Stop Hadoop|sudo systemctl stop hadoop\n"
+            "Power - OS Shutdown|sudo shutdown -h now"
+        ),
+    )
+    commands: list[str] = []
+
+    def run_command(command: str) -> str:
+        commands.append(command)
+        return "ok"
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(lambda _card, **_kwargs: run_command),
+    )
+    result = server.host_power_run(
+        [1], confirm=True, mode="stop_then_shutdown"
+    )
+    assert result["ok"] is True
+    assert commands == [
+        "sudo systemctl stop hadoop",
+        "sudo shutdown -h now",
+    ]
+
+
+def test_snap_run_command_timeouts(monkeypatch):
+    assert HOST_POWER_PRECHECK_SSH_TIMEOUT == 45
+    assert HOST_POWER_MUTATE_SSH_TIMEOUT == 120
+    source = HealthServer._snap_run_command.__code__.co_varnames
+    assert "timeout" in source
+
+    server = HealthServer()
+    server._cards[1] = _card(
+        1,
+        custom_commands=(
+            "Power - Stop Hadoop|sudo systemctl stop hadoop\n"
+            "Power - OS Shutdown|sudo shutdown -h now"
+        ),
+    )
+    snap_calls: list[dict] = []
+
+    def recording_snap_run_command(_card, **kwargs):
+        snap_calls.append(kwargs)
+
+        def run_command(command: str) -> str:
+            return "ok"
+
+        return run_command
+
+    monkeypatch.setattr(
+        HealthServer,
+        "_snap_run_command",
+        staticmethod(recording_snap_run_command),
+    )
+
+    server.host_power_precheck([1], letter="A")
+    assert snap_calls[-1]["timeout"] == HOST_POWER_PRECHECK_SSH_TIMEOUT
+
+    snap_calls.clear()
+    server.host_power_run([1], confirm=True, mode="stop_then_shutdown")
+    assert snap_calls[-1]["timeout"] == HOST_POWER_MUTATE_SSH_TIMEOUT

@@ -41,7 +41,7 @@ HOST_POWER_HTML = """<!doctype html>
       <h2>Hadoop hosts</h2>
       <div id="hosts"><p class="hint">Loading hosts…</p></div>
       <div class="checks">
-        <label><input id="confirm-mutate" type="checkbox"> I confirm this will stop Hadoop and shut down the selected hosts</label>
+        <label><input id="confirm-mutate" type="checkbox"> I confirm this will stop Hadoop and/or shut down the selected hosts</label>
       </div>
       <h3 style="margin:14px 0 8px;color:#ff9a56;font-size:1rem;">Prechecks</h3>
       <p class="hint">Read-only. Check one or more hosts, then click A–F. Does not stop services or shut down.</p>
@@ -55,7 +55,9 @@ HOST_POWER_HTML = """<!doctype html>
       </div>
       <div class="actions">
         <button id="preview" class="secondary" type="button">Preview</button>
-        <button id="run" type="button">Run</button>
+        <button id="stop-then-shutdown" type="button" disabled>Stop services then shutdown</button>
+        <button id="shutdown-only" type="button" disabled>Shutdown only</button>
+        <button id="clear-log" class="secondary" type="button">Clear log</button>
       </div>
     </section>
     <section>
@@ -121,8 +123,33 @@ HOST_POWER_HTML = """<!doctype html>
     }
 
     const previewBtn = document.getElementById("preview");
-    const runBtn = document.getElementById("run");
+    const stopThenShutdownBtn = document.getElementById("stop-then-shutdown");
+    const shutdownOnlyBtn = document.getElementById("shutdown-only");
+    const confirmEl = document.getElementById("confirm-mutate");
     let requestInFlight = false;
+
+    function syncMutateEnabled() {
+      const ready = confirmEl.checked && !requestInFlight;
+      stopThenShutdownBtn.disabled = !ready;
+      shutdownOnlyBtn.disabled = !ready;
+    }
+
+    async function withButtonsLocked(action) {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      previewBtn.disabled = true;
+      stopThenShutdownBtn.disabled = true;
+      shutdownOnlyBtn.disabled = true;
+      document.querySelectorAll(".precheck-btn").forEach((btn) => { btn.disabled = true; });
+      try {
+        await action();
+      } finally {
+        requestInFlight = false;
+        previewBtn.disabled = false;
+        document.querySelectorAll(".precheck-btn").forEach((btn) => { btn.disabled = false; });
+        syncMutateEnabled();
+      }
+    }
 
     const PRECHECK_FALLBACK = [
       { letter: "A", hint: "Uptime / load" },
@@ -164,6 +191,7 @@ HOST_POWER_HTML = """<!doctype html>
       await withButtonsLocked(async () => {
         try {
           appendLog("--- Precheck " + letter + " @ " + new Date().toLocaleString() + " ---");
+          appendLog("Running…");
           appendLog(await requestJson("/api/host-power/precheck", {
             method: "POST", headers: {"Content-Type": "application/json"},
             body: JSON.stringify({card_ids: cardIds, letter: letter}),
@@ -174,20 +202,26 @@ HOST_POWER_HTML = """<!doctype html>
       });
     }
 
-    async function withButtonsLocked(action) {
-      if (requestInFlight) return;
-      requestInFlight = true;
-      previewBtn.disabled = true;
-      runBtn.disabled = true;
-      document.querySelectorAll(".precheck-btn").forEach((btn) => { btn.disabled = true; });
-      try {
-        await action();
-      } finally {
-        requestInFlight = false;
-        previewBtn.disabled = false;
-        runBtn.disabled = false;
-        document.querySelectorAll(".precheck-btn").forEach((btn) => { btn.disabled = false; });
+    async function runMutate(mode) {
+      if (!confirmEl.checked) {
+        writeLog("Confirm the checkbox before running stop or shutdown.");
+        return;
       }
+      await withButtonsLocked(async () => {
+        try {
+          writeLog("Running host power steps…");
+          writeLog(await requestJson("/api/host-power/run", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              card_ids: selectedIds(),
+              confirm: confirmEl.checked,
+              mode: mode,
+            }),
+          }));
+        } catch (error) {
+          writeLog(`Run failed: ${error.message}`);
+        }
+      });
     }
 
     async function preview() {
@@ -204,23 +238,6 @@ HOST_POWER_HTML = """<!doctype html>
       });
     }
 
-    async function run() {
-      await withButtonsLocked(async () => {
-        try {
-          writeLog("Running host power steps…");
-          writeLog(await requestJson("/api/host-power/run", {
-            method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              card_ids: selectedIds(),
-              confirm: document.getElementById("confirm-mutate").checked,
-            }),
-          }));
-        } catch (error) {
-          writeLog(`Run failed: ${error.message}`);
-        }
-      });
-    }
-
     document.getElementById("prechecks").addEventListener("click", (event) => {
       const btn = event.target.closest(".precheck-btn");
       if (!btn || !btn.dataset.letter) return;
@@ -228,7 +245,13 @@ HOST_POWER_HTML = """<!doctype html>
     });
 
     document.getElementById("preview").addEventListener("click", preview);
-    document.getElementById("run").addEventListener("click", run);
+    stopThenShutdownBtn.addEventListener("click", () => runMutate("stop_then_shutdown"));
+    shutdownOnlyBtn.addEventListener("click", () => runMutate("shutdown_only"));
+    document.getElementById("clear-log").addEventListener("click", () => {
+      log.textContent = "Choose one or more hosts, then preview.";
+    });
+    confirmEl.addEventListener("change", syncMutateEnabled);
+    syncMutateEnabled();
     loadCards();
     loadPrechecks();
   </script>

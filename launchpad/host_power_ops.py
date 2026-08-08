@@ -18,6 +18,15 @@ PRECHECK_LETTERS = ("A", "B", "C", "D", "E", "F")
 
 _PRECHECK_MUTATE_RE = re.compile(r"\b(shutdown|reboot|halt|poweroff)\b", re.IGNORECASE)
 
+HOST_POWER_MODE_STOP_THEN_SHUTDOWN = "stop_then_shutdown"
+HOST_POWER_MODE_SHUTDOWN_ONLY = "shutdown_only"
+HOST_POWER_MODES = frozenset(
+    {HOST_POWER_MODE_STOP_THEN_SHUTDOWN, HOST_POWER_MODE_SHUTDOWN_ONLY}
+)
+HOST_POWER_PRECHECK_SSH_TIMEOUT = 45
+HOST_POWER_MUTATE_SSH_TIMEOUT = 120
+OS_SHUTDOWN_POWER_LABEL = "Power - OS Shutdown"
+
 
 @dataclass(frozen=True)
 class HostPowerPrecheck:
@@ -160,6 +169,36 @@ def extract_power_steps(commands: list[tuple[str, str]]) -> list[dict[str, str]]
     return steps
 
 
+def normalize_host_power_mode(mode: str) -> str:
+    value = str(mode or "").strip().lower()
+    if value not in HOST_POWER_MODES:
+        raise ValueError(
+            "Host Power mode must be stop_then_shutdown or shutdown_only"
+        )
+    return value
+
+
+def select_shutdown_power_step(steps: list[dict[str, str]]) -> dict[str, str] | None:
+    matched: dict[str, str] | None = None
+    for step in steps:
+        label = str(step.get("label") or "")
+        command = str(step.get("command") or "")
+        if label == OS_SHUTDOWN_POWER_LABEL or _PRECHECK_MUTATE_RE.search(command):
+            matched = step
+    return matched
+
+
+def steps_for_host_power_mode(
+    steps: list[dict[str, str]],
+    mode: str,
+) -> list[dict[str, str]]:
+    mode_n = normalize_host_power_mode(mode)
+    if mode_n == HOST_POWER_MODE_STOP_THEN_SHUTDOWN:
+        return list(steps)
+    shutdown = select_shutdown_power_step(steps)
+    return [shutdown] if shutdown else []
+
+
 def coerce_card_ids(raw_ids: list[Any]) -> tuple[list[int], list[str]]:
     """Parse JSON card_ids entries to int, skipping invalid values."""
     parsed: list[int] = []
@@ -201,12 +240,21 @@ def build_host_power_preview(cards: list[dict[str, Any]]) -> dict[str, Any]:
             warnings.append(msg)
             ok = False
 
+        shutdown_steps = steps_for_host_power_mode(
+            steps, HOST_POWER_MODE_SHUTDOWN_ONLY
+        )
         host_entry: dict[str, Any] = {
             "card_id": card_id,
             "name": name,
             "host": host,
             "steps": steps,
+            "stop_then_shutdown": steps,
+            "shutdown_only": shutdown_steps,
         }
+        if steps and not shutdown_steps:
+            msg = f"{name}: no OS shutdown Power - step"
+            host_warnings.append(msg)
+            warnings.append(msg)
         if host_warnings:
             host_entry["warnings"] = host_warnings
         hosts.append(host_entry)
