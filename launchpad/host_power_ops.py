@@ -7,6 +7,7 @@ string as output.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,8 @@ from typing import Any
 POWER_LABEL_PREFIX = "Power -"
 PRECHECK_LABEL_PREFIX = "Precheck -"
 PRECHECK_LETTERS = ("A", "B", "C", "D", "E", "F")
+
+_PRECHECK_MUTATE_RE = re.compile(r"\b(shutdown|reboot|halt|poweroff)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,86 @@ def host_power_precheck_catalog_payload() -> list[dict[str, str]]:
         {"letter": item.letter, "label": item.label, "hint": item.hint}
         for item in host_power_precheck_catalog()
     ]
+
+
+def normalize_precheck_letter(letter: str) -> str:
+    value = str(letter or "").strip().upper()
+    if value not in PRECHECK_LETTERS:
+        raise ValueError("Precheck letter must be A–F")
+    return value
+
+
+def _label_matches_precheck_letter(label: str, letter: str) -> bool:
+    prefix = f"{PRECHECK_LABEL_PREFIX} {letter}"
+    text = str(label or "")
+    return text == prefix or text.startswith(prefix + " ")
+
+
+def resolve_precheck_command(commands: list[tuple[str, str]], letter: str) -> str:
+    letter_n = normalize_precheck_letter(letter)
+    for label, command in commands:
+        command_s = str(command or "").strip()
+        if command_s and _label_matches_precheck_letter(label, letter_n):
+            return command_s
+    catalog = {item.letter: item for item in host_power_precheck_catalog()}
+    return catalog[letter_n].command
+
+
+def precheck_command_is_mutating(command: str) -> bool:
+    return bool(_PRECHECK_MUTATE_RE.search(str(command or "")))
+
+
+def run_host_power_precheck_for_card(
+    *,
+    letter: str,
+    commands: list[tuple[str, str]],
+    run_command: Callable[[str], str],
+) -> dict[str, Any]:
+    letter_n = normalize_precheck_letter(letter)
+    catalog = {item.letter: item for item in host_power_precheck_catalog()}
+    item = catalog[letter_n]
+    command = resolve_precheck_command(commands, letter_n)
+    label = next(
+        (
+            lbl
+            for lbl, cmd in commands
+            if str(cmd or "").strip() == command and _label_matches_precheck_letter(lbl, letter_n)
+        ),
+        item.label,
+    )
+    if precheck_command_is_mutating(command):
+        return {
+            "ok": False,
+            "letter": letter_n,
+            "label": label,
+            "command": command,
+            "error": "Precheck commands cannot include shutdown/reboot/halt/poweroff",
+        }
+    try:
+        output = run_command(command)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "letter": letter_n,
+            "label": label,
+            "command": command,
+            "error": str(exc),
+        }
+    if str(output).startswith("ERROR:"):
+        return {
+            "ok": False,
+            "letter": letter_n,
+            "label": label,
+            "command": command,
+            "error": str(output),
+        }
+    return {
+        "ok": True,
+        "letter": letter_n,
+        "label": label,
+        "command": command,
+        "output": output,
+    }
 
 
 def extract_power_steps(commands: list[tuple[str, str]]) -> list[dict[str, str]]:
