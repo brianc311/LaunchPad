@@ -45,8 +45,14 @@ HOST_POWER_HTML = """<!doctype html>
       </div>
       <h3 style="margin:14px 0 8px;color:#ff9a56;font-size:1rem;">Prechecks</h3>
       <p class="hint">Read-only. Check one or more hosts, then click A–F. Does not stop services or shut down.</p>
-      <!-- Precheck buttons use data-letter="A" through data-letter="F" -->
-      <div id="prechecks" class="actions"></div>
+      <div id="prechecks" class="actions">
+        <button type="button" class="secondary precheck-btn" data-letter="A">A Uptime / load</button>
+        <button type="button" class="secondary precheck-btn" data-letter="B">B Failed systemd units</button>
+        <button type="button" class="secondary precheck-btn" data-letter="C">C Hadoop / HDFS / YARN units</button>
+        <button type="button" class="secondary precheck-btn" data-letter="D">D HDFS dfsadmin report</button>
+        <button type="button" class="secondary precheck-btn" data-letter="E">E YARN node list</button>
+        <button type="button" class="secondary precheck-btn" data-letter="F">F YARN running apps</button>
+      </div>
       <div class="actions">
         <button id="preview" class="secondary" type="button">Preview</button>
         <button id="run" type="button">Run</button>
@@ -136,7 +142,6 @@ HOST_POWER_HTML = """<!doctype html>
         btn.className = "secondary precheck-btn";
         btn.dataset.letter = row.letter;
         btn.textContent = row.letter + " " + (row.hint || "");
-        btn.addEventListener("click", () => runPrecheck(row.letter));
         wrap.append(btn);
       });
     }
@@ -215,6 +220,12 @@ HOST_POWER_HTML = """<!doctype html>
         }
       });
     }
+
+    document.getElementById("prechecks").addEventListener("click", (event) => {
+      const btn = event.target.closest(".precheck-btn");
+      if (!btn || !btn.dataset.letter) return;
+      runPrecheck(btn.dataset.letter);
+    });
 
     document.getElementById("preview").addEventListener("click", preview);
     document.getElementById("run").addEventListener("click", run);
