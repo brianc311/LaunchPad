@@ -14,6 +14,15 @@ def test_host_power_markers():
     assert "{{APP_VERSION}}" in HOST_POWER_HTML
 
 
+def test_host_power_precheck_markers():
+    assert "/api/host-power/prechecks" in HOST_POWER_HTML
+    assert "/api/host-power/precheck" in HOST_POWER_HTML
+    assert 'id="prechecks"' in HOST_POWER_HTML
+    assert 'data-letter="A"' in HOST_POWER_HTML
+    assert 'data-letter="F"' in HOST_POWER_HTML
+    assert "read-only" in HOST_POWER_HTML.lower() or "Precheck" in HOST_POWER_HTML
+
+
 def test_dashboard_lists_host_power_tool():
     path = Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
     text = path.read_text(encoding="utf-8")
