@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from launchpad.command_format import format_command_lines, parse_command_lines
+from launchpad.host_power_ops import host_power_precheck_catalog, precheck_letter_from_label
 from launchpad.storage_presets import (
     HADOOP_LINUX_COMMANDS,
     STORAGE_PROFILES,
@@ -29,20 +30,40 @@ def _has_power_commands(custom_commands: str) -> bool:
     )
 
 
-def _merge_power_presets(custom_commands: str) -> str:
+def _present_precheck_letters(custom_commands: str) -> set[str]:
+    letters: set[str] = set()
+    for label, _ in parse_command_lines(custom_commands):
+        letter = precheck_letter_from_label(label)
+        if letter:
+            letters.add(letter)
+    return letters
+
+
+def _missing_precheck_tuples(custom_commands: str) -> list[tuple[str, str]]:
+    present = _present_precheck_letters(custom_commands)
+    return [
+        (item.label, item.command)
+        for item in host_power_precheck_catalog()
+        if item.letter not in present
+    ]
+
+
+def _merge_hadoop_linux_presets(custom_commands: str) -> str:
     existing = parse_command_lines(custom_commands)
     if not existing:
         return preset_command_text("hadoop_linux")
-    if _has_power_commands(custom_commands):
+    additions: list[tuple[str, str]] = []
+    if not _has_power_commands(custom_commands):
+        additions.extend(
+            (label, command)
+            for label, command in HADOOP_LINUX_COMMANDS
+            if label.startswith(POWER_LABEL_PREFIX)
+        )
+    additions.extend(_missing_precheck_tuples(custom_commands))
+    if not additions:
         return custom_commands
-    power_cmds = [
-        (label, command)
-        for label, command in HADOOP_LINUX_COMMANDS
-        if label.startswith(POWER_LABEL_PREFIX)
-    ]
-    # Keep operator comments/header lines when present.
     body = custom_commands.rstrip()
-    suffix = format_command_lines(power_cmds)
+    suffix = format_command_lines(additions)
     if body:
         return f"{body}\n{suffix}"
     return suffix
@@ -69,9 +90,9 @@ def ensure_hadoop_linux_cards(db) -> int:
         )
 
         if profile == "hadoop_linux":
-            if _has_power_commands(card.custom_commands or ""):
+            new_commands = _merge_hadoop_linux_presets(card.custom_commands or "")
+            if new_commands == (card.custom_commands or ""):
                 continue
-            new_commands = _merge_power_presets(card.custom_commands or "")
             _patch_card(db, card, device_profile="hadoop_linux", custom_commands=new_commands)
             updated += 1
             continue
@@ -86,7 +107,7 @@ def ensure_hadoop_linux_cards(db) -> int:
         if not looks:
             continue
 
-        new_commands = _merge_power_presets(card.custom_commands or "")
+        new_commands = _merge_hadoop_linux_presets(card.custom_commands or "")
         _patch_card(db, card, device_profile="hadoop_linux", custom_commands=new_commands)
         updated += 1
     return updated

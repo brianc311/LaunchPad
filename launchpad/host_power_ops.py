@@ -75,6 +75,14 @@ def _label_matches_precheck_letter(label: str, letter: str) -> bool:
     return text == prefix or text.startswith(prefix + " ")
 
 
+def precheck_letter_from_label(label: str) -> str | None:
+    text = str(label or "")
+    for letter in PRECHECK_LETTERS:
+        if _label_matches_precheck_letter(text, letter):
+            return letter
+    return None
+
+
 def resolve_precheck_command(commands: list[tuple[str, str]], letter: str) -> str:
     letter_n = normalize_precheck_letter(letter)
     for label, command in commands:

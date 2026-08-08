@@ -81,6 +81,52 @@ def test_ensure_hadoop_linux_cards_adds_missing_power_commands(tmp_path):
     assert any(label.startswith("Power -") for label in labels)
 
 
+def test_ensure_hadoop_linux_cards_appends_missing_prechecks(tmp_path):
+    db = Database(tmp_path / "launchpad.db")
+    card_id = _ssh_card(
+        db,
+        name="Hadoop node",
+        device_profile="hadoop_linux",
+        custom_commands=(
+            "Health - Uptime|uptime\n"
+            "Precheck - D HDFS dfsadmin report|hdfs dfsadmin -report | head -n 5\n"
+            "Power - OS Shutdown|sudo shutdown -h now"
+        ),
+    )
+
+    assert ensure_hadoop_linux_cards(db) == 1
+    card = db.get_card(card_id)
+    labels = [label for label, _ in parse_command_lines(card.custom_commands)]
+    letters = {
+        label[11]
+        for label in labels
+        if label.startswith("Precheck - ") and len(label) >= 12 and label[11] in "ABCDEF"
+    }
+    assert letters == {"A", "B", "C", "D", "E", "F"}
+    d_cmd = next(
+        cmd
+        for label, cmd in parse_command_lines(card.custom_commands)
+        if label.startswith("Precheck - D")
+    )
+    assert d_cmd == "hdfs dfsadmin -report | head -n 5"
+    assert "Health - Uptime" in labels
+    assert any(label.startswith("Power -") for label in labels)
+
+
+def test_ensure_hadoop_linux_cards_noop_when_prechecks_and_power_present(tmp_path):
+    db = Database(tmp_path / "launchpad.db")
+    from launchpad.storage_presets import preset_command_text
+
+    card_id = _ssh_card(
+        db,
+        name="Hadoop node",
+        device_profile="hadoop_linux",
+        custom_commands=preset_command_text("hadoop_linux"),
+    )
+    assert ensure_hadoop_linux_cards(db) == 0
+    assert db.get_card(card_id).device_profile == "hadoop_linux"
+
+
 def test_host_power_empty_state_mentions_device_profile():
     from launchpad.host_power import HOST_POWER_HTML
 
