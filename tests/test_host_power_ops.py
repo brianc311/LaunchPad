@@ -1,11 +1,18 @@
 import pytest
 
 from launchpad.host_power_ops import (
+    PRECHECK_LETTERS,
     POWER_LABEL_PREFIX,
     build_host_power_preview,
     extract_power_steps,
+    host_power_precheck_catalog,
+    host_power_precheck_catalog_payload,
+    normalize_precheck_letter,
+    precheck_command_is_mutating,
     require_host_power_confirm,
+    resolve_precheck_command,
     run_host_power_for_card,
+    run_host_power_precheck_for_card,
 )
 
 
@@ -89,3 +96,91 @@ def test_run_aborts_remaining_after_error_string():
     assert result["results"][0]["error"] == "ERROR: unit not found"
     assert calls == ["sudo systemctl stop yarn"]
     assert "shutdown" not in "".join(calls)
+
+
+def test_precheck_catalog_is_a_through_f():
+    catalog = host_power_precheck_catalog()
+    assert [item.letter for item in catalog] == list(PRECHECK_LETTERS)
+    by_letter = {item.letter: item for item in catalog}
+    assert by_letter["A"].hint == "Uptime / load"
+    assert by_letter["A"].command == "uptime; cat /proc/loadavg"
+    assert by_letter["B"].command == "systemctl --failed --no-pager 2>/dev/null || true"
+    assert by_letter["C"].command == (
+        "systemctl list-units 'hadoop*' 'hdfs*' 'yarn*' --no-pager 2>/dev/null || true"
+    )
+    assert by_letter["D"].command == "hdfs dfsadmin -report 2>/dev/null | head -n 40 || true"
+    assert by_letter["E"].command == "yarn node -list 2>/dev/null || true"
+    assert by_letter["F"].command == "yarn application -list 2>/dev/null || true"
+    assert by_letter["A"].label.startswith("Precheck - A")
+    payload = host_power_precheck_catalog_payload()
+    assert payload[0] == {
+        "letter": "A",
+        "label": by_letter["A"].label,
+        "hint": "Uptime / load",
+    }
+    assert "command" not in payload[0]
+
+
+def test_normalize_precheck_letter_accepts_a_through_f():
+    assert normalize_precheck_letter("e") == "E"
+    assert normalize_precheck_letter("A") == "A"
+    with pytest.raises(ValueError):
+        normalize_precheck_letter("G")
+    with pytest.raises(ValueError):
+        normalize_precheck_letter("")
+
+
+def test_resolve_precheck_command_prefers_card_override():
+    cmds = [
+        ("Health - Uptime", "uptime"),
+        ("Precheck - E YARN node list", "yarn node -list -showDetails"),
+    ]
+    assert resolve_precheck_command(cmds, "E") == "yarn node -list -showDetails"
+    assert resolve_precheck_command(cmds, "A") == "uptime; cat /proc/loadavg"
+
+
+def test_resolve_precheck_command_does_not_match_aa_as_a():
+    cmds = [("Precheck - AA custom", "echo aa")]
+    assert resolve_precheck_command(cmds, "A") == "uptime; cat /proc/loadavg"
+
+
+def test_precheck_command_is_mutating_word_match():
+    assert precheck_command_is_mutating("sudo shutdown -h now") is True
+    assert precheck_command_is_mutating("yarn node -list") is False
+    assert precheck_command_is_mutating("echo noshutdownhere") is False
+
+
+def test_run_precheck_rejects_mutating_without_calling_runner():
+    calls: list[str] = []
+
+    def run_command(cmd: str) -> str:
+        calls.append(cmd)
+        return "ok"
+
+    result = run_host_power_precheck_for_card(
+        letter="A",
+        commands=[("Precheck - A Uptime / load", "sudo shutdown -h now")],
+        run_command=run_command,
+    )
+    assert result["ok"] is False
+    assert "shutdown" in result["error"].lower()
+    assert calls == []
+
+
+def test_run_precheck_records_output_and_error_prefix():
+    result_ok = run_host_power_precheck_for_card(
+        letter="E",
+        commands=[],
+        run_command=lambda cmd: "node1 RUNNING",
+    )
+    assert result_ok["ok"] is True
+    assert result_ok["letter"] == "E"
+    assert result_ok["output"] == "node1 RUNNING"
+
+    result_err = run_host_power_precheck_for_card(
+        letter="E",
+        commands=[],
+        run_command=lambda cmd: "ERROR: yarn not in PATH",
+    )
+    assert result_err["ok"] is False
+    assert result_err["error"] == "ERROR: yarn not in PATH"

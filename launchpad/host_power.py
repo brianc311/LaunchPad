@@ -43,6 +43,16 @@ HOST_POWER_HTML = """<!doctype html>
       <div class="checks">
         <label><input id="confirm-mutate" type="checkbox"> I confirm this will stop Hadoop and shut down the selected hosts</label>
       </div>
+      <h3 style="margin:14px 0 8px;color:#ff9a56;font-size:1rem;">Prechecks</h3>
+      <p class="hint">Read-only. Check one or more hosts, then click A–F. Does not stop services or shut down.</p>
+      <div id="prechecks" class="actions">
+        <button type="button" class="secondary precheck-btn" data-letter="A">A Uptime / load</button>
+        <button type="button" class="secondary precheck-btn" data-letter="B">B Failed systemd units</button>
+        <button type="button" class="secondary precheck-btn" data-letter="C">C Hadoop / HDFS / YARN units</button>
+        <button type="button" class="secondary precheck-btn" data-letter="D">D HDFS dfsadmin report</button>
+        <button type="button" class="secondary precheck-btn" data-letter="E">E YARN node list</button>
+        <button type="button" class="secondary precheck-btn" data-letter="F">F YARN running apps</button>
+      </div>
       <div class="actions">
         <button id="preview" class="secondary" type="button">Preview</button>
         <button id="run" type="button">Run</button>
@@ -61,6 +71,12 @@ HOST_POWER_HTML = """<!doctype html>
 
     function writeLog(value) {
       log.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    }
+
+    function appendLog(value) {
+      const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      const existing = log.textContent || "";
+      log.textContent = existing ? existing + "\n" + text : text;
     }
 
     function selectedIds() {
@@ -108,17 +124,69 @@ HOST_POWER_HTML = """<!doctype html>
     const runBtn = document.getElementById("run");
     let requestInFlight = false;
 
+    const PRECHECK_FALLBACK = [
+      { letter: "A", hint: "Uptime / load" },
+      { letter: "B", hint: "Failed systemd units" },
+      { letter: "C", hint: "Hadoop / HDFS / YARN units" },
+      { letter: "D", hint: "HDFS dfsadmin report" },
+      { letter: "E", hint: "YARN node list" },
+      { letter: "F", hint: "YARN running apps" },
+    ];
+
+    function renderPrechecks(rows) {
+      const wrap = document.getElementById("prechecks");
+      wrap.replaceChildren();
+      (rows || []).forEach((row) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "secondary precheck-btn";
+        btn.dataset.letter = row.letter;
+        btn.textContent = row.letter + " " + (row.hint || "");
+        wrap.append(btn);
+      });
+    }
+
+    async function loadPrechecks() {
+      try {
+        const data = await requestJson("/api/host-power/prechecks");
+        renderPrechecks(data.prechecks || []);
+      } catch (error) {
+        renderPrechecks(PRECHECK_FALLBACK);
+      }
+    }
+
+    async function runPrecheck(letter) {
+      const cardIds = selectedIds();
+      if (!cardIds.length) {
+        appendLog("Select one or more hosts before running a precheck.");
+        return;
+      }
+      await withButtonsLocked(async () => {
+        try {
+          appendLog("--- Precheck " + letter + " @ " + new Date().toLocaleString() + " ---");
+          appendLog(await requestJson("/api/host-power/precheck", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({card_ids: cardIds, letter: letter}),
+          }));
+        } catch (error) {
+          appendLog(`Precheck failed: ${error.message}`);
+        }
+      });
+    }
+
     async function withButtonsLocked(action) {
       if (requestInFlight) return;
       requestInFlight = true;
       previewBtn.disabled = true;
       runBtn.disabled = true;
+      document.querySelectorAll(".precheck-btn").forEach((btn) => { btn.disabled = true; });
       try {
         await action();
       } finally {
         requestInFlight = false;
         previewBtn.disabled = false;
         runBtn.disabled = false;
+        document.querySelectorAll(".precheck-btn").forEach((btn) => { btn.disabled = false; });
       }
     }
 
@@ -153,9 +221,16 @@ HOST_POWER_HTML = """<!doctype html>
       });
     }
 
+    document.getElementById("prechecks").addEventListener("click", (event) => {
+      const btn = event.target.closest(".precheck-btn");
+      if (!btn || !btn.dataset.letter) return;
+      runPrecheck(btn.dataset.letter);
+    });
+
     document.getElementById("preview").addEventListener("click", preview);
     document.getElementById("run").addEventListener("click", run);
     loadCards();
+    loadPrechecks();
   </script>
 </body>
 </html>

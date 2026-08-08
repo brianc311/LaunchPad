@@ -137,6 +137,24 @@ HADOOP_LINUX_COMMANDS: list[tuple[str, str]] = [
         "Health - Hadoop systemd units",
         "systemctl list-units 'hadoop*' 'hdfs*' 'yarn*' --no-pager 2>/dev/null || true",
     ),
+    ("Precheck - A Uptime / load", "uptime; cat /proc/loadavg"),
+    (
+        "Precheck - B Failed systemd units",
+        "systemctl --failed --no-pager 2>/dev/null || true",
+    ),
+    (
+        "Precheck - C Hadoop / HDFS / YARN units",
+        "systemctl list-units 'hadoop*' 'hdfs*' 'yarn*' --no-pager 2>/dev/null || true",
+    ),
+    (
+        "Precheck - D HDFS dfsadmin report",
+        "hdfs dfsadmin -report 2>/dev/null | head -n 40 || true",
+    ),
+    ("Precheck - E YARN node list", "yarn node -list 2>/dev/null || true"),
+    (
+        "Precheck - F YARN running apps",
+        "yarn application -list 2>/dev/null || true",
+    ),
     (
         "Power - Stop YARN NodeManager",
         "sudo systemctl stop hadoop-yarn-nodemanager",
@@ -305,7 +323,8 @@ PRESET_HEADERS: dict[str, str] = {
     ),
     "hadoop_linux": (
         "# Hadoop Linux SSH - OS health/capacity, sample HDFS/YARN status, "
-        "and Power - stop-then-shutdown (edit to match your units).\n"
+        "Precheck A-F (read-only Host Power checks), and Power - stop-then-shutdown "
+        "(edit to match your units).\n"
     ),
 }
 
