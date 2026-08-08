@@ -14,6 +14,21 @@ def test_host_power_markers():
     assert "{{APP_VERSION}}" in HOST_POWER_HTML
 
 
+def test_host_power_mutate_button_markers():
+    assert "Stop services then shutdown" in HOST_POWER_HTML
+    assert "Shutdown only" in HOST_POWER_HTML
+    assert "Clear log" in HOST_POWER_HTML
+    assert 'id="stop-then-shutdown"' in HOST_POWER_HTML
+    assert 'id="shutdown-only"' in HOST_POWER_HTML
+    assert 'id="clear-log"' in HOST_POWER_HTML
+    assert 'id="run"' not in HOST_POWER_HTML
+    assert "stop Hadoop and/or shut down" in HOST_POWER_HTML
+    assert 'mode: "stop_then_shutdown"' in HOST_POWER_HTML or "stop_then_shutdown" in HOST_POWER_HTML
+    assert "shutdown_only" in HOST_POWER_HTML
+    assert "Running…" in HOST_POWER_HTML or "Running..." in HOST_POWER_HTML
+    assert "Choose one or more hosts, then preview." in HOST_POWER_HTML
+
+
 def test_host_power_precheck_markers():
     assert "/api/host-power/prechecks" in HOST_POWER_HTML
     assert "/api/host-power/precheck" in HOST_POWER_HTML
