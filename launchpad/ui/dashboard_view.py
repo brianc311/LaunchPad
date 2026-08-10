@@ -287,6 +287,7 @@ class DashboardView(ctk.CTkFrame):
             ("Host / Volume Find", self._open_volume_find, None),
             ("Hosts & Volumes", self._open_host_volume_health, None),
             ("System Connectivity", self._open_system_connectivity, None),
+            ("Storage Inventory", self._open_storage_inventory, None),
             ("Export Excel ▾", self._open_export_excel_menu, 140),
             ("Refresh Stats", self._fetch_all_ssh_stats, None),
         ]
@@ -2021,6 +2022,33 @@ class DashboardView(ctk.CTkFrame):
                 self.after(
                     0,
                     lambda: self._set_status(f"System Connectivity failed: {exc}"),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_storage_inventory(self) -> None:
+        self.status_label.configure(text="Opening Storage Inventory…")
+        self.update_idletasks()
+        try:
+            ensure_health_dashboard_registered(self.db, self.crypto_key)
+        except Exception as exc:
+            _log(f"Storage Inventory register failed: {exc}")
+
+        def worker() -> None:
+            try:
+                server = get_health_server()
+                server.sync_from_app()
+                url = server.open_storage_inventory()
+                summary = (
+                    "Storage Inventory opened — refresh live for fleet device inventory."
+                )
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+            except Exception as exc:
+                _log(f"Storage Inventory failed: {exc}")
+                self.after(
+                    0,
+                    lambda: self._set_status(f"Storage Inventory failed: {exc}"),
                 )
 
         threading.Thread(target=worker, daemon=True).start()
