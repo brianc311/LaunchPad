@@ -36,6 +36,24 @@ def test_rail_gui_url_prefers_url_then_host():
     assert can_open_rail_gui(SimpleNamespace(url="", host="")) is False
 
 
+def test_rail_gui_url_3par_uses_8443():
+    card = SimpleNamespace(
+        url="",
+        host="pla-w023par01",
+        device_profile="hpe_3par_8200",
+    )
+    assert rail_gui_url(card) == "https://pla-w023par01:8443"
+
+
+def test_rail_gui_url_primera_no_8443():
+    card = SimpleNamespace(
+        url="",
+        host="pla-w023par01",
+        device_profile="hpe_primera_600",
+    )
+    assert rail_gui_url(card) == "https://pla-w023par01"
+
+
 def test_rail_row_labels():
     card = SimpleNamespace(name="Anderson, SC", host="10.3.3.3", url="")
     assert rail_row_title(card) == "Anderson, SC"
@@ -56,7 +74,9 @@ def test_open_rail_gui_opens_browser(monkeypatch):
         "launchpad.dashboard_array_rail.webbrowser.open",
         lambda url: opened.append(url),
     )
-    msg = open_rail_gui(SimpleNamespace(url="", host="10.9.9.9", name="X"))
+    msg = open_rail_gui(
+        SimpleNamespace(url="", host="10.9.9.9", name="X", device_profile="")
+    )
     assert msg == "Opened GUI"
     assert opened == ["https://10.9.9.9"]
 

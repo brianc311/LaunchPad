@@ -27,6 +27,7 @@ def rail_gui_url(card: Any) -> str:
     return resolve_gui_url(
         str(getattr(card, "url", "") or ""),
         str(getattr(card, "host", "") or ""),
+        str(getattr(card, "device_profile", "") or ""),
     )
 
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from launchpad.flashsystem_fc import parse_fc_hosts, parse_lsvdisk_volumes
+from launchpad.storage_presets import HP_3PAR_PROFILES
 from launchpad.volume_find import (
     is_volume_find_eligible,
     parse_showhost_hosts,
@@ -41,9 +43,25 @@ def normalize_gui_url(url: str) -> str:
     return stripped
 
 
-def resolve_gui_url(url: str = "", host: str = "") -> str:
-    """Prefer Admin GUI URL; fall back to management host as https://host."""
-    return normalize_gui_url(url) or normalize_gui_url(host)
+_HOST_HAS_PORT_RE = re.compile(r":\d+$")
+
+
+def resolve_gui_url(
+    url: str = "",
+    host: str = "",
+    device_profile: str = "",
+) -> str:
+    """Prefer Admin GUI URL; else host, with :8443 for HPE 3PAR profiles."""
+    preferred = normalize_gui_url(url)
+    if preferred:
+        return preferred
+    host_s = str(host or "").strip()
+    if not host_s:
+        return ""
+    profile = str(device_profile or "").strip()
+    if profile in HP_3PAR_PROFILES and not _HOST_HAS_PORT_RE.search(host_s):
+        return f"https://{host_s}:8443"
+    return normalize_gui_url(host_s)
 
 
 def _row_status(row: dict[str, str]) -> str:
