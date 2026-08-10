@@ -75,6 +75,91 @@ def test_scan_storage_inventory_svc_happy_path(monkeypatch):
     assert len(cached["rows"]) == 1
 
 
+def test_scan_storage_inventory_success_includes_health_issue(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        server,
+        "_storage_inventory_health_issues",
+        lambda _card: [
+            {"severity": "warn", "category": "capacity", "message": "Running at 92.0% capacity"}
+        ],
+    )
+
+    def _runner(_card):
+        def run(command):
+            if "lscloudcallhome" in command:
+                return "id:status\n0:enabled\n"
+            if "lsdnsserver" in command:
+                return "id:name:IP_address\n0:dns1:10.1.1.1\n"
+            if "lsemailserver" in command:
+                return "id:name:IP_address:port\n0:smtp1:172.29.62.98:25\n"
+            if "lsrcrelationship" in command:
+                return "id:name:master_cluster_id\n0:rel1:1\n"
+            if "lssystem" in command:
+                return (
+                    "id:78E37V9\nname:v7kcon-g3v1\n"
+                    "product_name:IBM FlashSystem 7200\n"
+                    "cluster_ntp_IP_address:10.3.3.3\n"
+                )
+            return ""
+
+        return run
+
+    monkeypatch.setattr(server, "_lun_run_command", _runner)
+    result = server.scan_storage_inventory_live()
+    assert result["errors"] == []
+    row = result["rows"][0]
+    assert "Running at 92.0% capacity" in row["issues"]
+
+
+def test_scan_storage_inventory_failure_retains_health_issue(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    card = HealthCard(
+        card_id=2,
+        name="Anderson",
+        host="10.0.0.2",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[2] = card
+    server.set_monitor_enabled(card_id=2, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        server,
+        "_storage_inventory_health_issues",
+        lambda _card: [
+            {"severity": "critical", "category": "capacity", "message": "Running at 95.0% capacity"}
+        ],
+    )
+
+    def _boom(_card):
+        raise RuntimeError("ssh connection refused")
+
+    monkeypatch.setattr(server, "_scan_storage_inventory_card", _boom)
+    result = server.scan_storage_inventory_live()
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["error"] == "ssh connection refused"
+    row = result["rows"][0]
+    assert "Running at 95.0% capacity" in row["issues"]
+    assert "ssh connection refused" in row["issues"]
+
+
 def test_export_storage_inventory_uses_cache_without_unlock(monkeypatch):
     server = HealthServer()
     monkeypatch.setattr(server, "is_unlocked", lambda: False)

@@ -2883,8 +2883,10 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self._send_json(payload)
             return
         if path == "/api/storage-inventory/export":
+            # Inline: capacity_export -> monitor -> health_server is a
+            # circular dependency, so this module can't import capacity_export
+            # at top level. TEMP_DIR is already imported at module scope above.
             from launchpad.capacity_export import open_exported_workbook
-            from launchpad.config import TEMP_DIR
 
             query = parse_qs(parsed.query)
             export_format = (query.get("format") or ["xlsx"])[0].strip().lower()
@@ -6794,7 +6796,7 @@ class HealthServer:
             analysis = analyze_health(card.name, card.command_results, card.metrics)
         except Exception:
             return []
-        return list(analysis.get("issues") or [])
+        return list(analysis.get("health_issues") or [])
 
     def _scan_storage_inventory_svc_card(
         self, card: HealthCard, commands: dict[str, list[str]]
@@ -6999,7 +7001,7 @@ class HealthServer:
                     smtp=unknown,
                     dns=unknown,
                     ntp=unknown,
-                    health_issues=[],
+                    health_issues=self._storage_inventory_health_issues(card),
                     extra_errors=[err],
                 )
             rows.append(row)
