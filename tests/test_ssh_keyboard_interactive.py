@@ -5,18 +5,37 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import paramiko
+import pytest
 
-from launchpad.ssh_paramiko import authenticate_with_password
+from launchpad.ssh_paramiko import (
+    authenticate_with_password,
+    keyboard_interactive_answers,
+)
 
 
-def test_authenticate_prefers_password_when_server_offers_it():
+def test_keyboard_answers_single_and_multi_field():
+    assert keyboard_interactive_answers([], password="secret") == []
+    assert keyboard_interactive_answers(
+        [("Password:", False)],
+        password="secret",
+    ) == ["secret"]
+    assert keyboard_interactive_answers(
+        [("login:", True), ("Password:", False)],
+        password="secret",
+        username="admin",
+    ) == ["admin", "secret"]
+
+
+def test_authenticate_uses_password_when_only_password_allowed():
     transport = MagicMock()
     transport.auth_none.side_effect = paramiko.BadAuthenticationType(
         "Bad authentication type",
         ["password", "publickey"],
     )
     authenticate_with_password(transport, "admin", "secret")
-    transport.auth_password.assert_called_once_with("admin", "secret")
+    transport.auth_password.assert_called_once_with(
+        "admin", "secret", fallback=False
+    )
     transport.auth_interactive.assert_not_called()
 
 
@@ -32,14 +51,24 @@ def test_authenticate_uses_keyboard_interactive_when_password_not_allowed():
     username, handler = transport.auth_interactive.call_args[0]
     assert username == "admin"
     assert handler(None, None, [("Password:", False)]) == ["secret"]
+    assert handler(None, None, [("User:", True), ("Password:", False)]) == [
+        "admin",
+        "secret",
+    ]
 
 
-def test_authenticate_falls_back_to_keyboard_interactive_when_none_lists_nothing():
+def test_authenticate_includes_server_prompts_on_failure():
     transport = MagicMock()
-    transport.auth_none.side_effect = paramiko.AuthenticationException("fail")
-    transport.auth_password.side_effect = paramiko.BadAuthenticationType(
+    transport.auth_none.side_effect = paramiko.BadAuthenticationType(
         "Bad authentication type",
         ["keyboard-interactive"],
     )
-    authenticate_with_password(transport, "admin", "secret")
-    transport.auth_interactive.assert_called_once()
+
+    def fail_interactive(username, handler, *args, **kwargs):
+        handler(None, None, [("Password:", False)])
+        raise paramiko.AuthenticationException("Authentication failed.")
+
+    transport.auth_interactive.side_effect = fail_interactive
+    with pytest.raises(paramiko.AuthenticationException) as excinfo:
+        authenticate_with_password(transport, "admin", "secret")
+    assert "Server prompts: Password:" in str(excinfo.value)

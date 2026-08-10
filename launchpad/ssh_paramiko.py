@@ -17,6 +17,42 @@ COMMAND_TIMEOUT = 40
 HPE_CLI_BUSY_TIMEOUT = 90
 
 
+def keyboard_interactive_answers(
+    prompt_list: list,
+    *,
+    password: str,
+    username: str = "",
+) -> list[str]:
+    """Answer keyboard-interactive prompts without logging secrets.
+
+    Matches Paramiko's password-fallback rules for 0/1 fields, and for multiple
+    fields fills username prompts with ``username`` and others with ``password``.
+    """
+    fields = list(prompt_list or [])
+    if not fields:
+        return []
+    if len(fields) == 1:
+        return [password]
+    answers: list[str] = []
+    for prompt, _echo in fields:
+        label = str(prompt or "").strip().lower()
+        if "user" in label or "login" in label or "account" in label:
+            answers.append(username)
+        else:
+            answers.append(password)
+    return answers
+
+
+def _prompt_labels(prompt_list: list) -> list[str]:
+    labels: list[str] = []
+    for item in prompt_list or []:
+        if isinstance(item, (tuple, list)) and item:
+            labels.append(str(item[0] or "").strip())
+        else:
+            labels.append(str(item or "").strip())
+    return [label for label in labels if label]
+
+
 def authenticate_with_password(
     transport: paramiko.Transport,
     username: str,
@@ -25,9 +61,8 @@ def authenticate_with_password(
     """Authenticate using password and/or keyboard-interactive.
 
     IBM DS8884 (and similar) often advertise only ``publickey`` +
-    ``keyboard-interactive`` and reject the Paramiko ``password`` method with
-    ``Bad authentication type``. Prefer ``password`` when offered; otherwise use
-    keyboard-interactive and answer every prompt with the saved password.
+    ``keyboard-interactive``. Paramiko's built-in password→interactive fallback
+    rejects challenges with more than one field; we answer those explicitly.
     """
     allowed: list[str] = []
     try:
@@ -37,28 +72,68 @@ def authenticate_with_password(
     except paramiko.AuthenticationException:
         allowed = []
 
+    seen_prompts: list[str] = []
+
     def keyboard_handler(
         _title: str,
         _instructions: str,
         prompt_list: list,
     ) -> list[str]:
-        return [password for _prompt in prompt_list]
+        seen_prompts.extend(_prompt_labels(prompt_list))
+        return keyboard_interactive_answers(
+            prompt_list,
+            password=password,
+            username=username,
+        )
+
+    def raise_auth_failed(exc: Exception) -> None:
+        detail = str(exc).strip() or "Authentication failed."
+        if seen_prompts:
+            joined = "; ".join(seen_prompts[:6])
+            raise paramiko.AuthenticationException(
+                f"{detail} Server prompts: {joined}"
+            ) from exc
+        raise paramiko.AuthenticationException(
+            f"{detail} Check username/password for keyboard-interactive SSH "
+            "(common on IBM DS8884)."
+        ) from exc
+
+    # Prefer plain password when offered without keyboard-interactive.
+    if "password" in allowed and "keyboard-interactive" not in allowed:
+        transport.auth_password(username, password, fallback=False)
+        return
+
+    # Prefer our multi-prompt keyboard-interactive handler when advertised.
+    if "keyboard-interactive" in allowed:
+        try:
+            transport.auth_interactive(username, keyboard_handler)
+            return
+        except paramiko.AuthenticationException as exc:
+            if "password" in allowed:
+                try:
+                    transport.auth_password(username, password, fallback=False)
+                    return
+                except paramiko.AuthenticationException as pwd_exc:
+                    raise_auth_failed(pwd_exc)
+                    return
+            raise_auth_failed(exc)
+            return
 
     if "password" in allowed:
-        transport.auth_password(username, password)
-        return
-    if "keyboard-interactive" in allowed:
-        transport.auth_interactive(username, keyboard_handler)
+        transport.auth_password(username, password, fallback=False)
         return
 
+    # Unknown allowed set — try password with Paramiko fallback, then interactive.
     try:
-        transport.auth_password(username, password)
+        transport.auth_password(username, password, fallback=True)
         return
-    except paramiko.BadAuthenticationType as exc:
-        allowed = [str(item) for item in (exc.allowed_types or [])]
-        if "keyboard-interactive" not in allowed:
-            raise
+    except (paramiko.BadAuthenticationType, paramiko.AuthenticationException):
+        pass
+    try:
         transport.auth_interactive(username, keyboard_handler)
+    except paramiko.AuthenticationException as exc:
+        raise_auth_failed(exc)
+
 
 _lock_guard = threading.Lock()
 _hpe_host_locks: dict[str, threading.Lock] = {}
@@ -136,7 +211,8 @@ def password_ssh_client(
         transport.banner_timeout = CONNECT_TIMEOUT
         transport.auth_timeout = CONNECT_TIMEOUT
         transport.start_client(timeout=CONNECT_TIMEOUT)
-        authenticate_with_password(transport, username, password)
+        # Trailing newlines from paste/forms break some keyboard-interactive hosts.
+        authenticate_with_password(transport, username, (password or "").rstrip("\r\n"))
         client._transport = transport
         yield client
     finally:
