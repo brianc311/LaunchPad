@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
+from io import BytesIO
 from typing import Any
 
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
 from launchpad.flashsystem_parse import _parse_colon_table
 from launchpad.storage_presets import HPE_SHELL_PROFILES, SVC_PROFILES, is_svc_fc_profile
 from launchpad.system_connectivity import (
@@ -370,10 +373,104 @@ def build_inventory_row(
     return row
 
 
+_INVENTORY_HEADERS: tuple[str, ...] = (
+    "Site",
+    "Host",
+    "IP Address",
+    "Model",
+    "Serial Number (SN)",
+    "Location",
+    "Phone Home",
+    "Data Protection",
+    "SMTP IP(s)",
+    "Issues / Notes",
+)
+
+_INVENTORY_FIELDS: tuple[str, ...] = (
+    "site",
+    "host",
+    "ip",
+    "model",
+    "serial",
+    "location",
+    "phone_home",
+    "data_protection",
+    "smtp",
+    "issues",
+)
+
+_ISSUES_SUMMARY_HEADERS: tuple[str, ...] = (
+    "Site",
+    "Host",
+    "IP Address",
+    "Model",
+    "Serial Number (SN)",
+    "Issues / Notes",
+)
+
+_ISSUES_SUMMARY_FIELDS: tuple[str, ...] = (
+    "site",
+    "host",
+    "ip",
+    "model",
+    "serial",
+    "issues",
+)
+
+_ISSUE_ROW_FILL = PatternFill(
+    start_color="FFCDD2",
+    end_color="FFCDD2",
+    fill_type="solid",
+)
+
+
+def export_storage_inventory_xlsx(
+    rows: list[dict],
+    *,
+    generated_at: str | None = None,
+) -> bytes:
+    """Return a workbook with Inventory and Issues Summary sheets."""
+    totals = inventory_totals(rows)
+    generated = str(generated_at or "").strip()
+    meta = (
+        f"Generated: {generated} | Total Devices: {totals['total_devices']} | "
+        f"Devices with Issues: {totals['devices_with_issues']}"
+    )
+
+    workbook = Workbook()
+    inventory = workbook.active
+    inventory.title = "Inventory"
+    inventory["A1"] = meta
+
+    for column, title in enumerate(_INVENTORY_HEADERS, start=1):
+        inventory.cell(row=2, column=column, value=title)
+
+    for row_index, row in enumerate(rows or [], start=3):
+        highlight = row_has_issues(row)
+        for column, field in enumerate(_INVENTORY_FIELDS, start=1):
+            cell = inventory.cell(row=row_index, column=column, value=row.get(field, ""))
+            if highlight:
+                cell.fill = _ISSUE_ROW_FILL
+
+    summary = workbook.create_sheet("Issues Summary")
+    for column, title in enumerate(_ISSUES_SUMMARY_HEADERS, start=1):
+        summary.cell(row=1, column=column, value=title)
+
+    issue_rows = [row for row in rows or [] if row_has_issues(row)]
+    for row_index, row in enumerate(issue_rows, start=2):
+        for column, field in enumerate(_ISSUES_SUMMARY_FIELDS, start=1):
+            summary.cell(row=row_index, column=column, value=row.get(field, ""))
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
 __all__ = [
     "INVENTORY_COLUMNS",
     "build_inventory_row",
     "build_issues_notes",
+    "export_storage_inventory_xlsx",
     "format_phone_home_cell",
     "format_smtp_cell",
     "format_yes_no_cell",

@@ -1,5 +1,10 @@
+from io import BytesIO
+
+from openpyxl import load_workbook
+
 from launchpad.storage_inventory import (
     build_issues_notes,
+    export_storage_inventory_xlsx,
     format_phone_home_cell,
     format_smtp_cell,
     inventory_commands_for_profile,
@@ -9,7 +14,6 @@ from launchpad.storage_inventory import (
     parse_svc_lssystem_identity,
     row_has_issues,
 )
-
 
 def test_inventory_commands_svc_includes_smtp_and_rcrelationship():
     cmds = inventory_commands_for_profile("flashsystem_7200")
@@ -74,3 +78,47 @@ def test_issues_notes_and_totals():
     ]
     assert row_has_issues(rows[1]) is True
     assert inventory_totals(rows) == {"total_devices": 2, "devices_with_issues": 1}
+
+
+def test_export_xlsx_sheets_meta_and_red_issue_row():
+    rows = [
+        {
+            "site": "SiteA",
+            "host": "array1",
+            "ip": "10.0.0.1",
+            "model": "IBM FlashSystem 7200",
+            "serial": "ABC",
+            "location": "SiteA",
+            "phone_home": "Yes — IBM",
+            "data_protection": "Yes",
+            "smtp": "10.1.1.1",
+            "issues": "",
+        },
+        {
+            "site": "SiteB",
+            "host": "array2",
+            "ip": "10.0.0.2",
+            "model": "IBM FlashSystem 7200",
+            "serial": "DEF",
+            "location": "SiteB",
+            "phone_home": "No — Not configured",
+            "data_protection": "No — Not configured",
+            "smtp": "No IP — Not configured",
+            "issues": "Phone Home not configured; SMTP not configured",
+        },
+    ]
+    wb = load_workbook(BytesIO(export_storage_inventory_xlsx(rows, generated_at="2026-08-10T12:00:00")))
+    assert wb.sheetnames == ["Inventory", "Issues Summary"]
+    inv = wb["Inventory"]
+    assert "Total Devices: 2" in str(inv["A1"].value)
+    assert "Devices with Issues: 1" in str(inv["A1"].value)
+    # Find issue data row by host array2 and assert red-ish fill
+    found = False
+    for row in inv.iter_rows(min_row=2, max_row=inv.max_row):
+        vals = [c.value for c in row]
+        if "array2" in vals:
+            found = True
+            assert row[0].fill.fgColor.rgb in ("00FFCDD2", "FFCDD2")
+    assert found
+    summary = wb["Issues Summary"]
+    assert summary.max_row == 2  # header + one issue
