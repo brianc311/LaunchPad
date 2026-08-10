@@ -28,6 +28,49 @@ def test_resolve_gui_url_prefers_url_then_host():
     assert resolve_gui_url("  ", "  ") == ""
 
 
+def test_resolve_gui_url_3par_appends_8443():
+    assert (
+        resolve_gui_url("", "pla-w023par01", "hpe_3par_8200")
+        == "https://pla-w023par01:8443"
+    )
+    assert (
+        resolve_gui_url("", "10.1.2.3", "hpe_3par_8400")
+        == "https://10.1.2.3:8443"
+    )
+    assert (
+        resolve_gui_url("", "pla-w023par01", "hpe_3par_8450")
+        == "https://pla-w023par01:8443"
+    )
+
+
+def test_resolve_gui_url_prefers_admin_url_over_3par_default():
+    assert (
+        resolve_gui_url("https://gui.example", "pla-w023par01", "hpe_3par_8200")
+        == "https://gui.example"
+    )
+
+
+def test_resolve_gui_url_primera_and_other_profiles_no_8443():
+    assert (
+        resolve_gui_url("", "pla-w023par01", "hpe_primera_600")
+        == "https://pla-w023par01"
+    )
+    assert resolve_gui_url("", "10.1.2.3", "flashsystem_5200") == "https://10.1.2.3"
+    assert resolve_gui_url("", "10.1.2.3", "") == "https://10.1.2.3"
+    assert resolve_gui_url("", "10.1.2.3") == "https://10.1.2.3"
+
+
+def test_resolve_gui_url_does_not_double_existing_port():
+    assert (
+        resolve_gui_url("", "pla-w023par01:8443", "hpe_3par_8200")
+        == "https://pla-w023par01:8443"
+    )
+    assert (
+        resolve_gui_url("", "10.1.2.3:9443", "hpe_3par_8200")
+        == "https://10.1.2.3:9443"
+    )
+
+
 def test_filter_problem_hosts_offline_degraded_only():
     rows = [
         {"host_name": "host_a", "status": "offline"},
