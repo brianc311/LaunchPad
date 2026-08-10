@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 import paramiko
 
 from launchpad.config import TEMP_DIR
+from launchpad.ssh_paramiko import authenticate_with_password
 
 SECRET_FILE = TEMP_DIR / "ssh_askpass.secret"
 
@@ -50,24 +52,42 @@ def run_interactive_shell(
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sock = None
+    transport = None
 
     try:
-        client.connect(
-            hostname=host,
-            port=port,
-            username=username,
-            password=password,
-            allow_agent=False,
-            look_for_keys=False,
-            timeout=20,
-            banner_timeout=20,
-            auth_timeout=20,
-        )
+        sock = socket.create_connection((host, port), timeout=20)
+        transport = paramiko.Transport(sock)
+        transport.banner_timeout = 20
+        transport.auth_timeout = 20
+        transport.start_client(timeout=20)
+        authenticate_with_password(transport, username, password)
+        client._transport = transport
     except paramiko.AuthenticationException:
         print("Authentication failed. Check username and password in LaunchPad Admin.")
+        if transport is not None:
+            try:
+                transport.close()
+            except OSError:
+                pass
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
         return 1
     except Exception as exc:
         print(f"Connection failed: {exc}")
+        if transport is not None:
+            try:
+                transport.close()
+            except OSError:
+                pass
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
         return 1
 
     cols, rows = shutil.get_terminal_size(fallback=(120, 40))
