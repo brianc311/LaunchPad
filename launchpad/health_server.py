@@ -6800,9 +6800,11 @@ class HealthServer:
 
     def _scan_storage_inventory_svc_card(
         self, card: HealthCard, commands: dict[str, list[str]]
-    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple]:
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str]]:
         run = self._lun_run_command(card)
         lssystem_output: str | None = None
+        extra_errors: list[str] = []
+        unknown = ("unknown", "", "")
 
         def _run_first(topic: str) -> str:
             nonlocal lssystem_output
@@ -6817,22 +6819,50 @@ class HealthServer:
                 lssystem_output = output
             return output
 
-        identity_output = _run_first("identity")
-        model, serial = parse_svc_lssystem_identity(identity_output)
-        ntp_output = _run_first("ntp")
-        ntp = parse_svc_ntp_from_lssystem(ntp_output)
-        phone = parse_svc_call_home(_run_first("call_home"))
-        dns = parse_svc_dns(_run_first("dns"))
-        smtp = parse_svc_lsemailserver(_run_first("smtp"))
-        dp_cfg, dp_status, _dp_details = parse_svc_lsrcrelationship(
-            _run_first("data_protection")
-        )
-        data_protection = (dp_cfg, dp_status, "")
-        return model, serial, phone, data_protection, smtp, dns, ntp
+        try:
+            model, serial = parse_svc_lssystem_identity(_run_first("identity"))
+        except Exception as exc:
+            model, serial = "", ""
+            extra_errors.append(f"identity scan failed: {exc}")
+
+        try:
+            ntp = parse_svc_ntp_from_lssystem(_run_first("ntp"))
+        except Exception as exc:
+            ntp = unknown
+            extra_errors.append(f"ntp scan failed: {exc}")
+
+        try:
+            phone = parse_svc_call_home(_run_first("call_home"))
+        except Exception as exc:
+            phone = unknown
+            extra_errors.append(f"call home scan failed: {exc}")
+
+        try:
+            dns = parse_svc_dns(_run_first("dns"))
+        except Exception as exc:
+            dns = unknown
+            extra_errors.append(f"dns scan failed: {exc}")
+
+        try:
+            smtp = parse_svc_lsemailserver(_run_first("smtp"))
+        except Exception as exc:
+            smtp = unknown
+            extra_errors.append(f"smtp scan failed: {exc}")
+
+        try:
+            dp_cfg, dp_status, _dp_details = parse_svc_lsrcrelationship(
+                _run_first("data_protection")
+            )
+            data_protection = (dp_cfg, dp_status, "")
+        except Exception as exc:
+            data_protection = unknown
+            extra_errors.append(f"data protection scan failed: {exc}")
+
+        return model, serial, phone, data_protection, smtp, dns, ntp, extra_errors
 
     def _scan_storage_inventory_hpe_card(
         self, card: HealthCard, commands: dict[str, list[str]]
-    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple]:
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str]]:
         identity_cmds = list(commands.get("identity") or [])
         dp_cmds = list(commands.get("data_protection") or [])
         identity_cmd = identity_cmds[0] if identity_cmds else "showsys"
@@ -6860,6 +6890,7 @@ class HealthServer:
             smtp,
             net["dns"],
             net["ntp"],
+            [],
         )
 
     @staticmethod
@@ -6884,8 +6915,10 @@ class HealthServer:
 
     def _scan_storage_inventory_ds_card(
         self, card: HealthCard, commands: dict[str, list[str]]
-    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple]:
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str]]:
         run = self._lun_run_command(card)
+        extra_errors: list[str] = []
+        unknown = ("unknown", "", "")
 
         def _run_first(topic: str) -> str:
             topic_cmds = list(commands.get(topic) or [])
@@ -6893,12 +6926,22 @@ class HealthServer:
                 return ""
             return run(topic_cmds[0]) or ""
 
-        phone = parse_ds_showsp_call_home(_run_first("call_home"))
-        dns = parse_ds_networkport_dns(_run_first("dns"))
+        try:
+            phone = parse_ds_showsp_call_home(_run_first("call_home"))
+        except Exception as exc:
+            phone = unknown
+            extra_errors.append(f"call home scan failed: {exc}")
+
+        try:
+            dns = parse_ds_networkport_dns(_run_first("dns"))
+        except Exception as exc:
+            dns = unknown
+            extra_errors.append(f"dns scan failed: {exc}")
+
         smtp = ("n/a", "", "smtp not available for this profile")
         data_protection = ("n/a", "", "data protection not available for this profile")
         ntp = ("n/a", "", "ntp not available via DSCLI on this path (often HMC)")
-        return "", "", phone, data_protection, smtp, dns, ntp
+        return "", "", phone, data_protection, smtp, dns, ntp, extra_errors
 
     def _scan_storage_inventory_card(self, card: HealthCard) -> dict[str, Any]:
         profile = str(card.device_profile or "")
@@ -6907,20 +6950,21 @@ class HealthServer:
         health_issues = self._storage_inventory_health_issues(card)
 
         if profile in HPE_SHELL_PROFILES:
-            model, serial, phone, dp, smtp, dns, ntp = self._scan_storage_inventory_hpe_card(
-                card, commands
+            model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
+                self._scan_storage_inventory_hpe_card(card, commands)
             )
         elif profile.strip().lower() == "ibm_ds8884":
-            model, serial, phone, dp, smtp, dns, ntp = self._scan_storage_inventory_ds_card(
-                card, commands
+            model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
+                self._scan_storage_inventory_ds_card(card, commands)
             )
         else:
-            model, serial, phone, dp, smtp, dns, ntp = self._scan_storage_inventory_svc_card(
-                card, commands
+            model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
+                self._scan_storage_inventory_svc_card(card, commands)
             )
 
-        if not serial:
-            serial = str(card.serial_number or "")
+        card_serial = str(card.serial_number or "").strip()
+        if card_serial:
+            serial = card_serial
         if not model:
             model = DEVICE_PROFILES.get(profile, profile)
 
@@ -6940,7 +6984,7 @@ class HealthServer:
             dns=dns,
             ntp=ntp,
             health_issues=health_issues,
-            extra_errors=[],
+            extra_errors=extra_errors,
         )
 
     def scan_storage_inventory_live(self, *, card_id: int | None = None) -> dict[str, Any]:
