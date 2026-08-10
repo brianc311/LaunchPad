@@ -131,4 +131,4 @@ def test_host_power_runner_ignores_sudo_password_for_non_hadoop(monkeypatch):
 def test_version_134():
     from launchpad.config import APP_VERSION
 
-    assert APP_VERSION == "1.6.146"
+    assert APP_VERSION == "1.6.147"
