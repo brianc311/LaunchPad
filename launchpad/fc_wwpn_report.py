@@ -273,6 +273,15 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
         .replace(/"/g, "&quot;");
     }
 
+    function formatFcPortLabel(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+      if (/^\\d+$/.test(text)) return "fc" + text;
+      const m = /^fc(\\d+)$/i.exec(text);
+      if (m) return "fc" + m[1];
+      return text;
+    }
+
     function cellNeedsClamp(td) {
       const text = (td.textContent || "").trim();
       if (!text) return false;
@@ -519,7 +528,7 @@ FC_WWPN_REPORT_HTML = """<!DOCTYPE html>
       if (!ports.length) return '<p class="empty">No FC ports / WWPNs returned.</p>';
       const rows = ports.map((p) => `
         <tr>
-          <td>${escapeHtml(p.port_id || p.fc_io_port_id || "")}</td>
+          <td>${escapeHtml(formatFcPortLabel(p.port_id || p.fc_io_port_id || ""))}</td>
           <td class="mono">${escapeHtml(p.wwpn || "")}</td>
           <td>${escapeHtml(p.status || "")}</td>
           <td>${escapeHtml(p.speed || "")}</td>
