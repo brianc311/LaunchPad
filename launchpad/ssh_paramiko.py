@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import socket
 import threading
 import time
 from contextlib import contextmanager
@@ -14,6 +15,50 @@ import paramiko
 CONNECT_TIMEOUT = 15
 COMMAND_TIMEOUT = 40
 HPE_CLI_BUSY_TIMEOUT = 90
+
+
+def authenticate_with_password(
+    transport: paramiko.Transport,
+    username: str,
+    password: str,
+) -> None:
+    """Authenticate using password and/or keyboard-interactive.
+
+    IBM DS8884 (and similar) often advertise only ``publickey`` +
+    ``keyboard-interactive`` and reject the Paramiko ``password`` method with
+    ``Bad authentication type``. Prefer ``password`` when offered; otherwise use
+    keyboard-interactive and answer every prompt with the saved password.
+    """
+    allowed: list[str] = []
+    try:
+        transport.auth_none(username)
+    except paramiko.BadAuthenticationType as exc:
+        allowed = [str(item) for item in (exc.allowed_types or [])]
+    except paramiko.AuthenticationException:
+        allowed = []
+
+    def keyboard_handler(
+        _title: str,
+        _instructions: str,
+        prompt_list: list,
+    ) -> list[str]:
+        return [password for _prompt in prompt_list]
+
+    if "password" in allowed:
+        transport.auth_password(username, password)
+        return
+    if "keyboard-interactive" in allowed:
+        transport.auth_interactive(username, keyboard_handler)
+        return
+
+    try:
+        transport.auth_password(username, password)
+        return
+    except paramiko.BadAuthenticationType as exc:
+        allowed = [str(item) for item in (exc.allowed_types or [])]
+        if "keyboard-interactive" not in allowed:
+            raise
+        transport.auth_interactive(username, keyboard_handler)
 
 _lock_guard = threading.Lock()
 _hpe_host_locks: dict[str, threading.Lock] = {}
@@ -83,24 +128,32 @@ def password_ssh_client(
 ) -> Iterator[paramiko.SSHClient]:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sock: socket.socket | None = None
+    transport: paramiko.Transport | None = None
     try:
-        client.connect(
-            hostname=host,
-            port=port or 22,
-            username=username,
-            password=password,
-            allow_agent=False,
-            look_for_keys=False,
-            timeout=CONNECT_TIMEOUT,
-            banner_timeout=CONNECT_TIMEOUT,
-            auth_timeout=CONNECT_TIMEOUT,
-        )
+        sock = socket.create_connection((host, port or 22), timeout=CONNECT_TIMEOUT)
+        transport = paramiko.Transport(sock)
+        transport.banner_timeout = CONNECT_TIMEOUT
+        transport.auth_timeout = CONNECT_TIMEOUT
+        transport.start_client(timeout=CONNECT_TIMEOUT)
+        authenticate_with_password(transport, username, password)
+        client._transport = transport
         yield client
     finally:
         try:
             client.close()
         except OSError:
             pass
+        if transport is not None:
+            try:
+                transport.close()
+            except OSError:
+                pass
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 @contextmanager
