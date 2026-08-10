@@ -137,7 +137,7 @@ class LaunchPadApp(ctk.CTk):
             card = db.get_card(card_id)
             if card is None:
                 raise ValueError(f"Unknown card id {card_id}")
-            url = resolve_gui_url(card.url, card.host)
+            url = resolve_gui_url(card.url, card.host, card.device_profile)
             if not url:
                 raise ValueError(
                     "No GUI URL or host on this card — set URL or Host in Admin."
