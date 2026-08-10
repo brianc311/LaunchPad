@@ -61,7 +61,7 @@ def run_interactive_shell(
         transport.banner_timeout = 20
         transport.auth_timeout = 20
         transport.start_client(timeout=20)
-        authenticate_with_password(transport, username, password)
+        authenticate_with_password(transport, username, (password or "").rstrip("\r\n"))
         client._transport = transport
     except paramiko.AuthenticationException:
         print("Authentication failed. Check username and password in LaunchPad Admin.")
