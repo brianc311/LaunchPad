@@ -70,3 +70,11 @@ def test_fc_wwpn_find_expands_and_clears_clamped_cells():
     chunk = FC_WWPN_REPORT_HTML[empty_idx : empty_idx + 2500]
     assert "collapseAllClampedCells(" in chunk
     assert "expandClampedCellsMatching(" in chunk
+
+
+def test_fc_wwpn_formats_port_as_fc_label():
+    html = FC_WWPN_REPORT_HTML
+    assert "function formatFcPortLabel" in html
+    assert "formatFcPortLabel(p.port_id || p.fc_io_port_id || \"\")" in html or (
+        "formatFcPortLabel(p.port_id || p.fc_io_port_id || '')" in html
+    )

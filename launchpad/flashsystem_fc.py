@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 from launchpad.flashsystem_parse import _parse_colon_table, _parse_space_table
+
+_FC_DIGITS = re.compile(r"^(\d+)$")
+_FC_PREFIXED = re.compile(r"^fc(\d+)$", re.IGNORECASE)
+
+
+def format_fc_port_label(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    m = _FC_DIGITS.match(text)
+    if m:
+        return f"fc{m.group(1)}"
+    m = _FC_PREFIXED.match(text)
+    if m:
+        return f"fc{m.group(1)}"
+    return text
 
 
 def _table_records(output: str) -> list[dict[str, str]]:
