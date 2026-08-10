@@ -9,6 +9,7 @@ from launchpad.storage_inventory import (
     format_smtp_cell,
     inventory_commands_for_profile,
     inventory_totals,
+    parse_hpe_showrcopy_protection,
     parse_svc_lsemailserver,
     parse_svc_lsrcrelationship,
     parse_svc_lssystem_identity,
@@ -51,6 +52,37 @@ def test_parse_svc_identity_and_smtp_and_rcrelationship():
         "id:name:master_cluster_id:master_cluster_name\n"
     )
     assert no_cfg == "no"
+
+
+def test_parse_hpe_showrcopy_protection_empty_is_unknown():
+    cfg, _status, details = parse_hpe_showrcopy_protection("")
+    assert cfg == "unknown"
+    assert "empty" in details
+
+
+def test_parse_hpe_showrcopy_protection_not_configured():
+    cfg, _status, details = parse_hpe_showrcopy_protection(
+        "Remote Copy is not configured on this system.\n"
+    )
+    assert cfg == "no"
+    assert "not configured" in details
+
+
+def test_parse_hpe_showrcopy_protection_configured_with_targets():
+    cfg, _status, details = parse_hpe_showrcopy_protection(
+        "Group: RCG1\nTarget: sync1\nStatus: Started\n"
+    )
+    assert cfg == "yes"
+    assert "RCG1" in details
+    assert "sync1" in details
+
+
+def test_parse_hpe_showrcopy_protection_unrecognized_is_unknown():
+    cfg, _status, details = parse_hpe_showrcopy_protection(
+        "Line one of noise\nLine two of noise\nLine three of noise\n"
+    )
+    assert cfg == "unknown"
+    assert "unrecognized" in details
 
 
 def test_issues_notes_and_totals():

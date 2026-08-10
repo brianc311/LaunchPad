@@ -152,6 +152,20 @@ from launchpad.system_connectivity_page import (
     SYSTEM_CONNECTIVITY_HTML,
     SYSTEM_CONNECTIVITY_PATH,
 )
+from launchpad.storage_inventory import (
+    build_inventory_row,
+    export_storage_inventory_xlsx,
+    inventory_commands_for_profile,
+    inventory_totals,
+    parse_hpe_showrcopy_protection,
+    parse_svc_lsemailserver,
+    parse_svc_lsrcrelationship,
+    parse_svc_lssystem_identity,
+)
+from launchpad.storage_inventory_page import (
+    STORAGE_INVENTORY_HTML,
+    STORAGE_INVENTORY_PATH,
+)
 from launchpad.flashsystem_fc import (
     analyze_fc_inventory,
     parse_fabric_logins,
@@ -2249,6 +2263,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == SYSTEM_CONNECTIVITY_PATH:
             self._send_html(SYSTEM_CONNECTIVITY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
+        if path == STORAGE_INVENTORY_PATH:
+            self._send_html(STORAGE_INVENTORY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            return
         if path == SITE_LOOKUP_PATH:
             self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
             return
@@ -2829,6 +2846,77 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 except Exception as open_exc:
                     _log(
                         "System Connectivity export saved for download but "
+                        f"could not open: {open_exc}"
+                    )
+            self._send_bytes(body, content_type=content_type, filename=filename)
+            return
+        if path == "/api/storage-inventory/cache":
+            cached = server.get_storage_inventory_cache()
+            if cached is None:
+                self._send_json(
+                    {
+                        "rows": [],
+                        "generated_at": "",
+                        "errors": [],
+                        "total_devices": 0,
+                        "devices_with_issues": 0,
+                    }
+                )
+                return
+            self._send_json(cached)
+            return
+        if path == "/api/storage-inventory/live":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            card_id: int | None = None
+            if raw_card_id:
+                try:
+                    card_id = int(raw_card_id)
+                except ValueError:
+                    self._send_json({"error": "card_id must be an integer"}, status=400)
+                    return
+            try:
+                payload = server.scan_storage_inventory_live(card_id=card_id)
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=403)
+                return
+            self._send_json(payload)
+            return
+        if path == "/api/storage-inventory/export":
+            from launchpad.capacity_export import open_exported_workbook
+            from launchpad.config import TEMP_DIR
+
+            query = parse_qs(parsed.query)
+            export_format = (query.get("format") or ["xlsx"])[0].strip().lower()
+            if export_format != "xlsx":
+                self._send_json(
+                    {"error": "Export format must be xlsx."},
+                    status=400,
+                )
+                return
+            open_after = (query.get("open") or [""])[0].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            try:
+                body, filename, content_type = server.export_storage_inventory_bytes()
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, status=404)
+                return
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+                return
+            if open_after:
+                try:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    saved = TEMP_DIR / filename
+                    saved.write_bytes(body)
+                    open_exported_workbook(saved)
+                    _log(f"Storage Inventory export opened: {saved}")
+                except Exception as open_exc:
+                    _log(
+                        "Storage Inventory export saved for download but "
                         f"could not open: {open_exc}"
                     )
             self._send_bytes(body, content_type=content_type, filename=filename)
@@ -3930,6 +4018,7 @@ class HealthServer:
         self._lun_preview_session: dict[str, Any] | None = None
         self._host_volume_health_cache: dict[str, Any] | None = None
         self._system_connectivity_cache: dict[str, Any] | None = None
+        self._storage_inventory_cache: dict[str, Any] | None = None
         self._fc_consistgrp_status_cache: dict[str, Any] | None = None
         self._fc_cg_summary_live_cache: dict[str, Any] | None = None
 
@@ -6697,6 +6786,279 @@ class HealthServer:
         body = export_system_connectivity_csv_zip(scoped)
         return body, f"System_Connectivity_{stamp}.zip", "application/zip"
 
+    @staticmethod
+    def _storage_inventory_health_issues(card: HealthCard) -> list:
+        if not card.command_results:
+            return []
+        try:
+            analysis = analyze_health(card.name, card.command_results, card.metrics)
+        except Exception:
+            return []
+        return list(analysis.get("issues") or [])
+
+    def _scan_storage_inventory_svc_card(
+        self, card: HealthCard, commands: dict[str, list[str]]
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple]:
+        run = self._lun_run_command(card)
+        lssystem_output: str | None = None
+
+        def _run_first(topic: str) -> str:
+            nonlocal lssystem_output
+            topic_cmds = list(commands.get(topic) or [])
+            if not topic_cmds:
+                return ""
+            cmd = self._system_connectivity_svc_command(topic_cmds[0])
+            if "lssystem" in topic_cmds[0] and lssystem_output is not None:
+                return lssystem_output
+            output = run(cmd) or ""
+            if "lssystem" in topic_cmds[0]:
+                lssystem_output = output
+            return output
+
+        identity_output = _run_first("identity")
+        model, serial = parse_svc_lssystem_identity(identity_output)
+        ntp_output = _run_first("ntp")
+        ntp = parse_svc_ntp_from_lssystem(ntp_output)
+        phone = parse_svc_call_home(_run_first("call_home"))
+        dns = parse_svc_dns(_run_first("dns"))
+        smtp = parse_svc_lsemailserver(_run_first("smtp"))
+        dp_cfg, dp_status, _dp_details = parse_svc_lsrcrelationship(
+            _run_first("data_protection")
+        )
+        data_protection = (dp_cfg, dp_status, "")
+        return model, serial, phone, data_protection, smtp, dns, ntp
+
+    def _scan_storage_inventory_hpe_card(
+        self, card: HealthCard, commands: dict[str, list[str]]
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple]:
+        identity_cmds = list(commands.get("identity") or [])
+        dp_cmds = list(commands.get("data_protection") or [])
+        identity_cmd = identity_cmds[0] if identity_cmds else "showsys"
+        dp_cmd = dp_cmds[0] if dp_cmds else "showrcopy"
+        identity_out, shownet_out, rcopy_out = run_ssh_auth_hpe_commands(
+            card.host,
+            card.port,
+            card.username,
+            [identity_cmd, "shownet", dp_cmd],
+            password=card.password,
+            key_path=card.key_path,
+            key_passphrase=card.key_passphrase,
+        )
+        model, serial = self._parse_hpe_showsys_identity(identity_out or "")
+        net = parse_hpe_shownet_dns_ntp(shownet_out or "")
+        phone = hpe_call_home_na_row()
+        smtp = ("n/a", "", "smtp not available for this profile")
+        dp_cfg, dp_status, _dp_details = parse_hpe_showrcopy_protection(rcopy_out or "")
+        data_protection = (dp_cfg, dp_status, "")
+        return (
+            model,
+            serial,
+            phone,
+            data_protection,
+            smtp,
+            net["dns"],
+            net["ntp"],
+        )
+
+    @staticmethod
+    def _parse_hpe_showsys_identity(output: str) -> tuple[str, str]:
+        text = str(output or "")
+        model = ""
+        serial = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, _, value = stripped.partition(":")
+            token = key.strip().lower()
+            val = value.strip()
+            if not val:
+                continue
+            if "serial" in token and not serial:
+                serial = val
+            elif "model" in token and not model:
+                model = val
+        return model, serial
+
+    def _scan_storage_inventory_ds_card(
+        self, card: HealthCard, commands: dict[str, list[str]]
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple]:
+        run = self._lun_run_command(card)
+
+        def _run_first(topic: str) -> str:
+            topic_cmds = list(commands.get(topic) or [])
+            if not topic_cmds:
+                return ""
+            return run(topic_cmds[0]) or ""
+
+        phone = parse_ds_showsp_call_home(_run_first("call_home"))
+        dns = parse_ds_networkport_dns(_run_first("dns"))
+        smtp = ("n/a", "", "smtp not available for this profile")
+        data_protection = ("n/a", "", "data protection not available for this profile")
+        ntp = ("n/a", "", "ntp not available via DSCLI on this path (often HMC)")
+        return "", "", phone, data_protection, smtp, dns, ntp
+
+    def _scan_storage_inventory_card(self, card: HealthCard) -> dict[str, Any]:
+        profile = str(card.device_profile or "")
+        vendor = system_connectivity_vendor(profile)
+        commands = inventory_commands_for_profile(profile)
+        health_issues = self._storage_inventory_health_issues(card)
+
+        if profile in HPE_SHELL_PROFILES:
+            model, serial, phone, dp, smtp, dns, ntp = self._scan_storage_inventory_hpe_card(
+                card, commands
+            )
+        elif profile.strip().lower() == "ibm_ds8884":
+            model, serial, phone, dp, smtp, dns, ntp = self._scan_storage_inventory_ds_card(
+                card, commands
+            )
+        else:
+            model, serial, phone, dp, smtp, dns, ntp = self._scan_storage_inventory_svc_card(
+                card, commands
+            )
+
+        if not serial:
+            serial = str(card.serial_number or "")
+        if not model:
+            model = DEVICE_PROFILES.get(profile, profile)
+
+        return build_inventory_row(
+            site=card.name,
+            host=card.name,
+            ip=str(card.host or ""),
+            model=model,
+            serial=serial,
+            location=card.name,
+            vendor=vendor,
+            profile=profile,
+            card_id=card.card_id,
+            phone=phone,
+            data_protection=dp,
+            smtp=smtp,
+            dns=dns,
+            ntp=ntp,
+            health_issues=health_issues,
+            extra_errors=[],
+        )
+
+    def scan_storage_inventory_live(self, *, card_id: int | None = None) -> dict[str, Any]:
+        if not self.is_unlocked():
+            raise RuntimeError(
+                "LaunchPad must be unlocked to refresh Storage Inventory live."
+            )
+        self.sync_from_app()
+        if self.is_unlocked():
+            try:
+                self.ensure_anderson_card_rename()
+            except Exception:
+                pass
+        cards = self.list_cards(allow_sync=False)
+        monitor = {
+            c["id"]: self.is_monitor_enabled(int(c["id"]))
+            for c in cards
+            if c.get("id") is not None
+        }
+        rows: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = bool(
+                monitor.get(current_id, monitor.get(str(current_id), False))
+            )
+            if not is_system_connectivity_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            card = self._cards.get(int(current_id))
+            if card is None:
+                continue
+            try:
+                row = self._scan_storage_inventory_card(card)
+            except Exception as exc:
+                err = str(exc)
+                errors.append(
+                    {"card_id": card.card_id, "card_name": card.name, "error": err}
+                )
+                unknown = ("unknown", "", "")
+                row = build_inventory_row(
+                    site=card.name,
+                    host=card.name,
+                    ip=str(card.host or ""),
+                    model=DEVICE_PROFILES.get(
+                        str(card.device_profile or ""), str(card.device_profile or "")
+                    ),
+                    serial=str(card.serial_number or ""),
+                    location=card.name,
+                    vendor=system_connectivity_vendor(str(card.device_profile or "")),
+                    profile=str(card.device_profile or ""),
+                    card_id=card.card_id,
+                    phone=unknown,
+                    data_protection=unknown,
+                    smtp=unknown,
+                    dns=unknown,
+                    ntp=unknown,
+                    health_issues=[],
+                    extra_errors=[err],
+                )
+            rows.append(row)
+
+        rows.sort(key=lambda row: str(row.get("site") or "").lower())
+        totals = inventory_totals(rows)
+        payload: dict[str, Any] = {
+            "rows": rows,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "errors": errors,
+            "total_devices": totals["total_devices"],
+            "devices_with_issues": totals["devices_with_issues"],
+        }
+        with self._lock:
+            self._storage_inventory_cache = payload
+        return payload
+
+    def get_storage_inventory_cache(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._storage_inventory_cache is None:
+                return None
+            return {
+                "rows": list(self._storage_inventory_cache.get("rows") or []),
+                "generated_at": str(
+                    self._storage_inventory_cache.get("generated_at") or ""
+                ),
+                "errors": list(self._storage_inventory_cache.get("errors") or []),
+                "total_devices": int(
+                    self._storage_inventory_cache.get("total_devices") or 0
+                ),
+                "devices_with_issues": int(
+                    self._storage_inventory_cache.get("devices_with_issues") or 0
+                ),
+            }
+
+    def set_storage_inventory_cache(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._storage_inventory_cache = {
+                "rows": list(payload.get("rows") or []),
+                "generated_at": str(payload.get("generated_at") or ""),
+                "errors": list(payload.get("errors") or []),
+                "total_devices": int(payload.get("total_devices") or 0),
+                "devices_with_issues": int(payload.get("devices_with_issues") or 0),
+            }
+
+    def export_storage_inventory_bytes(self) -> tuple[bytes, str, str]:
+        cached = self.get_storage_inventory_cache()
+        if cached is None or not cached.get("rows"):
+            raise LookupError("Refresh live before exporting.")
+        body = export_storage_inventory_xlsx(
+            cached["rows"], generated_at=cached.get("generated_at")
+        )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        return (
+            body,
+            f"LaunchPad_Storage_Inventory_{stamp}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     def find_volumes(
         self, query: str, *, mode: str = "cache", find_type: str = "volume"
     ) -> dict[str, Any]:
@@ -6924,6 +7286,10 @@ class HealthServer:
     @property
     def system_connectivity_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{SYSTEM_CONNECTIVITY_PATH}"
+
+    @property
+    def storage_inventory_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{STORAGE_INVENTORY_PATH}"
 
     @property
     def site_lookup_url(self) -> str:
@@ -7689,6 +8055,13 @@ class HealthServer:
         webbrowser.open(self.system_connectivity_url)
         _log(f"Opened System Connectivity in browser: {self.system_connectivity_url}")
         return self.system_connectivity_url
+
+    def open_storage_inventory(self) -> str:
+        """Open the Storage Inventory page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.storage_inventory_url)
+        _log(f"Opened Storage Inventory in browser: {self.storage_inventory_url}")
+        return self.storage_inventory_url
 
 
 _instance: HealthServer | None = None
