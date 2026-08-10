@@ -15,7 +15,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from launchpad.database import Database
-from launchpad.flashsystem_fc import analyze_fc_inventory
+from launchpad.flashsystem_fc import analyze_fc_inventory, format_fc_port_label
 from launchpad.monitor import build_health_dashboard_entries
 from launchpad.snapshot_schedule_export import filter_cards_by_groups
 from launchpad.storage_presets import DEVICE_PROFILES
@@ -264,7 +264,7 @@ def rows_from_card_api(card: dict[str, Any]) -> tuple[
                 host,
                 model,
                 port.get("node_name"),
-                port.get("port_id") or port.get("fc_io_port_id"),
+                format_fc_port_label(port.get("port_id") or port.get("fc_io_port_id")),
                 port.get("wwpn"),
                 port.get("status"),
                 port.get("speed"),
