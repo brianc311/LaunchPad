@@ -157,6 +157,7 @@ _FORECAST_HEADER_LABELS = (
 _UTIL_COLUMNS = (7, 10)
 # Forecast util columns: Date E=5 through 12 Month I=9.
 _FORECAST_UTIL_COLUMNS = (5, 6, 7, 8, 9)
+_FORECAST_MONTH_HORIZONS = (13, 26, 39, 52)
 _GIB = 1024**3
 
 # Spread identity + metric columns so headers/values are readable (avoid ######).
@@ -178,7 +179,7 @@ _FORECAST_COL_WIDTHS = (
     28.0,
     42.0,
     28.0,
-    14.0,  # Date (current util)
+    16.0,  # Date (current util)
     12.0,
     12.0,
     12.0,
@@ -627,9 +628,9 @@ def _project_util(
     if curr_util is None:
         return None
     if weekly_growth is None:
-        return float(curr_util)
+        return None
     projected = float(curr_util) * ((1.0 + float(weekly_growth)) ** weeks_ahead)
-    return max(0.0, projected)
+    return max(0.0, min(1.0, projected))
 
 
 def _build_forecast_wkly_sheet(
@@ -793,8 +794,13 @@ def _write_forecast_grouped_rows(
         ws.cell(row=excel_row, column=_FIRST_DATA_COL + 1, value=row.get("array_name"))
         ws.cell(row=excel_row, column=_FIRST_DATA_COL + 2, value=row.get("model"))
         curr_util = row.get("curr_util")
-        for col in _FORECAST_UTIL_COLUMNS:
-            cell = ws.cell(row=excel_row, column=col, value=curr_util)
+        growth = row.get("weekly_growth")
+        values = [curr_util] + [
+            _project_util(curr_util, growth, weeks)
+            for weeks in _FORECAST_MONTH_HORIZONS
+        ]
+        for col, value in zip(_FORECAST_UTIL_COLUMNS, values):
+            cell = ws.cell(row=excel_row, column=col, value=value)
             cell.number_format = "0.0%"
 
 
