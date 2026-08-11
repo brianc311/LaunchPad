@@ -29,3 +29,6 @@ def test_dashboard_header_has_capacity_unit_switch():
     assert "SETTING_CAPACITY_UNIT_MODE" in source
     assert "GiB/TiB" in source
     assert "GB/TB" in source
+    assert "refresh_cards(probe_ssh=False)" in source
+    assert "probe_ssh: bool = True" in source
+    assert "_probe_monitored_ssh_status" in source

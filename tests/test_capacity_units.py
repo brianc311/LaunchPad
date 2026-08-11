@@ -56,6 +56,7 @@ def test_health_format_gb_follows_mode():
     assert _gb(1024**3) == "1.0 GiB"
     set_capacity_unit_mode("si")
     assert _gb(1024**3) == "1.1 GB"
+    set_capacity_unit_mode("iec")
 
 
 class _FakeDb:

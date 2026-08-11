@@ -510,7 +510,7 @@ class DashboardView(ctk.CTkFrame):
         set_capacity_unit_mode(mode)
         self.db.set_setting(SETTING_CAPACITY_UNIT_MODE, mode)
         self.capacity_unit_switch.configure(text=self._capacity_unit_switch_label())
-        self.refresh_cards()
+        self.refresh_cards(probe_ssh=False)
 
     def apply_theme(self, theme_name: str) -> None:
         self.theme_name = theme_name
@@ -576,7 +576,7 @@ class DashboardView(ctk.CTkFrame):
         except Exception as exc:
             self.status_label.configure(text=f"Could not copy URL: {exc}")
 
-    def refresh_cards(self) -> None:
+    def refresh_cards(self, *, probe_ssh: bool = True) -> None:
         if self._stats_timer:
             self.after_cancel(self._stats_timer)
             self._stats_timer = None
@@ -710,7 +710,8 @@ class DashboardView(ctk.CTkFrame):
 
         self._update_selection_status()
         self._sync_master_monitor_switch()
-        self._probe_monitored_ssh_status()
+        if probe_ssh:
+            self._probe_monitored_ssh_status()
         self._refresh_capacity_alerts()
         self._schedule_capacity_alert_poll()
 
