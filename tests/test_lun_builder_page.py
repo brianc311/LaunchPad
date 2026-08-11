@@ -205,6 +205,13 @@ def test_lun_builder_exposes_build_defaults_that_fill_luns():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_card_hint_is_a_select():
+    assert '<select id="default-card-hint"' in LUN_BUILDER_HTML
+    assert '<input id="default-card-hint"' not in LUN_BUILDER_HTML
+    assert "Select Health Card" in LUN_BUILDER_HTML
+    assert "fillCardHintOptions" in LUN_BUILDER_HTML
+
+
 def test_lun_builder_exposes_template_picker_ux():
     for text in (
         "Templates",

@@ -33,5 +33,5 @@ def test_polled_pages_update_capacity_unit_mode_from_cards():
         assert "capacity_unit_mode" in html
 
 
-def test_app_version_152():
-    assert APP_VERSION == "1.6.152"
+def test_app_version_153():
+    assert APP_VERSION == "1.6.153"

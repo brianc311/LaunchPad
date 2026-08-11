@@ -180,7 +180,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
           <select id="default-storage-profile"><option value="">Select profile</option>{{PROFILE_OPTIONS}}</select>
         </label>
         <label>Pool / CPG <input id="default-pool-or-cpg" placeholder="Apply to all LUN rows"></label>
-        <label>Card hint <input id="default-card-hint" placeholder="Health Card name for SSH" title="LaunchPad SSH Health Card name used for Preview/Run"></label>
+        <label>Card hint <select id="default-card-hint" title="LaunchPad SSH Health Card name used for Preview/Run"><option value="">Select Health Card</option></select></label>
         <p class="defaults-hint">Storage profile, Pool/CPG, and Card hint above fill every LUN row. Card hint is the LaunchPad SSH Health Card name (or unique part of it) for the target array — not the pool name. You can still edit individual rows.</p>
         <label class="notes">Notes <textarea id="build-notes" placeholder="Planning notes"></textarea></label>
       </div>
@@ -645,6 +645,26 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         healthCards = {};
       }
     }
+    function sshCardNames() {
+      return Object.values(healthCards)
+        .filter((card) => !card.card_type || card.card_type === "ssh")
+        .map((card) => String(card.name || "").trim())
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    }
+    function fillCardHintOptions(selectedHint) {
+      const select = document.getElementById("default-card-hint");
+      if (!select) return;
+      const current = String(selectedHint || "").trim();
+      const names = sshCardNames();
+      const extras = current && !names.includes(current) ? [current] : [];
+      const values = ["", ...extras, ...names];
+      select.innerHTML = values.map((name) => {
+        const label = name || "Select Health Card";
+        return `<option value="${esc(name)}">${esc(label)}</option>`;
+      }).join("");
+      select.value = current;
+    }
     function inventoryBannerText(snapshot) {
       if (!snapshot) return "";
       const card = healthCards[String(snapshot.card_id)];
@@ -846,7 +866,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       document.getElementById("build-notes").value = build.notes || "";
       document.getElementById("default-storage-profile").value = build.default_storage_profile || "";
       document.getElementById("default-pool-or-cpg").value = build.default_pool_or_cpg || "";
-      document.getElementById("default-card-hint").value = build.default_card_hint || "";
+      fillCardHintOptions(build.default_card_hint || "");
       hostsBody.innerHTML = (build.hosts || []).length ? build.hosts.map((host, index) => `<tr class="${host.done ? "row-done" : ""}">
         <td class="done-cell"><input type="checkbox" data-kind="hosts" data-index="${index}" data-key="done" title="Mark row done" ${host.done ? "checked" : ""}></td>
         <td>${input("lpar_name", host.lpar_name, index, "hosts")}</td><td>${input("slot", host.slot, index, "hosts")}</td>
