@@ -4007,6 +4007,17 @@ def _pick_port() -> int:
 
 SNAPSHOT_NOTES_SETTING = "snapshot_schedule_notes"
 
+_LUN_PREVIEW_HASH_OMIT = frozenset(
+    {
+        "updated_at",
+        "notes",
+        "plan_done",
+        "command_done",
+        "name",
+        "location",
+    }
+)
+
 
 class HealthServer:
     def __init__(self) -> None:
@@ -4689,12 +4700,21 @@ class HealthServer:
         normalized = normalize_build(build)
         if normalized is None:
             raise ValueError("Invalid LUN build")
-        content = json.dumps(
-            normalized,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(content).hexdigest()
+        content = {
+            key: value
+            for key, value in normalized.items()
+            if key not in _LUN_PREVIEW_HASH_OMIT
+        }
+        content["hosts"] = [
+            {key: value for key, value in row.items() if key != "done"}
+            for row in normalized["hosts"]
+        ]
+        content["luns"] = [
+            {key: value for key, value in row.items() if key != "done"}
+            for row in normalized["luns"]
+        ]
+        payload = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _lun_card_profile_warning(profile: str, card: HealthCard) -> str | None:

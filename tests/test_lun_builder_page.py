@@ -205,6 +205,13 @@ def test_lun_builder_exposes_build_defaults_that_fill_luns():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_card_hint_is_a_select():
+    assert '<select id="default-card-hint"' in LUN_BUILDER_HTML
+    assert '<input id="default-card-hint"' not in LUN_BUILDER_HTML
+    assert "Select Health Card" in LUN_BUILDER_HTML
+    assert "fillCardHintOptions" in LUN_BUILDER_HTML
+
+
 def test_lun_builder_exposes_template_picker_ux():
     for text in (
         "Templates",
@@ -336,3 +343,20 @@ def test_done_handlers_call_persist_completion_state():
         "persistCompletionState()"
     )
     assert "persistCompletionState()" in cli_handler
+
+
+def test_lun_builder_summary_input_writes_through_to_build():
+    handler = LUN_BUILDER_HTML.split(
+        '["build-name", "build-location", "build-notes"].forEach',
+        1,
+    )[1].split("document.getElementById(\"default-storage-profile\")", 1)[0]
+    assert "readSummary" in handler or "build.notes" in handler
+    assert "activeBuild()" in handler
+
+
+def test_lun_builder_add_row_reads_summary_before_render():
+    add_row = LUN_BUILDER_HTML.split("function addRow(kind)", 1)[1].split(
+        "function updateField", 1
+    )[0]
+    assert "readSummary(activeBuild())" in add_row
+    assert add_row.index("readSummary(activeBuild())") < add_row.index("render()")
