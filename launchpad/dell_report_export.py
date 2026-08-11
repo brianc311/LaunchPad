@@ -16,7 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from launchpad.capacity_export import ExportSite
 from launchpad.capacity_units import bytes_to_capacity_unit, capacity_unit_header
-from launchpad.dell_report_capacity import select_dell_capacity_summary
+from launchpad.dell_report_capacity import select_dell_array_snapshot_summary
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.dell_report_identity import resolve_dell_identity
 from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
@@ -25,6 +25,7 @@ from launchpad.dell_report_snapshots import (
     iso_week_key,
     ordered_weeks_for_cards,
     prior_and_current_for_card,
+    snapshots_allow_weekly_growth,
     upsert_week_snapshot,
     weekly_growth_fraction,
 )
@@ -229,11 +230,8 @@ def collect_dell_report_rows(
         if family is None or card_id is None:
             continue
 
-        summary = select_dell_capacity_summary(
+        summary = select_dell_array_snapshot_summary(
             capacity_summary=_site_value(site, "capacity_summary"),
-            raw_capacity_summary=_site_value(site, "raw_capacity_summary"),
-            pools=_site_value(site, "pools") or [],
-            include_pools=include_pools,
         )
         total_bytes = float((summary or {}).get("total_bytes") or 0)
         used_bytes = float((summary or {}).get("used_bytes") or 0)
@@ -277,8 +275,7 @@ def collect_dell_report_rows(
         model = ident["model"]
         array_name = ident["array_name"]
 
-        # Always refresh the current ISO week from live capacity so CPG-off
-        # raw (and identity) replace a stale same-week CPG / All-CPGs snapshot.
+        # Always refresh the current ISO week from live array/system capacity.
         store = upsert_week_snapshot(
             store,
             card_id=card_id,
@@ -333,11 +330,8 @@ def maybe_upsert_dell_snapshot_for_card(
         getattr(card, "command_results", None),
         getattr(card, "metrics", None),
     )
-    summary = select_dell_capacity_summary(
+    summary = select_dell_array_snapshot_summary(
         capacity_summary=analysis.get("capacity_summary"),
-        raw_capacity_summary=analysis.get("raw_capacity_summary"),
-        pools=analysis.get("pools") or [],
-        include_pools=include_pools,
     )
     if not summary:
         return snapshot_store
@@ -443,6 +437,8 @@ def _row_from_snapshots(prior: dict | None, current: dict) -> dict:
         prior_used_gib = bytes_to_capacity_unit(prior_used)
         prior_util = _util_fraction(prior_used, prior_usable)
         growth = weekly_growth_fraction(prior_used, curr_used)
+        if not snapshots_allow_weekly_growth(prior, current):
+            growth = None
 
     return {
         "facility": current.get("facility") or "",
