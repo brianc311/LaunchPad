@@ -5,11 +5,13 @@ import pytest
 
 from launchpad.dell_report_snapshots import (
     DELL_SNAPSHOT_RETENTION_WEEKS,
+    SNAPSHOT_LAYER_SYSTEM,
     has_week_snapshot,
     iso_week_key,
     load_dell_snapshots,
     prior_and_current_for_card,
     save_dell_snapshots,
+    snapshots_allow_weekly_growth,
     upsert_week_snapshot,
     weekly_growth_fraction,
 )
@@ -189,3 +191,26 @@ def test_load_save_roundtrip(tmp_path: Path):
 
 def test_load_missing_file_returns_empty_dict(tmp_path: Path):
     assert load_dell_snapshots(tmp_path / "missing.json") == {}
+
+
+def test_upsert_stamps_layer_system():
+    store = upsert_week_snapshot(
+        {},
+        card_id=7,
+        week="2026-W32",
+        usable_bytes=200,
+        used_bytes=100,
+        model="FS9500",
+        facility="Data center -WAG1",
+        family="ibm",
+        array_name="site-a",
+        captured_at="2026-08-04T12:00:00+00:00",
+    )
+    assert store["7"]["2026-W32"]["layer"] == SNAPSHOT_LAYER_SYSTEM
+
+
+def test_growth_allowed_only_when_both_system():
+    system = {"layer": SNAPSHOT_LAYER_SYSTEM, "used_bytes": 100}
+    assert snapshots_allow_weekly_growth(system, system) is True
+    assert snapshots_allow_weekly_growth({"used_bytes": 100}, system) is False
+    assert snapshots_allow_weekly_growth(None, system) is False

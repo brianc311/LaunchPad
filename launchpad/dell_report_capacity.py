@@ -45,3 +45,11 @@ def select_dell_capacity_summary(
     if pools:
         pool_sum = _usable(capacity_summary_from_pools(pools), allow_pool_rollup=True)
     return system or pool_sum or raw
+
+
+def select_dell_array_snapshot_summary(
+    *,
+    capacity_summary: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Array/system usable only; never pools or raw."""
+    return _usable(capacity_summary, allow_pool_rollup=False)
