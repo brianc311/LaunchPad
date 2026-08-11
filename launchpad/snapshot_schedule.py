@@ -751,7 +751,7 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
     </p>
   </div>
   <script>
-    const CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
+    let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const THRESHOLD_KEY = "launchpad.snapshotSchedule.threshold";
     const NOTES_KEY = "launchpad.snapshotSchedule.notes";
     const CAL_COLLAPSED_KEY = "launchpad.snapshotSchedule.calCollapsed";
@@ -1941,6 +1941,9 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/cards");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         cardsCache = await res.json();
+        if (cardsCache.length && ["iec", "si"].includes(cardsCache[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cardsCache[0].capacity_unit_mode;
+        }
         statusEl.textContent = `${cardsCache.length} site(s) loaded`;
         render();
       } catch (err) {
@@ -1962,6 +1965,9 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         const listRes = await fetch("/api/cards");
         if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
         cardsCache = await listRes.json();
+        if (cardsCache.length && ["iec", "si"].includes(cardsCache[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cardsCache[0].capacity_unit_mode;
+        }
         if (!cardsCache.length) {
           statusEl.textContent = "No sites loaded. Keep LaunchPad unlocked and open Capacity Report once.";
           render();

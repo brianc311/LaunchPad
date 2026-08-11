@@ -522,12 +522,16 @@ class DashboardView(ctk.CTkFrame):
             if card.get("card_type") != "ssh":
                 continue
             results = card.get("command_results")
-            if not results:
-                continue
             widget = self._find_card_widget(card["id"])
             if not widget:
                 continue
-            left, right = command_results_columns(results)
+            if results:
+                left, right = command_results_columns(results)
+            else:
+                metrics = card.get("metrics")
+                if not metrics:
+                    continue
+                left, right = card_stats_columns(metrics)
             widget.set_stats(left, right)
 
     def apply_theme(self, theme_name: str) -> None:
@@ -594,7 +598,7 @@ class DashboardView(ctk.CTkFrame):
         except Exception as exc:
             self.status_label.configure(text=f"Could not copy URL: {exc}")
 
-    def refresh_cards(self, *, probe_ssh: bool = True) -> None:
+    def refresh_cards(self) -> None:
         if self._stats_timer:
             self.after_cancel(self._stats_timer)
             self._stats_timer = None
@@ -728,8 +732,7 @@ class DashboardView(ctk.CTkFrame):
 
         self._update_selection_status()
         self._sync_master_monitor_switch()
-        if probe_ssh:
-            self._probe_monitored_ssh_status()
+        self._probe_monitored_ssh_status()
         self._refresh_capacity_alerts()
         self._schedule_capacity_alert_poll()
 

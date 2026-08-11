@@ -163,6 +163,7 @@ def test_workbook_has_report_wkly_sheets_with_week_columns():
     )
     ws_si = wb_si["IBM Report - Wkly"]
     assert ws_si.cell(row=9, column=_FIRST_DATA_COL + 3).value == "Useable Capacity (GB)"
+    assert ws_si.cell(row=10, column=_FIRST_DATA_COL + 3).value == 107.3741824
     set_capacity_unit_mode("iec")
 
 

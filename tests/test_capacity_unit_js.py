@@ -22,5 +22,16 @@ def test_fc_consistgrp_format_bytes_uses_mode():
     assert "1000" in FC_CONSISTGRP_HTML
 
 
+def test_polled_pages_update_capacity_unit_mode_from_cards():
+    for html in (
+        DASHBOARD_HTML,
+        SITE_LOOKUP_HTML,
+        SNAPSHOT_SCHEDULE_HTML,
+        FC_CONSISTGRP_HTML,
+    ):
+        assert 'let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";' in html
+        assert "capacity_unit_mode" in html
+
+
 def test_app_version_151():
     assert APP_VERSION == "1.6.151"

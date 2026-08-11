@@ -310,6 +310,7 @@ class HealthCard:
             "id": self.card_id,
             "name": self.name,
             "card_type": "ssh",
+            "capacity_unit_mode": get_capacity_unit_mode(),
             "host": self.host,
             "port": self.port,
             "username": self.username,
@@ -960,7 +961,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <script>
-    const CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
+    let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const serversEl = document.getElementById("servers");
     const summaryEl = document.getElementById("summary");
     const refreshStatusEl = document.getElementById("refresh-status");
@@ -1923,6 +1924,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const res = await fetch("/api/cards");
         const all = (await res.json()).sort((a, b) => a.id - b.id);
+        if (all.length && ["iec", "si"].includes(all[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = all[0].capacity_unit_mode;
+        }
         const cards = all.filter((card) => isMonitorOn(card.id));
         if (!cards.length) {
           if (refreshStatusEl) {
@@ -2094,6 +2098,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         const cards = await res.json();
         cardsCache = Array.isArray(cards) ? cards : [];
+        if (cardsCache.length && ["iec", "si"].includes(cardsCache[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cardsCache[0].capacity_unit_mode;
+        }
         renderAll(cardsCache);
         wireInteractiveButtons();
         if (refreshStatusEl && !refreshAllRunning) {
@@ -5297,6 +5304,7 @@ class HealthServer:
                     "monitor_on": self.is_monitor_enabled(card.card_id),
                     "device_profile": card.device_profile or "",
                     "card_type": "ssh",
+                    "capacity_unit_mode": get_capacity_unit_mode(),
                 }
             )
         return cards

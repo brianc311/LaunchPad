@@ -171,7 +171,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     </section>
   </div>
   <script>
-    const CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
+    let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const cardSelect = document.getElementById("card-select");
     const refreshBtn = document.getElementById("refresh-btn");
     const connectBtn = document.getElementById("connect-btn");
@@ -478,6 +478,9 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/fc-consistgrp/cards");
         const data = await res.json();
         const cards = data.cards || [];
+        if (cards.length && ["iec", "si"].includes(cards[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cards[0].capacity_unit_mode;
+        }
         cardCatalog = cards;
         const preselect = new URLSearchParams(window.location.search).get("card");
         cardSelect.innerHTML = "";
@@ -645,6 +648,9 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/fc-consistgrp/cards");
         const data = await res.json();
         const cards = data.cards || [];
+        if (cards.length && ["iec", "si"].includes(cards[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cards[0].capacity_unit_mode;
+        }
         const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
         statusSiteSelect.innerHTML = '<option value="">All servers</option>' + sorted.map(
           (card) => `<option value="${escapeAttr(card.id)}">${escapeHtml(card.name || card.id)}</option>`

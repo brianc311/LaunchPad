@@ -124,19 +124,6 @@ _DATA_COLUMNS = (
     ("weekly_growth", "0.0%"),
 )
 
-_HEADER_LABELS = (
-    "Facility",
-    "Storage Array",
-    "Model Number",
-    "Useable Capacity (GiB)",
-    "Used Capacity (GiB)",
-    "Utilization % ",
-    "Useable Capacity (GiB)",
-    "Used Capacity (GiB)",
-    "Utilization % ",
-    "Weekly Growth %",
-)
-
 def _capacity_header_labels() -> tuple[str, ...]:
     unit = capacity_unit_header()
     return (
