@@ -5,6 +5,7 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
+from launchpad.capacity_units import set_capacity_unit_mode
 from launchpad.dell_report_export import (
     HOME_SHEET_NAME,
     ORDERED_SHEET_NAMES,
@@ -12,10 +13,12 @@ from launchpad.dell_report_export import (
     _FIRST_DATA_COL,
     _HEADER_FILL,
     build_dell_report_workbook,
+    bytes_to_capacity_unit,
     bytes_to_gib,
     workbook_to_bytes,
 )
 from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
+from launchpad.dell_report_snapshots import upsert_week_snapshot
 
 
 def _minimal_row(**overrides) -> dict:
@@ -39,6 +42,42 @@ def test_bytes_to_gib():
     assert bytes_to_gib(0) == 0.0
     assert bytes_to_gib(1024**3) == 1.0
     assert bytes_to_gib(2.5 * 1024**3) == 2.5
+
+
+def test_bytes_to_capacity_unit_matches_mode():
+    set_capacity_unit_mode("iec")
+    assert bytes_to_capacity_unit(1024**3) == 1.0
+    set_capacity_unit_mode("si")
+    assert abs(bytes_to_capacity_unit(1024**3) - 1.073741824) < 1e-9
+    set_capacity_unit_mode("iec")
+
+
+def test_dell_headers_follow_capacity_unit_mode():
+    set_capacity_unit_mode("iec")
+    wb = build_dell_report_workbook(
+        ibm_rows=[_minimal_row()],
+        hp_rows=[],
+        report_date=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    )
+    ws = wb["IBM Report"]
+    c = _FIRST_DATA_COL
+    assert ws.cell(9, c + 3).value == "Useable Capacity (GiB)"
+    assert ws.cell(9, c + 4).value == "Used Capacity (GiB)"
+    assert ws.cell(9, c + 6).value == "Useable Capacity (GiB)"
+    assert ws.cell(9, c + 7).value == "Used Capacity (GiB)"
+
+    set_capacity_unit_mode("si")
+    wb_si = build_dell_report_workbook(
+        ibm_rows=[_minimal_row()],
+        hp_rows=[],
+        report_date=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    )
+    ws_si = wb_si["IBM Report"]
+    assert ws_si.cell(9, c + 3).value == "Useable Capacity (GB)"
+    assert ws_si.cell(9, c + 4).value == "Used Capacity (GB)"
+    assert ws_si.cell(9, c + 6).value == "Useable Capacity (GB)"
+    assert ws_si.cell(9, c + 7).value == "Used Capacity (GB)"
+    set_capacity_unit_mode("iec")
 
 
 def test_stub_sheet_names_include_required_tabs():
@@ -67,8 +106,6 @@ def test_ordered_sheets_place_ibm_hp_after_netapp():
 
 
 def test_workbook_has_report_wkly_sheets_with_week_columns():
-    from launchpad.dell_report_snapshots import upsert_week_snapshot
-
     store = {}
     store = upsert_week_snapshot(
         store,
@@ -115,6 +152,19 @@ def test_workbook_has_report_wkly_sheets_with_week_columns():
     assert ws.cell(row=10, column=_FIRST_DATA_COL + 2).value == "M1"
     assert ws.column_dimensions["B"].width >= 20
     assert ws.column_dimensions["E"].width >= 14
+    assert ws.cell(row=9, column=_FIRST_DATA_COL + 3).value == "Useable Capacity (GiB)"
+
+    set_capacity_unit_mode("si")
+    wb_si = build_dell_report_workbook(
+        ibm_rows=rows,
+        hp_rows=[],
+        snapshot_store=store,
+        report_date=datetime(2026, 8, 5, tzinfo=timezone.utc),
+    )
+    ws_si = wb_si["IBM Report - Wkly"]
+    assert ws_si.cell(row=9, column=_FIRST_DATA_COL + 3).value == "Useable Capacity (GB)"
+    assert ws_si.cell(row=10, column=_FIRST_DATA_COL + 3).value == 107.3741824
+    set_capacity_unit_mode("iec")
 
 
 def test_hp_forecast_wkly_has_data_rows():

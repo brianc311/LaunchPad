@@ -171,6 +171,7 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     </section>
   </div>
   <script>
+    let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const cardSelect = document.getElementById("card-select");
     const refreshBtn = document.getElementById("refresh-btn");
     const connectBtn = document.getElementById("connect-btn");
@@ -220,13 +221,14 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
     }
     function escapeAttr(value) { return escapeHtml(value); }
 
-    /** Mirror launchpad.flashsystem_parse._format_bytes (GB → TB → PB, 1 decimal). */
     function formatBytes(n) {
-      if (n <= 0) return "0 GB";
-      let value = n / (1024 ** 3);
-      let unit = "GB";
-      if (value >= 1024) { value /= 1024; unit = "TB"; }
-      if (value >= 1024) { value /= 1024; unit = "PB"; }
+      const si = CAPACITY_UNIT_MODE === "si";
+      if (n <= 0) return si ? "0 GB" : "0 GiB";
+      const step = si ? 1000 : 1024;
+      let value = n / (si ? (1000 ** 3) : (1024 ** 3));
+      let unit = si ? "GB" : "GiB";
+      if (value >= step) { value /= step; unit = si ? "TB" : "TiB"; }
+      if (value >= step) { value /= step; unit = si ? "PB" : "PiB"; }
       return value.toFixed(1) + " " + unit;
     }
     function memberMapsTotalLabel(maps) {
@@ -476,6 +478,9 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/fc-consistgrp/cards");
         const data = await res.json();
         const cards = data.cards || [];
+        if (cards.length && ["iec", "si"].includes(cards[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cards[0].capacity_unit_mode;
+        }
         cardCatalog = cards;
         const preselect = new URLSearchParams(window.location.search).get("card");
         cardSelect.innerHTML = "";
@@ -643,6 +648,9 @@ FC_CONSISTGRP_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/fc-consistgrp/cards");
         const data = await res.json();
         const cards = data.cards || [];
+        if (cards.length && ["iec", "si"].includes(cards[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cards[0].capacity_unit_mode;
+        }
         const sorted = cards.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
         statusSiteSelect.innerHTML = '<option value="">All servers</option>' + sorted.map(
           (card) => `<option value="${escapeAttr(card.id)}">${escapeHtml(card.name || card.id)}</option>`

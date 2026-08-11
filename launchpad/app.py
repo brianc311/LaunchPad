@@ -2,6 +2,7 @@ import customtkinter as ctk
 import webbrowser
 
 from launchpad.branding import window_title
+from launchpad.capacity_units import load_capacity_unit_mode
 from launchpad.crypto import decrypt_text
 from launchpad.database import Database
 from launchpad.host_volume_health import resolve_gui_url
@@ -22,6 +23,7 @@ class LaunchPadApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.db = Database()
+        load_capacity_unit_mode(self.db)
         self.crypto_key: bytes | None = None
         self.current_view = None
         self._mouse_jiggler = MouseJiggler()

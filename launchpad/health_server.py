@@ -39,6 +39,7 @@ from launchpad.ansible_pad_settings import (
     normalize_ansible_pad_settings,
 )
 from launchpad.capacity_report import CAPACITY_REPORT_HTML, CAPACITY_REPORT_PATH
+from launchpad.capacity_units import get_capacity_unit_mode
 from launchpad.command_format import resolve_card_commands
 from launchpad.config import APP_VERSION, TEMP_DIR
 from launchpad.contingency_groups_data import (
@@ -309,6 +310,7 @@ class HealthCard:
             "id": self.card_id,
             "name": self.name,
             "card_type": "ssh",
+            "capacity_unit_mode": get_capacity_unit_mode(),
             "host": self.host,
             "port": self.port,
             "username": self.username,
@@ -959,6 +961,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <script>
+    let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const serversEl = document.getElementById("servers");
     const summaryEl = document.getElementById("summary");
     const refreshStatusEl = document.getElementById("refresh-status");
@@ -1447,11 +1450,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function formatBytes(value) {
       if (!value || value <= 0) return "0 B";
-      const units = ["B", "KB", "MB", "GB", "TB"];
+      const si = CAPACITY_UNIT_MODE === "si";
+      const units = si
+        ? ["B", "KB", "MB", "GB", "TB", "PB"]
+        : ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+      const step = si ? 1000 : 1024;
       let size = value;
       let unit = 0;
-      while (size >= 1024 && unit < units.length - 1) {
-        size /= 1024;
+      while (size >= step && unit < units.length - 1) {
+        size /= step;
         unit += 1;
       }
       return unit === 0 ? `${Math.round(size)} ${units[unit]}` : `${size.toFixed(1)} ${units[unit]}`;
@@ -1917,6 +1924,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const res = await fetch("/api/cards");
         const all = (await res.json()).sort((a, b) => a.id - b.id);
+        if (all.length && ["iec", "si"].includes(all[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = all[0].capacity_unit_mode;
+        }
         const cards = all.filter((card) => isMonitorOn(card.id));
         if (!cards.length) {
           if (refreshStatusEl) {
@@ -2088,6 +2098,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         const cards = await res.json();
         cardsCache = Array.isArray(cards) ? cards : [];
+        if (cardsCache.length && ["iec", "si"].includes(cardsCache[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = cardsCache[0].capacity_unit_mode;
+        }
         renderAll(cardsCache);
         wireInteractiveButtons();
         if (refreshStatusEl && !refreshAllRunning) {
@@ -2186,6 +2199,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+def _fill_page(html: str) -> str:
+    return html.replace("{{APP_VERSION}}", APP_VERSION).replace(
+        "{{CAPACITY_UNIT_MODE}}", get_capacity_unit_mode()
+    )
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         _log(f"Health server: {fmt % args}")
@@ -2231,49 +2250,49 @@ class _HealthHandler(BaseHTTPRequestHandler):
         path = parsed.path
         server = get_health_server()
         if path == "/":
-            self._send_html(DASHBOARD_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(DASHBOARD_HTML))
             return
         if path == CAPACITY_REPORT_PATH or path == "/capacity-report":
-            self._send_html(CAPACITY_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(CAPACITY_REPORT_HTML))
             return
         if path == SNAPSHOT_SCHEDULE_PATH:
-            self._send_html(SNAPSHOT_SCHEDULE_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(SNAPSHOT_SCHEDULE_HTML))
             return
         if path == CONTINGENCY_GROUPS_PATH:
-            self._send_html(CONTINGENCY_GROUPS_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(CONTINGENCY_GROUPS_HTML))
             return
         if path == LUN_BUILDER_PATH:
-            self._send_html(LUN_BUILDER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(LUN_BUILDER_HTML))
             return
         if path == VOLUME_FIND_PATH:
-            self._send_html(VOLUME_FIND_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(VOLUME_FIND_HTML))
             return
         if path == FC_WWPN_REPORT_PATH:
-            self._send_html(FC_WWPN_REPORT_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(FC_WWPN_REPORT_HTML))
             return
         if path == FC_CONSISTGRP_PATH:
-            self._send_html(FC_CONSISTGRP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(FC_CONSISTGRP_HTML))
             return
         if path == HOST_VOLUME_HEALTH_PATH:
-            self._send_html(HOST_VOLUME_HEALTH_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(HOST_VOLUME_HEALTH_HTML))
             return
         if path == SNAPCOPY_SUMMARY_PATH:
-            self._send_html(SNAPCOPY_SUMMARY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(SNAPCOPY_SUMMARY_HTML))
             return
         if path == SYSTEM_CONNECTIVITY_PATH:
-            self._send_html(SYSTEM_CONNECTIVITY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(SYSTEM_CONNECTIVITY_HTML))
             return
         if path == STORAGE_INVENTORY_PATH:
-            self._send_html(STORAGE_INVENTORY_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(STORAGE_INVENTORY_HTML))
             return
         if path == SITE_LOOKUP_PATH:
-            self._send_html(SITE_LOOKUP_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(SITE_LOOKUP_HTML))
             return
         if path == ANSIBLE_PAD_PATH:
-            self._send_html(ANSIBLE_PAD_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(ANSIBLE_PAD_HTML))
             return
         if path == HOST_POWER_PATH:
-            self._send_html(HOST_POWER_HTML.replace("{{APP_VERSION}}", APP_VERSION))
+            self._send_html(_fill_page(HOST_POWER_HTML))
             return
         if path == "/api/ansible-pad/settings":
             try:
@@ -5285,6 +5304,7 @@ class HealthServer:
                     "monitor_on": self.is_monitor_enabled(card.card_id),
                     "device_profile": card.device_profile or "",
                     "card_type": "ssh",
+                    "capacity_unit_mode": get_capacity_unit_mode(),
                 }
             )
         return cards

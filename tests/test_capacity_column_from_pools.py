@@ -54,7 +54,7 @@ def test_format_capacity_text_uses_pool_rollup_when_summary_missing():
     text = format_capacity_text(None, pools=pools)
     assert text
     assert "All CPGs" in text or "%" in text
-    assert "TB" in text or "GB" in text
+    assert "TiB" in text or "GiB" in text
 
 
 def test_analyze_health_fills_capacity_summary_from_showcpg_pools():

@@ -31,6 +31,15 @@ def test_site_lookup_page_contracts():
     assert "V7KTMP-G2V1" not in html
 
 
+def test_site_lookup_format_bytes_marks_unknown_sizes():
+    format_bytes = SITE_LOOKUP_HTML.split("function formatBytes(n) {", 1)[1].split(
+        "function renderPools", 1
+    )[0]
+
+    assert "const bytes = numberValue(n);" in format_bytes
+    assert 'if (bytes == null) return "—";' in format_bytes
+
+
 def test_consistency_groups_are_rendered_regardless_of_device_profile():
     render_function = SITE_LOOKUP_HTML.split(
         "function renderConsistencyGroups(data) {", 1

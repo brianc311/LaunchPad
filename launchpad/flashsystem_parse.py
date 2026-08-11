@@ -2,6 +2,8 @@ import html
 import re
 from typing import Any
 
+from launchpad.capacity_units import format_bytes as _format_capacity_bytes
+
 _SIZE_RE = re.compile(
     r"^(-?\d+(?:\.\d+)?)\s*(TiB|TB|GB|MB|KB|PB|B)?$",
     re.IGNORECASE,
@@ -31,18 +33,7 @@ def _parse_size_bytes(value: str) -> float | None:
 
 
 def _format_bytes(num_bytes: float) -> str:
-    if num_bytes <= 0:
-        return "0 GB"
-    units = ["GB", "TB", "PB"]
-    value = num_bytes / (1024**3)
-    unit = "GB"
-    if value >= 1024:
-        value /= 1024
-        unit = "TB"
-    if value >= 1024:
-        value /= 1024
-        unit = "PB"
-    return f"{value:.1f} {unit}"
+    return _format_capacity_bytes(num_bytes)
 
 
 def _looks_like_header(line: str) -> bool:

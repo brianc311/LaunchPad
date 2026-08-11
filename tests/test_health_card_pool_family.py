@@ -1,3 +1,4 @@
+from launchpad.capacity_units import set_capacity_unit_mode
 from launchpad.health_server import HealthCard
 
 
@@ -27,3 +28,17 @@ def test_to_api_includes_pool_family_dell():
     )
     api = card.to_api()
     assert api["pool_family"] == "dell"
+
+
+def test_to_api_includes_current_capacity_unit_mode():
+    set_capacity_unit_mode("si")
+    card = HealthCard(
+        card_id=3,
+        name="FS2",
+        host="10.0.0.3",
+        port=22,
+        username="user",
+        key_path="",
+    )
+
+    assert card.to_api()["capacity_unit_mode"] == "si"

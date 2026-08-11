@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from launchpad.capacity_export import ExportSite
+from launchpad.capacity_units import bytes_to_capacity_unit, capacity_unit_header
 from launchpad.dell_report_capacity import select_dell_capacity_summary
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.dell_report_identity import resolve_dell_identity
@@ -123,18 +124,21 @@ _DATA_COLUMNS = (
     ("weekly_growth", "0.0%"),
 )
 
-_HEADER_LABELS = (
-    "Facility",
-    "Storage Array",
-    "Model Number",
-    "Useable Capacity (GiB)",
-    "Used Capacity (GiB)",
-    "Utilization % ",
-    "Useable Capacity (GiB)",
-    "Used Capacity (GiB)",
-    "Utilization % ",
-    "Weekly Growth %",
-)
+def _capacity_header_labels() -> tuple[str, ...]:
+    unit = capacity_unit_header()
+    return (
+        "Facility",
+        "Storage Array",
+        "Model Number",
+        f"Useable Capacity ({unit})",
+        f"Used Capacity ({unit})",
+        "Utilization % ",
+        f"Useable Capacity ({unit})",
+        f"Used Capacity ({unit})",
+        "Utilization % ",
+        "Weekly Growth %",
+    )
+
 
 _FORECAST_HEADER_LABELS = (
     "Facility",
@@ -435,8 +439,8 @@ def _row_from_snapshots(prior: dict | None, current: dict) -> dict:
     if prior is not None:
         prior_usable = float(prior.get("usable_bytes") or 0)
         prior_used = float(prior.get("used_bytes") or 0)
-        prior_usable_gib = bytes_to_gib(prior_usable)
-        prior_used_gib = bytes_to_gib(prior_used)
+        prior_usable_gib = bytes_to_capacity_unit(prior_usable)
+        prior_used_gib = bytes_to_capacity_unit(prior_used)
         prior_util = _util_fraction(prior_used, prior_usable)
         growth = weekly_growth_fraction(prior_used, curr_used)
 
@@ -447,8 +451,8 @@ def _row_from_snapshots(prior: dict | None, current: dict) -> dict:
         "prior_usable_gib": prior_usable_gib,
         "prior_used_gib": prior_used_gib,
         "prior_util": prior_util,
-        "curr_usable_gib": bytes_to_gib(curr_usable),
-        "curr_used_gib": bytes_to_gib(curr_used),
+        "curr_usable_gib": bytes_to_capacity_unit(curr_usable),
+        "curr_used_gib": bytes_to_capacity_unit(curr_used),
         "curr_util": _util_fraction(curr_used, curr_usable),
         "weekly_growth": growth,
     }
@@ -558,13 +562,17 @@ def _build_report_wkly_sheet(
         _style_header_cell(cell)
 
     util_columns: list[int] = []
+    unit = capacity_unit_header()
+    metric_headers = (
+        f"Useable Capacity ({unit})",
+        f"Used Capacity ({unit})",
+        "Utilization % ",
+    )
     for week_i, week in enumerate(weeks):
         base = _FIRST_DATA_COL + 3 + week_i * 3
         date_cell = ws.cell(row=_DATE_ROW, column=base, value=_iso_week_display_date(week))
         date_cell.alignment = Alignment(horizontal="center")
-        for j, label in enumerate(
-            ("Useable Capacity (GiB)", "Used Capacity (GiB)", "Utilization % ")
-        ):
+        for j, label in enumerate(metric_headers):
             cell = ws.cell(row=_HEADER_ROW, column=base + j, value=label)
             _style_header_cell(cell)
         util_columns.append(base + 2)
@@ -598,9 +606,13 @@ def _build_report_wkly_sheet(
                 continue
             usable = float(snap.get("usable_bytes") or 0)
             used = float(snap.get("used_bytes") or 0)
-            usable_cell = ws.cell(row=excel_row, column=base, value=bytes_to_gib(usable))
+            usable_cell = ws.cell(
+                row=excel_row, column=base, value=bytes_to_capacity_unit(usable)
+            )
             usable_cell.number_format = "0.00"
-            used_cell = ws.cell(row=excel_row, column=base + 1, value=bytes_to_gib(used))
+            used_cell = ws.cell(
+                row=excel_row, column=base + 1, value=bytes_to_capacity_unit(used)
+            )
             used_cell.number_format = "0.00"
             util = _util_fraction(used, usable)
             util_cell = ws.cell(row=excel_row, column=base + 2, value=util)
@@ -884,7 +896,7 @@ def _write_sheet_header(ws: Worksheet, *, report_date: datetime) -> int:
     current = ws.cell(row=_DATE_ROW, column=curr_col, value=_format_report_date(report_date))
     prior.alignment = Alignment(horizontal="center")
     current.alignment = Alignment(horizontal="center")
-    for col, label in enumerate(_HEADER_LABELS, start=_FIRST_DATA_COL):
+    for col, label in enumerate(_capacity_header_labels(), start=_FIRST_DATA_COL):
         cell = ws.cell(row=_HEADER_ROW, column=col, value=label)
         _style_header_cell(cell)
     _apply_column_widths(ws, _REPORT_COL_WIDTHS)

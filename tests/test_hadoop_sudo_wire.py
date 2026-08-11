@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from cryptography.fernet import Fernet
 
+from launchpad.config import APP_VERSION
 from launchpad.crypto import encrypt_text
 from launchpad.database import Database
 from launchpad.ssh_utils import resolve_sudo_password
@@ -43,8 +46,6 @@ def test_resolve_sudo_password_returns_empty_for_invalid_ciphertext(tmp_path):
 
 
 def test_admin_has_sudo_password_field_marker():
-    from pathlib import Path
-
     text = Path("launchpad/ui/admin_view.py").read_text(encoding="utf-8")
 
     assert "sudo_password" in text
@@ -128,7 +129,5 @@ def test_host_power_runner_ignores_sudo_password_for_non_hadoop(monkeypatch):
     assert captured["sudo_password"] == ""
 
 
-def test_version_134():
-    from launchpad.config import APP_VERSION
-
-    assert APP_VERSION == "1.6.150"
+def test_version_151():
+    assert APP_VERSION == "1.6.151"

@@ -234,6 +234,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
   </main>
 
   <script>
+    let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const queryEl = document.getElementById("site-query");
     const suggestEl = document.getElementById("site-suggest");
     const lookupBtn = document.getElementById("lookup-btn");
@@ -551,13 +552,17 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       return Number.isFinite(number) ? number : null;
     }
 
-    function formatBytes(value) {
-      const bytes = numberValue(value);
+    function formatBytes(n) {
+      const bytes = numberValue(n);
       if (bytes == null) return "—";
-      if (bytes === 0) return "0 B";
-      const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-      const index = Math.min(Math.floor(Math.log(Math.abs(bytes)) / Math.log(1024)), units.length - 1);
-      return (bytes / Math.pow(1024, index)).toFixed(index < 3 ? 0 : 2) + " " + units[index];
+      const si = CAPACITY_UNIT_MODE === "si";
+      if (bytes <= 0) return si ? "0 GB" : "0 GiB";
+      const step = si ? 1000 : 1024;
+      let value = bytes / (si ? (1000 ** 3) : (1024 ** 3));
+      let unit = si ? "GB" : "GiB";
+      if (value >= step) { value /= step; unit = si ? "TB" : "TiB"; }
+      if (value >= step) { value /= step; unit = si ? "PB" : "PiB"; }
+      return value.toFixed(1) + " " + unit;
     }
 
     function renderPools(data) {
@@ -755,6 +760,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         const payload = await response.json().catch(() => []);
         if (!response.ok) throw new Error("Unable to load registered sites (" + response.status + ")");
         const rawCards = Array.isArray(payload) ? payload : asRows(payload.cards);
+        if (rawCards.length && ["iec", "si"].includes(rawCards[0].capacity_unit_mode)) {
+          CAPACITY_UNIT_MODE = rawCards[0].capacity_unit_mode;
+        }
         cards = rawCards.filter((card) => card.id != null && String(card.name || "").trim());
         cards.sort((a, b) => String(a.name).localeCompare(String(b.name)));
         resultEl.innerHTML = cards.length
