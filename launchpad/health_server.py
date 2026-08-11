@@ -4705,6 +4705,14 @@ class HealthServer:
             for key, value in normalized.items()
             if key not in _LUN_PREVIEW_HASH_OMIT
         }
+        content["hosts"] = [
+            {key: value for key, value in row.items() if key != "done"}
+            for row in normalized["hosts"]
+        ]
+        content["luns"] = [
+            {key: value for key, value in row.items() if key != "done"}
+            for row in normalized["luns"]
+        ]
         payload = json.dumps(content, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

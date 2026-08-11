@@ -677,6 +677,7 @@ def test_create_lun_build_allows_metadata_changes_after_preview(monkeypatch):
     build["name"] = "Renamed"
     build["plan_done"] = {"vol": True}
     build["command_done"] = {"vol\\ncmd": True}
+    build["luns"][0]["done"] = True
     server.set_lun_builds([build])
 
     result = server.create_lun_build("first", confirm=True)
