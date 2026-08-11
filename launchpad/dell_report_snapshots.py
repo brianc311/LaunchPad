@@ -33,6 +33,7 @@ from launchpad.config import APP_DATA_DIR
 DELL_SNAPSHOT_RETENTION_WEEKS = 12
 DELL_SNAPSHOTS_FILENAME = "dell_report_snapshots.json"
 DEFAULT_DELL_SNAPSHOTS_PATH = APP_DATA_DIR / DELL_SNAPSHOTS_FILENAME
+SNAPSHOT_LAYER_SYSTEM = "system"
 
 
 def iso_week_key(dt: datetime | None = None) -> str:
@@ -105,6 +106,7 @@ def upsert_week_snapshot(
     family: str,
     array_name: str,
     captured_at: str,
+    layer: str = SNAPSHOT_LAYER_SYSTEM,
 ) -> dict:
     """Insert/replace that card+week; trim older than retention; return store."""
     out = _normalize_store(store)
@@ -119,9 +121,21 @@ def upsert_week_snapshot(
         "family": family,
         "array_name": array_name,
         "captured_at": captured_at,
+        "layer": layer,
     }
     out[key] = _trim_card_weeks(card_weeks)
     return out
+
+
+def snapshots_allow_weekly_growth(
+    prior: dict | None, current: dict | None
+) -> bool:
+    if not prior or not current:
+        return False
+    return (
+        prior.get("layer") == SNAPSHOT_LAYER_SYSTEM
+        and current.get("layer") == SNAPSHOT_LAYER_SYSTEM
+    )
 
 
 def has_week_snapshot(store: dict, card_id: int | str, week: str) -> bool:

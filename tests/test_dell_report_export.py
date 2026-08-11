@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from io import BytesIO
 
+import pytest
 from openpyxl import load_workbook
 
 from launchpad.capacity_units import set_capacity_unit_mode
@@ -12,6 +13,7 @@ from launchpad.dell_report_export import (
     STUB_SHEET_NAMES,
     _FIRST_DATA_COL,
     _HEADER_FILL,
+    _project_util,
     build_dell_report_workbook,
     bytes_to_capacity_unit,
     bytes_to_gib,
@@ -175,8 +177,8 @@ def test_hp_forecast_wkly_has_data_rows():
     ws = wb["HP Forecast - Wkly"]
     assert ws.cell(row=10, column=_FIRST_DATA_COL + 1).value  # array
     assert ws.cell(row=10, column=5).value == 0.25
-    assert ws.cell(row=10, column=6).value == 0.25
-    assert ws.cell(row=10, column=9).value == 0.25
+    assert ws.cell(row=10, column=6).value is None
+    assert ws.cell(row=10, column=9).value is None
     assert ws.column_dimensions["C"].width >= 30
 
 
@@ -373,10 +375,60 @@ def test_workbook_includes_ibm_and_hp_forecast_sheets():
     assert "HP Forecast" in wb.sheetnames
     ibm_f = wb["IBM Forecast"]
     start = _forecast_data_start_row(ibm_f)
-    for col in (5, 6, 7, 8, 9):
-        assert ibm_f.cell(start, col).value == 0.61
+    assert ibm_f.cell(start, 5).value == 0.61
+    for col in (6, 7, 8, 9):
+        assert ibm_f.cell(start, col).value == 1.0
     rules = [rule for group in ibm_f.conditional_formatting for rule in group.rules]
     assert any(getattr(rule, "type", None) == "iconSet" for rule in rules)
+
+
+def test_project_util_none_growth_returns_none():
+    assert _project_util(0.5, None, 13) is None
+    assert _project_util(None, 0.01, 13) is None
+
+
+def test_project_util_caps_at_one():
+    assert _project_util(0.9, 0.5, 13) == 1.0
+
+
+def test_ibm_forecast_projects_thirteen_week_month():
+    growth = 0.01
+    curr = 0.50
+    wb = build_dell_report_workbook(
+        ibm_rows=[_minimal_row(curr_util=curr, weekly_growth=growth)],
+        hp_rows=[],
+    )
+    ws = wb["IBM Forecast"]
+    start = _forecast_data_start_row(ws)
+    expected = curr * ((1.0 + growth) ** 13)
+    assert ws.cell(start, 5).value == curr
+    assert ws.cell(start, 6).value == pytest.approx(expected)
+    assert ws.cell(start, 7).value == pytest.approx(curr * ((1.0 + growth) ** 26))
+    assert ws.cell(start, 8).value == pytest.approx(curr * ((1.0 + growth) ** 39))
+    assert ws.cell(start, 9).value == pytest.approx(curr * ((1.0 + growth) ** 52))
+
+
+def test_ibm_forecast_zero_growth_is_flat():
+    wb = build_dell_report_workbook(
+        ibm_rows=[_minimal_row(curr_util=0.61, weekly_growth=0.0)],
+        hp_rows=[],
+    )
+    ws = wb["IBM Forecast"]
+    start = _forecast_data_start_row(ws)
+    for col in (5, 6, 7, 8, 9):
+        assert ws.cell(start, col).value == 0.61
+
+
+def test_ibm_forecast_none_growth_blanks_months():
+    wb = build_dell_report_workbook(
+        ibm_rows=[_minimal_row(curr_util=0.61, weekly_growth=None)],
+        hp_rows=[],
+    )
+    ws = wb["IBM Forecast"]
+    start = _forecast_data_start_row(ws)
+    assert ws.cell(start, 5).value == 0.61
+    for col in (6, 7, 8, 9):
+        assert ws.cell(start, col).value is None
 
 
 def test_home_lists_forecast_sheets():

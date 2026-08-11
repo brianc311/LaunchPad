@@ -68,7 +68,7 @@ def test_collect_splits_ibm_and_hp_rows():
     assert "3" not in store
 
 
-def test_collect_uses_raw_when_include_pools_false():
+def test_collect_skips_when_only_raw_no_array_summary():
     sites = [
         {
             "card_id": 5,
@@ -91,26 +91,44 @@ def test_collect_uses_raw_when_include_pools_false():
         now=datetime(2026, 8, 5, tzinfo=timezone.utc),
     )
     assert ibm == []
-    assert len(hp) == 1
-    assert hp[0]["array_name"] == "Vdiprimera101"
-    assert hp[0]["facility"] == "Remote"
-    assert hp[0]["model"] == "HPE Primera 600 4-way"
-    assert has_week(store, 5, "2026-W32")
+    assert hp == []
+    assert store == {}
 
 
-def test_collect_refreshes_stale_cpg_snapshot_with_raw():
-    store = upsert_week_snapshot(
-        {},
-        card_id=5,
-        week="2026-W32",
-        usable_bytes=10 * 1024**3,
-        used_bytes=9 * 1024**3,
-        model="All CPGs",
-        facility="Other",
-        family="hp",
-        array_name="old",
-        captured_at="2026-08-05T01:00:00+00:00",
+def test_collect_snapshots_array_not_raw_when_both_present():
+    sites = [
+        {
+            "card_id": 5,
+            "name": "HPE - VDIPRIMERA101 - WAG2",
+            "device_profile": "hpe_primera_600",
+            "capacity_summary": {
+                "name": "Vdiprimera101",
+                "total_bytes": 80 * 1024**3,
+                "used_bytes": 40 * 1024**3,
+            },
+            "raw_capacity_summary": {
+                "name": "raw",
+                "total_bytes": 200 * 1024**3,
+                "used_bytes": 50 * 1024**3,
+            },
+            "pools": [],
+        }
+    ]
+    _, hp, updated = collect_dell_report_rows(
+        sites,
+        snapshot_store={},
+        include_pools=False,
+        now=datetime(2026, 8, 5, tzinfo=timezone.utc),
     )
+    assert len(hp) == 1
+    assert hp[0]["curr_usable_gib"] == pytest.approx(80.0)
+    assert hp[0]["curr_used_gib"] == pytest.approx(40.0)
+    snap = updated["5"]["2026-W32"]
+    assert snap["usable_bytes"] == pytest.approx(80 * 1024**3)
+    assert snap["layer"] == "system"
+
+
+def test_collect_skips_all_cpgs_even_when_raw_present():
     sites = [
         {
             "card_id": 5,
@@ -129,18 +147,15 @@ def test_collect_refreshes_stale_cpg_snapshot_with_raw():
             "pools": [],
         }
     ]
-    _, hp, updated = collect_dell_report_rows(
+    ibm, hp, store = collect_dell_report_rows(
         sites,
-        snapshot_store=store,
+        snapshot_store={},
         include_pools=False,
         now=datetime(2026, 8, 5, tzinfo=timezone.utc),
     )
-    assert len(hp) == 1
-    assert hp[0]["model"] == "HPE Primera 600 4-way"
-    assert hp[0]["array_name"] == "Vdiprimera101"
-    assert hp[0]["facility"] == "Data center -WAG2"
-    assert hp[0]["curr_usable_gib"] == pytest.approx(200.0)
-    assert updated["5"]["2026-W32"]["model"] == "HPE Primera 600 4-way"
+    assert ibm == []
+    assert hp == []
+    assert store == {}
 
 
 def has_week(store, card_id, week):
@@ -179,6 +194,35 @@ def test_collect_growth_with_two_weeks_in_store():
     assert row["curr_used_gib"] == pytest.approx(125.0)
     assert row["weekly_growth"] == pytest.approx(0.25)
     assert has_week(updated, 7, "2026-W32")
+
+
+def test_collect_untagged_prior_blanks_growth():
+    store = upsert_week_snapshot(
+        {},
+        card_id=7,
+        week="2026-W31",
+        usable_bytes=200 * 1024**3,
+        used_bytes=100 * 1024**3,
+        model="FS9500",
+        facility="Data center -WAG1",
+        family="ibm",
+        array_name="WAG1_FS9200_1",
+        captured_at="2026-07-28T12:00:00+00:00",
+    )
+    del store["7"]["2026-W31"]["layer"]
+    site = _site(
+        card_id=7,
+        used_bytes=int(125 * 1024**3),
+        total_bytes=int(200 * 1024**3),
+    )
+    ibm_rows, _, _ = collect_dell_report_rows(
+        [site],
+        snapshot_store=store,
+        now=datetime(2026, 8, 4, tzinfo=timezone.utc),
+    )
+    assert ibm_rows[0]["weekly_growth"] is None
+    assert ibm_rows[0]["prior_used_gib"] == pytest.approx(100.0)
+    assert ibm_rows[0]["curr_used_gib"] == pytest.approx(125.0)
 
 
 def test_collect_one_week_prior_and_growth_blank():
@@ -231,6 +275,7 @@ def test_maybe_upsert_creates_current_week_snapshot_when_missing(monkeypatch):
     assert snap["family"] == "ibm"
     assert snap["array_name"] == "FlashSystem 9200"
     assert snap["model"] == "IBM FlashSystem 9500"
+    assert snap["layer"] == "system"
 
 
 def test_collect_forced_include_blank_capacity_no_snapshot():

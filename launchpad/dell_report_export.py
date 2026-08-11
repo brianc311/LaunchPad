@@ -16,7 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from launchpad.capacity_export import ExportSite
 from launchpad.capacity_units import bytes_to_capacity_unit, capacity_unit_header
-from launchpad.dell_report_capacity import select_dell_capacity_summary
+from launchpad.dell_report_capacity import select_dell_array_snapshot_summary
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.dell_report_identity import resolve_dell_identity
 from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
@@ -25,6 +25,7 @@ from launchpad.dell_report_snapshots import (
     iso_week_key,
     ordered_weeks_for_cards,
     prior_and_current_for_card,
+    snapshots_allow_weekly_growth,
     upsert_week_snapshot,
     weekly_growth_fraction,
 )
@@ -156,6 +157,7 @@ _FORECAST_HEADER_LABELS = (
 _UTIL_COLUMNS = (7, 10)
 # Forecast util columns: Date E=5 through 12 Month I=9.
 _FORECAST_UTIL_COLUMNS = (5, 6, 7, 8, 9)
+_FORECAST_MONTH_HORIZONS = (13, 26, 39, 52)
 _GIB = 1024**3
 
 # Spread identity + metric columns so headers/values are readable (avoid ######).
@@ -177,7 +179,7 @@ _FORECAST_COL_WIDTHS = (
     28.0,
     42.0,
     28.0,
-    14.0,  # Date (current util)
+    16.0,  # Date (current util)
     12.0,
     12.0,
     12.0,
@@ -229,11 +231,8 @@ def collect_dell_report_rows(
         if family is None or card_id is None:
             continue
 
-        summary = select_dell_capacity_summary(
+        summary = select_dell_array_snapshot_summary(
             capacity_summary=_site_value(site, "capacity_summary"),
-            raw_capacity_summary=_site_value(site, "raw_capacity_summary"),
-            pools=_site_value(site, "pools") or [],
-            include_pools=include_pools,
         )
         total_bytes = float((summary or {}).get("total_bytes") or 0)
         used_bytes = float((summary or {}).get("used_bytes") or 0)
@@ -277,8 +276,7 @@ def collect_dell_report_rows(
         model = ident["model"]
         array_name = ident["array_name"]
 
-        # Always refresh the current ISO week from live capacity so CPG-off
-        # raw (and identity) replace a stale same-week CPG / All-CPGs snapshot.
+        # Always refresh the current ISO week from live array/system capacity.
         store = upsert_week_snapshot(
             store,
             card_id=card_id,
@@ -333,11 +331,8 @@ def maybe_upsert_dell_snapshot_for_card(
         getattr(card, "command_results", None),
         getattr(card, "metrics", None),
     )
-    summary = select_dell_capacity_summary(
+    summary = select_dell_array_snapshot_summary(
         capacity_summary=analysis.get("capacity_summary"),
-        raw_capacity_summary=analysis.get("raw_capacity_summary"),
-        pools=analysis.get("pools") or [],
-        include_pools=include_pools,
     )
     if not summary:
         return snapshot_store
@@ -443,6 +438,8 @@ def _row_from_snapshots(prior: dict | None, current: dict) -> dict:
         prior_used_gib = bytes_to_capacity_unit(prior_used)
         prior_util = _util_fraction(prior_used, prior_usable)
         growth = weekly_growth_fraction(prior_used, curr_used)
+        if not snapshots_allow_weekly_growth(prior, current):
+            growth = None
 
     return {
         "facility": current.get("facility") or "",
@@ -631,9 +628,9 @@ def _project_util(
     if curr_util is None:
         return None
     if weekly_growth is None:
-        return float(curr_util)
+        return None
     projected = float(curr_util) * ((1.0 + float(weekly_growth)) ** weeks_ahead)
-    return max(0.0, projected)
+    return max(0.0, min(1.0, projected))
 
 
 def _build_forecast_wkly_sheet(
@@ -797,8 +794,13 @@ def _write_forecast_grouped_rows(
         ws.cell(row=excel_row, column=_FIRST_DATA_COL + 1, value=row.get("array_name"))
         ws.cell(row=excel_row, column=_FIRST_DATA_COL + 2, value=row.get("model"))
         curr_util = row.get("curr_util")
-        for col in _FORECAST_UTIL_COLUMNS:
-            cell = ws.cell(row=excel_row, column=col, value=curr_util)
+        growth = row.get("weekly_growth")
+        values = [curr_util] + [
+            _project_util(curr_util, growth, weeks)
+            for weeks in _FORECAST_MONTH_HORIZONS
+        ]
+        for col, value in zip(_FORECAST_UTIL_COLUMNS, values):
+            cell = ws.cell(row=excel_row, column=col, value=value)
             cell.number_format = "0.0%"
 
 
