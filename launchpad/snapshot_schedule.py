@@ -751,6 +751,7 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
     </p>
   </div>
   <script>
+    const CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const THRESHOLD_KEY = "launchpad.snapshotSchedule.threshold";
     const NOTES_KEY = "launchpad.snapshotSchedule.notes";
     const CAL_COLLAPSED_KEY = "launchpad.snapshotSchedule.calCollapsed";
@@ -1031,18 +1032,20 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         .replace(/"/g, "&quot;");
     }
 
-    function formatBytes(num) {
-      const n = Number(num) || 0;
-      if (n <= 0) return "0 B";
-      const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-      let v = n;
-      let i = 0;
-      while (v >= 1024 && i < units.length - 1) {
-        v /= 1024;
-        i += 1;
+    function formatBytes(value) {
+      if (!value || value <= 0) return "0 B";
+      const si = CAPACITY_UNIT_MODE === "si";
+      const units = si
+        ? ["B", "KB", "MB", "GB", "TB", "PB"]
+        : ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+      const step = si ? 1000 : 1024;
+      let size = value;
+      let unit = 0;
+      while (size >= step && unit < units.length - 1) {
+        size /= step;
+        unit += 1;
       }
-      const digits = i <= 1 ? 0 : 1;
-      return `${v.toFixed(digits)} ${units[i]}`;
+      return unit === 0 ? `${Math.round(size)} ${units[unit]}` : `${size.toFixed(1)} ${units[unit]}`;
     }
 
     function formatDate(d) {
