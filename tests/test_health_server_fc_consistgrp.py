@@ -123,6 +123,7 @@ def test_fc_consistgrp_cards_lists_registered_cards():
             "monitor_on": False,
             "device_profile": "flashsystem_5200",
             "card_type": "ssh",
+            "capacity_unit_mode": "iec",
         }
     ]
 
