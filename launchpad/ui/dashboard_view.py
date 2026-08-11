@@ -8,6 +8,12 @@ from launchpad.branding import get_app_name, load_ctk_logo
 from launchpad.capacity_email_scheduler import is_capacity_email_due
 from launchpad.capacity_email_send import send_capacity_email
 from launchpad.capacity_email_settings import load_capacity_email_settings
+from launchpad.capacity_units import (
+    SETTING_CAPACITY_UNIT_MODE,
+    get_capacity_unit_mode,
+    load_capacity_unit_mode,
+    set_capacity_unit_mode,
+)
 from launchpad.dell_report_family import dell_report_family
 from launchpad.dell_report_settings import (
     is_dell_report_enabled,
@@ -72,6 +78,7 @@ class DashboardView(ctk.CTkFrame):
         self.theme = get_theme(self.theme_name)
         super().__init__(master, fg_color=self.theme["bg"])
         self.db = db
+        load_capacity_unit_mode(self.db)
         self.crypto_key = crypto_key
         self.on_admin = on_admin
         self.on_lock = on_lock
@@ -247,12 +254,21 @@ class DashboardView(ctk.CTkFrame):
         controls = ctk.CTkFrame(header, fg_color="transparent")
         controls.grid(row=0, column=2, sticky="e")
 
+        self.capacity_unit_switch = ctk.CTkSwitch(
+            controls,
+            text="GB/TB" if get_capacity_unit_mode() == "si" else "GiB/TiB",
+            command=self._toggle_capacity_unit_mode,
+        )
+        self.capacity_unit_switch.grid(row=0, column=0, padx=6)
+        if get_capacity_unit_mode() == "si":
+            self.capacity_unit_switch.select()
+
         self.theme_switch = ctk.CTkSwitch(
             controls,
             text="Light mode" if self.theme_name == "dark" else "Dark mode",
             command=self._toggle_theme,
         )
-        self.theme_switch.grid(row=0, column=0, padx=6)
+        self.theme_switch.grid(row=0, column=1, padx=6)
 
         ctk.CTkButton(
             controls,
@@ -260,7 +276,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
             command=self.on_admin,
-        ).grid(row=0, column=1, padx=6)
+        ).grid(row=0, column=2, padx=6)
 
         ctk.CTkButton(
             controls,
@@ -268,7 +284,7 @@ class DashboardView(ctk.CTkFrame):
             fg_color=self.theme["danger"],
             hover_color="#B91C1C",
             command=self.on_lock,
-        ).grid(row=0, column=2, padx=6)
+        ).grid(row=0, column=3, padx=6)
 
         # Full-width tools under the title, fixed to two horizontal rows.
         tools = ctk.CTkFrame(header, fg_color="transparent")
@@ -486,6 +502,16 @@ class DashboardView(ctk.CTkFrame):
         if hasattr(self.master, "apply_theme"):
             self.master.apply_theme(self.theme_name)
 
+    def _capacity_unit_switch_label(self) -> str:
+        return "GB/TB" if get_capacity_unit_mode() == "si" else "GiB/TiB"
+
+    def _toggle_capacity_unit_mode(self) -> None:
+        mode = "si" if bool(self.capacity_unit_switch.get()) else "iec"
+        set_capacity_unit_mode(mode)
+        self.db.set_setting(SETTING_CAPACITY_UNIT_MODE, mode)
+        self.capacity_unit_switch.configure(text=self._capacity_unit_switch_label())
+        self.refresh_cards()
+
     def apply_theme(self, theme_name: str) -> None:
         self.theme_name = theme_name
         self.theme = get_theme(theme_name)
@@ -503,6 +529,8 @@ class DashboardView(ctk.CTkFrame):
                 hover_color=self.theme["border"],
             )
         self.theme_switch.configure(text="Light mode" if theme_name == "dark" else "Dark mode")
+        if hasattr(self, "capacity_unit_switch"):
+            self.capacity_unit_switch.configure(text=self._capacity_unit_switch_label())
         if hasattr(self, "export_excel_btn"):
             self.export_excel_btn.configure(
                 fg_color=self.theme["surface_alt"],

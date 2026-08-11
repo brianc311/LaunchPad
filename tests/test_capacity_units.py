@@ -4,10 +4,12 @@ from launchpad.capacity_units import (
     format_bytes,
     get_capacity_unit_mode,
     iec_gib_to_display,
+    load_capacity_unit_mode,
     normalize_capacity_unit_mode,
     set_capacity_unit_mode,
 )
 from launchpad.flashsystem_parse import _format_bytes, _parse_size_bytes
+from launchpad.health_format import _gb
 
 
 def test_normalize_capacity_unit_mode():
@@ -47,3 +49,25 @@ def test_parse_size_bytes_ignores_display_mode():
     assert _parse_size_bytes("1TB") == float(1024**4)
     assert _parse_size_bytes("1TiB") == float(1024**4)
     assert _parse_size_bytes("1GB") == float(1024**3)
+
+
+def test_health_format_gb_follows_mode():
+    set_capacity_unit_mode("iec")
+    assert _gb(1024**3) == "1.0 GiB"
+    set_capacity_unit_mode("si")
+    assert _gb(1024**3) == "1.1 GB"
+
+
+class _FakeDb:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get_setting(self, key, default=""):
+        assert key == "capacity_unit_mode"
+        return self.value if self.value != "" else default
+
+
+def test_load_capacity_unit_mode_from_settings():
+    assert load_capacity_unit_mode(_FakeDb("")) == "iec"
+    assert load_capacity_unit_mode(_FakeDb("si")) == "si"
+    assert load_capacity_unit_mode(_FakeDb("bogus")) == "iec"

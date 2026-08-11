@@ -1,5 +1,6 @@
 from typing import Any
 
+from launchpad.capacity_units import format_bytes
 from launchpad.flashsystem_parse import summarize_command_output
 
 
@@ -10,9 +11,7 @@ def _pct(used: float, total: float) -> float:
 
 
 def _gb(value: int) -> str:
-    if value <= 0:
-        return "0 GB"
-    return f"{value / (1024 ** 3):.2f}GB"
+    return format_bytes(float(value or 0))
 
 
 def enrich_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
