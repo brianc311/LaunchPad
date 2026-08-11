@@ -929,6 +929,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
             card_hint: build.default_card_hint || "",
             cluster:"", done:false,
           });
+      readSummary(activeBuild());
       invalidatePreview();
       render();
     }
@@ -1271,7 +1272,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     });
     [hostsBody, lunsBody].forEach((body) => {
       body.addEventListener("input", updateField); body.addEventListener("change", updateField);
-      body.addEventListener("click", (event) => { const button = event.target.closest("[data-remove]"); if (!button) return; activeBuild()[button.dataset.remove].splice(Number(button.dataset.index), 1); invalidatePreview(); render(); });
+      body.addEventListener("click", (event) => { const button = event.target.closest("[data-remove]"); if (!button) return; activeBuild()[button.dataset.remove].splice(Number(button.dataset.index), 1); readSummary(activeBuild()); invalidatePreview(); render(); });
     });
     document.getElementById("plan-body").addEventListener("change", (event) => {
       const target = event.target;
@@ -1282,6 +1283,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (target.checked) build.plan_done[name] = true;
       else delete build.plan_done[name];
       syncCompletionFromPlan(build);
+      readSummary(activeBuild());
       render();
       persistCompletionState();
     });
@@ -1313,7 +1315,12 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       if (!text) return;
       copyText(text, `Copied commands for ${remaining.length} remaining volume(s).`);
     });
-    ["build-name", "build-location", "build-notes"].forEach((id) => document.getElementById(id).addEventListener("input", () => { invalidatePreview(); document.getElementById("run-btn").disabled = true; }));
+    ["build-name", "build-location", "build-notes"].forEach((id) => document.getElementById(id).addEventListener("input", () => {
+      const build = activeBuild();
+      readSummary(build);
+      invalidatePreview();
+      document.getElementById("run-btn").disabled = true;
+    }));
     document.getElementById("default-storage-profile").addEventListener("change", onBuildDefaultsChanged);
     document.getElementById("default-pool-or-cpg").addEventListener("change", onBuildDefaultsChanged);
     document.getElementById("default-card-hint").addEventListener("change", onBuildDefaultsChanged);
