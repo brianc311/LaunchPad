@@ -632,6 +632,70 @@ def test_create_lun_build_rejects_build_changed_after_preview(monkeypatch):
     assert server.create_lun_build("first", confirm=True)["ok"] is False
 
 
+def _runnable_primera_server(monkeypatch):
+    _settings, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+    build = {
+        "id": "first",
+        "name": "First",
+        "hosts": [],
+        "luns": [
+            {
+                "purpose": "vol",
+                "count": 1,
+                "size": "10GB",
+                "pool_or_cpg": "Pool0",
+                "storage_profile": "hpe_primera_600",
+                "card_hint": "cardA",
+            }
+        ],
+    }
+    server.set_lun_builds([build])
+    server.register_card(
+        1,
+        "cardA",
+        "array.example",
+        22,
+        "operator",
+        "",
+        device_profile="hpe_primera_600",
+    )
+    monkeypatch.setattr(
+        server,
+        "_lun_run_command",
+        lambda _card: lambda _command: "created",
+    )
+    return server, build
+
+
+def test_create_lun_build_allows_metadata_changes_after_preview(monkeypatch):
+    server, build = _runnable_primera_server(monkeypatch)
+    assert server.preview_lun_build("first")["ok"] is True
+    build["updated_at"] = "2026-08-11T18:00:00+00:00"
+    build["notes"] = "operator comment"
+    build["name"] = "Renamed"
+    build["plan_done"] = {"vol": True}
+    build["command_done"] = {"vol\\ncmd": True}
+    server.set_lun_builds([build])
+
+    result = server.create_lun_build("first", confirm=True)
+
+    assert result["ok"] is True
+
+
+def test_create_lun_build_still_rejects_lun_size_change_after_preview(monkeypatch):
+    server, build = _runnable_primera_server(monkeypatch)
+    assert server.preview_lun_build("first")["ok"] is True
+    build["luns"][0]["size"] = "20GB"
+    server.set_lun_builds([build])
+
+    result = server.create_lun_build("first", confirm=True)
+
+    assert result["ok"] is False
+    assert "Preview must be run again" in result["warnings"][0]
+
+
 def test_preview_warns_when_live_profile_conflicts_with_card_family():
     _settings, getter, setter = _settings_backend()
     server = HealthServer()
