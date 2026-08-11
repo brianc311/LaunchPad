@@ -510,7 +510,25 @@ class DashboardView(ctk.CTkFrame):
         set_capacity_unit_mode(mode)
         self.db.set_setting(SETTING_CAPACITY_UNIT_MODE, mode)
         self.capacity_unit_switch.configure(text=self._capacity_unit_switch_label())
-        self.refresh_cards(probe_ssh=False)
+        self._reformat_visible_card_stats()
+
+    def _reformat_visible_card_stats(self) -> None:
+        try:
+            cards = get_health_server().list_cards(allow_sync=False)
+        except Exception:
+            return
+
+        for card in cards:
+            if card.get("card_type") != "ssh":
+                continue
+            results = card.get("command_results")
+            if not results:
+                continue
+            widget = self._find_card_widget(card["id"])
+            if not widget:
+                continue
+            left, right = command_results_columns(results)
+            widget.set_stats(left, right)
 
     def apply_theme(self, theme_name: str) -> None:
         self.theme_name = theme_name

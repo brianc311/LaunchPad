@@ -29,6 +29,18 @@ def test_dashboard_header_has_capacity_unit_switch():
     assert "SETTING_CAPACITY_UNIT_MODE" in source
     assert "GiB/TiB" in source
     assert "GB/TB" in source
-    assert "refresh_cards(probe_ssh=False)" in source
     assert "probe_ssh: bool = True" in source
     assert "_probe_monitored_ssh_status" in source
+
+
+def test_capacity_unit_toggle_reformats_cached_card_stats_without_refreshing_cards():
+    source = (
+        Path(__file__).parents[1] / "launchpad" / "ui" / "dashboard_view.py"
+    ).read_text(encoding="utf-8")
+    toggle = source.split("    def _toggle_capacity_unit_mode", 1)[1].split(
+        "    def apply_theme", 1
+    )[0]
+
+    assert "def _reformat_visible_card_stats" in source
+    assert "_reformat_visible_card_stats()" in toggle
+    assert "refresh_cards" not in toggle
