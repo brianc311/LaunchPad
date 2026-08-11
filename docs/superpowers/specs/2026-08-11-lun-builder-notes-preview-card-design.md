@@ -85,10 +85,10 @@ Rebuild the select in `render()` from the current card list + saved hint.
 
 ## Testing
 
-- Preview, then set `updated_at` / `notes` / `plan_done` / `command_done` and save → `create_lun_build(..., confirm=True)` succeeds.
+- Preview, then set `updated_at` / `notes` / `name` / `plan_done` / `command_done` and save → `create_lun_build(..., confirm=True)` succeeds.
 - Preview, then change LUN `size` and save → create returns “Preview must be run again”.
 - `LUN_BUILDER_HTML` contains `<select id="default-card-hint"` (not a text input with that id).
-- `readSummary()` is called at the start of `render()`; `#build-notes` `input` writes `build.notes`.
+- `#build-notes` `input` writes `build.notes`; Add host / remove / plan-done call `readSummary` before `render()` (not inside `render()`, so first load and picker change cannot wipe the active build).
 - Version pin `1.6.153`.
 
 ## Version
