@@ -990,7 +990,9 @@ class DashboardView(ctk.CTkFrame):
             muted = bool(meta.get("alarm_muted"))
             widget.set_health_alarm_muted(
                 muted,
-                on_alarm_on=(lambda cid=widget.card_id: self._on_card_health_alarm_on(cid)),
+                on_toggle=(
+                    lambda cid=widget.card_id: self._toggle_health_alarm_for_card(cid)
+                ),
             )
 
     def _card_alarm_muted(self, card_id: int) -> bool:

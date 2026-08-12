@@ -1047,30 +1047,31 @@ class GlowCard(ctk.CTkFrame):
         self,
         muted: bool,
         *,
-        on_alarm_on=None,
+        on_toggle=None,
     ) -> None:
         if self.monitor_row is None:
             return
-        if muted:
-            if self._alarm_on_btn is None:
-                self._alarm_on_btn = ctk.CTkButton(
-                    self.monitor_row,
-                    text="Alarm on",
-                    width=72,
-                    height=24,
-                    fg_color=self.theme["surface"],
-                    hover_color=self.theme["border"],
-                    font=ctk.CTkFont(size=11, weight="bold"),
-                    command=on_alarm_on or (lambda: None),
-                )
-                self._alarm_on_btn.pack(side="right")
-            elif on_alarm_on is not None:
-                self._alarm_on_btn.configure(command=on_alarm_on)
-            self.monitor_hint.configure(text="Alarm muted — no health popups")
+        label = "Alerts off" if muted else "Alerts on"
+        if self._alarm_on_btn is None:
+            self._alarm_on_btn = ctk.CTkButton(
+                self.monitor_row,
+                text=label,
+                width=80,
+                height=24,
+                fg_color=self.theme["surface"],
+                hover_color=self.theme["border"],
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=on_toggle or (lambda: None),
+            )
+            self._alarm_on_btn.pack(side="right")
         else:
-            if self._alarm_on_btn is not None:
-                self._alarm_on_btn.destroy()
-                self._alarm_on_btn = None
+            self._alarm_on_btn.configure(
+                text=label,
+                command=on_toggle or (lambda: None),
+            )
+        if muted:
+            self.monitor_hint.configure(text="Alerts off — no health popups")
+        else:
             enabled = bool(self.monitor_var.get()) if self.monitor_var is not None else False
             self.monitor_hint.configure(
                 text="Off — no background SSH" if not enabled else "On — stats refresh allowed"

@@ -65,6 +65,18 @@ def test_card_widget_has_health_alert_overlay_contract():
     assert "health_alert_overlay_signature" in CARD
 
 
+def test_card_widget_exposes_always_visible_alerts_toggle():
+    source = Path("launchpad/ui/card_widget.py").read_text(encoding="utf-8")
+    assert "Alerts on" in source
+    assert "Alerts off" in source
+    assert "set_health_alarm_muted" in source
+
+
+def test_dashboard_wires_alerts_toggle_to_health_alarm():
+    assert "_toggle_health_alarm_for_card" in DASH
+    assert "set_health_alarm_muted" in DASH
+
+
 def test_desktop_surfaces_do_not_cover_art_with_transparent_frames():
     # CTk paints fg_color="transparent" with the master colour, so a full-bleed
     # transparent frame would hide the art entirely (final review C1).

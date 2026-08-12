@@ -29,6 +29,12 @@ from launchpad.dell_report_settings import (
 )
 from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, DEFAULT_SSH_PORT, APP_VERSION
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
+from launchpad.health_alert_state import (
+    HEALTH_ALERT_SETTING,
+    dump_state,
+    load_state,
+    set_alarm,
+)
 from launchpad.firmware_catalog import (
     eligible_firmware_profiles,
     get_profile_catalog,
@@ -1248,7 +1254,28 @@ class AdminView(ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
         ).grid(row=profile_row, column=2, padx=8, pady=6, sticky="w")
 
-        commands_row = profile_row + 1
+        alerts_row = profile_row + 1
+        ctk.CTkLabel(scroll, text="Alerts", text_color=self.theme["muted"]).grid(
+            row=alerts_row, column=0, padx=8, pady=6, sticky="w"
+        )
+        self.card_alerts_var = ctk.BooleanVar(value=True)
+        self.card_alerts_switch = ctk.CTkSwitch(
+            scroll,
+            text="On (popups enabled)",
+            variable=self.card_alerts_var,
+            command=self._on_card_alerts_toggle,
+        )
+        self.card_alerts_switch.grid(row=alerts_row, column=1, padx=8, pady=6, sticky="w")
+        self.card_alerts_hint = ctk.CTkLabel(
+            scroll,
+            text="Save card first to change alerts",
+            text_color=self.theme["muted"],
+            font=ctk.CTkFont(size=11),
+        )
+        self.card_alerts_hint.grid(row=alerts_row, column=2, padx=8, pady=6, sticky="w")
+        self._set_card_alerts_control(enabled=False, alerts_on=True)
+
+        commands_row = alerts_row + 1
         ctk.CTkLabel(scroll, text="SSH Commands", text_color=self.theme["muted"]).grid(
             row=commands_row, column=0, padx=8, pady=(6, 0), sticky="nw"
         )
@@ -1634,6 +1661,54 @@ class AdminView(ctk.CTkFrame):
             if entry:
                 entry.configure(show=self._MASK_CHAR)
 
+    def _load_health_alert_state(self) -> dict:
+        return load_state(self.db.get_setting(HEALTH_ALERT_SETTING, "") or "")
+
+    def _save_health_alert_state(self, state: dict) -> None:
+        self.db.set_setting(HEALTH_ALERT_SETTING, dump_state(state))
+
+    def _card_alerts_muted(self, card_id: int) -> bool:
+        state = self._load_health_alert_state()
+        return bool(state.get("alarm_muted", {}).get(str(int(card_id))))
+
+    def _set_card_alerts_control(self, *, enabled: bool, alerts_on: bool) -> None:
+        if not hasattr(self, "card_alerts_switch"):
+            return
+        self._card_alerts_updating = True
+        try:
+            self.card_alerts_var.set(bool(alerts_on))
+            self.card_alerts_switch.configure(
+                text="On (popups enabled)" if alerts_on else "Off (no popups)",
+                state="normal" if enabled else "disabled",
+            )
+            if hasattr(self, "card_alerts_hint"):
+                self.card_alerts_hint.configure(
+                    text="" if enabled else "Save card first to change alerts"
+                )
+        finally:
+            self._card_alerts_updating = False
+
+    def _persist_card_alert_mute(self, card_id: int, muted: bool) -> None:
+        state = set_alarm(self._load_health_alert_state(), card_id, muted)
+        self._save_health_alert_state(state)
+
+    def _on_card_alerts_toggle(self) -> None:
+        if getattr(self, "_card_alerts_updating", False):
+            return
+        card_id = getattr(self, "editing_id", None)
+        if not card_id:
+            self._set_card_alerts_control(enabled=False, alerts_on=True)
+            return
+        alerts_on = bool(self.card_alerts_var.get())
+        self._persist_card_alert_mute(int(card_id), muted=not alerts_on)
+        self._set_card_alerts_control(enabled=True, alerts_on=alerts_on)
+        if hasattr(self, "admin_status"):
+            state = "enabled" if alerts_on else "muted"
+            self.admin_status.configure(
+                text=f"Critical alert popups {state} for this card.",
+                text_color=self.theme["accent"],
+            )
+
     def _set_form_mode(self, *, editing: bool, name: str = "") -> None:
         if not hasattr(self, "form_mode_label"):
             return
@@ -1660,6 +1735,7 @@ class AdminView(ctk.CTkFrame):
             self.entries["port"].insert(0, str(DEFAULT_SSH_PORT))
         self._mask_secret_entries()
         self._set_form_mode(editing=False)
+        self._set_card_alerts_control(enabled=False, alerts_on=True)
 
     def _clear_form(self) -> None:
         self._reset_form(defaults=True)
@@ -1671,6 +1747,10 @@ class AdminView(ctk.CTkFrame):
         self._reset_form(defaults=False)
         self.editing_id = card_id
         self._set_form_mode(editing=True, name=card.name)
+        self._set_card_alerts_control(
+            enabled=True,
+            alerts_on=not self._card_alerts_muted(card_id),
+        )
         self.entries["name"].insert(0, card.name)
         self.entries["serial_number"].insert(0, getattr(card, "serial_number", "") or "")
         self.entries["host"].insert(0, card.host)
