@@ -781,13 +781,33 @@ def _analyze_status_table(
             issues.append(issue)
 
 
+def _first_text(*values: str) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _analyze_alerts(issues: list[dict[str, Any]], *, server: str, output: str) -> None:
     headers, rows = _table_rows(output)
     if not rows:
         return
     for row in rows:
         record = _row_map(headers, row)
-        message = record.get("message", "") or record.get("object_name", "Alert")
+        message = _first_text(
+            record.get("message"),
+            record.get("description"),
+            " ".join(
+                p
+                for p in (
+                    _first_text(record.get("event_id")),
+                    _first_text(record.get("object_name")),
+                )
+                if p
+            ),
+            record.get("object_name"),
+        ) or "Alert"
         lowered = message.lower()
         severity = "warn"
         category = "alert"
@@ -966,6 +986,14 @@ def analyze_health(
             category="disk",
             item_label="Disk",
             status_field="State",
+        )
+        _analyze_status_table(
+            issues,
+            server=server_name,
+            output=_result_output(_find_result(command_results, "lsdrive", "health - drives")),
+            category="drive",
+            item_label="Drive",
+            name_fields=("id", "name"),
         )
         _analyze_status_table(
             issues,

@@ -370,6 +370,7 @@ class GlowCard(ctk.CTkFrame):
             self.monitor_var = None
             self.monitor_switch = None
             self.monitor_hint = None
+        self._alarm_on_btn = None
 
         if show_dell_report_include and self._dell_report_row_idx is not None:
             self.dell_report_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -961,6 +962,39 @@ class GlowCard(ctk.CTkFrame):
                 except Exception:
                     pass
                 self._capacity_alert_tip_window = None
+
+    def set_health_alarm_muted(
+        self,
+        muted: bool,
+        *,
+        on_alarm_on=None,
+    ) -> None:
+        if self.monitor_row is None:
+            return
+        if muted:
+            if self._alarm_on_btn is None:
+                self._alarm_on_btn = ctk.CTkButton(
+                    self.monitor_row,
+                    text="Alarm on",
+                    width=72,
+                    height=24,
+                    fg_color=self.theme["surface"],
+                    hover_color=self.theme["border"],
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    command=on_alarm_on or (lambda: None),
+                )
+                self._alarm_on_btn.pack(side="right")
+            elif on_alarm_on is not None:
+                self._alarm_on_btn.configure(command=on_alarm_on)
+            self.monitor_hint.configure(text="Alarm muted — no health popups")
+        else:
+            if self._alarm_on_btn is not None:
+                self._alarm_on_btn.destroy()
+                self._alarm_on_btn = None
+            enabled = bool(self.monitor_var.get()) if self.monitor_var is not None else False
+            self.monitor_hint.configure(
+                text="Off — no background SSH" if not enabled else "On — stats refresh allowed"
+            )
 
     def apply_theme(self, theme: dict) -> None:
         self.theme = theme
