@@ -178,6 +178,7 @@ from launchpad.flashsystem_fc import (
 from launchpad.capacity_pool_family import capacity_pool_family
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.health_alert_art import resolve_health_alert_art
 from launchpad.health_alert_state import (
     HEALTH_ALERT_SETTING,
     acknowledge,
@@ -909,6 +910,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .modal-body .table-wrap { max-height: 58vh; }
     #health-alert-modal { z-index: 1100; }
+    .health-alert-modal {
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: cover;
+    }
+    .health-alert-modal > .modal-head,
+    .health-alert-modal > .modal-body {
+      background: rgba(15, 20, 29, 0.88);
+      border-radius: 12px;
+      padding: 14px;
+    }
     .health-alert-card-name {
       margin: 0 0 12px;
       font-size: 1.35rem;
@@ -1029,14 +1041,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <p id="health-alert-card-name" class="health-alert-card-name"></p>
         <div id="health-alert-issues" class="health-alert-issues issue-list"></div>
         <div class="health-alert-actions">
-          <button type="button" id="health-alert-ack-btn">Acknowledge</button>
+          <button type="button" id="health-alert-ack-btn">Suppress</button>
           <button type="button" class="secondary" id="health-alert-alarm-btn">Alarm off</button>
           <div class="pause-group">
-            <span class="pause-label">Pause</span>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="5">Pause 5 min</button>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="10">Pause 10 min</button>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="15">Pause 15 min</button>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="20">Pause 20 min</button>
+            <span class="pause-label">Snooze…</span>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="5">5 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="10">10 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="15">15 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="20">20 min</button>
           </div>
         </div>
       </div>
@@ -1055,6 +1067,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalBodyEl = document.getElementById("modal-body");
     const modalCloseEl = document.getElementById("modal-close");
     const healthAlertModalEl = document.getElementById("health-alert-modal");
+    const healthAlertArtEl = healthAlertModalEl?.querySelector(".health-alert-modal");
     const healthAlertCardNameEl = document.getElementById("health-alert-card-name");
     const healthAlertIssuesEl = document.getElementById("health-alert-issues");
     const healthAlertAckBtn = document.getElementById("health-alert-ack-btn");
@@ -1550,6 +1563,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           groups.set(key, {
             card_id: cardId,
             card_name: alert.card_name || `Card ${cardId}`,
+            art_url: alert.art_url || "",
             issues: [],
           });
         }
@@ -1638,6 +1652,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (healthAlertIssuesEl) {
         healthAlertIssuesEl.innerHTML = renderHealthAlertIssues(group.issues);
       }
+      if (healthAlertArtEl) {
+        healthAlertArtEl.style.backgroundImage = group.art_url
+          ? `url("${group.art_url}")`
+          : "";
+      }
       healthAlertModalEl.classList.add("open");
       healthAlertModalEl.setAttribute("aria-hidden", "false");
       syncHealthAlertAlarmButton();
@@ -1649,6 +1668,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       healthAlertCurrent = null;
       healthAlertModalEl.classList.remove("open");
       healthAlertModalEl.setAttribute("aria-hidden", "true");
+      if (healthAlertArtEl) healthAlertArtEl.style.backgroundImage = "";
       if (healthAlertIssuesEl) healthAlertIssuesEl.innerHTML = "";
       if (advanceQueue) {
         healthAlertQueueIndex += 1;
@@ -2562,16 +2582,17 @@ class _HealthHandler(BaseHTTPRequestHandler):
         body: bytes,
         *,
         content_type: str,
-        filename: str,
+        filename: str | None = None,
         status: int = 200,
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header(
-            "Content-Disposition",
-            f'attachment; filename="{filename}"',
-        )
+        if filename:
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{filename}"',
+            )
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
@@ -3640,6 +3661,28 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json(server.get_health_alerts())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
+            return
+        if path == "/api/health-alerts/art":
+            query = parse_qs(parsed.query)
+            raw_card_id = (query.get("card_id") or [""])[0].strip()
+            try:
+                card_id = int(raw_card_id)
+            except ValueError:
+                self._send_json({"error": "card_id must be an integer"}, status=400)
+                return
+            art_path = server.health_alert_art_path(card_id)
+            if art_path is None:
+                self.send_error(404)
+                return
+            try:
+                body = art_path.read_bytes()
+            except OSError:
+                self.send_error(404)
+                return
+            self._send_bytes(
+                body,
+                content_type="image/png",
+            )
             return
         self.send_error(404)
 
@@ -6109,6 +6152,33 @@ class HealthServer:
             }
         return out
 
+    @staticmethod
+    def _health_alert_art_urls(cards: list[dict[str, Any]]) -> dict[str, str]:
+        urls: dict[str, str] = {}
+        for card in cards:
+            card_id = card.get("id")
+            card_name = str(card.get("name") or "")
+            if card_id is None or not card_name:
+                continue
+            try:
+                art_path = resolve_health_alert_art(card_name)
+            except OSError:
+                art_path = None
+            if art_path is not None:
+                urls[str(card_id)] = f"/api/health-alerts/art?card_id={card_id}"
+        return urls
+
+    def health_alert_art_path(self, card_id: int) -> Path | None:
+        with self._lock:
+            card = self._cards.get(int(card_id))
+            card_name = card.name if card is not None else ""
+        if not card_name:
+            return None
+        try:
+            return resolve_health_alert_art(card_name)
+        except OSError:
+            return None
+
     def get_health_alerts(self) -> dict[str, Any]:
         cards = self.list_cards(allow_sync=False)
         monitor = self.monitor_states()
@@ -6123,9 +6193,18 @@ class HealthServer:
             state = pruned
         now = time.time()
         alerts = list_popup_alerts(cards, monitor, state, now=now)
+        art_urls = self._health_alert_art_urls(cards)
+        for alert in alerts:
+            art_url = art_urls.get(str(alert.get("card_id")))
+            if art_url:
+                alert["art_url"] = art_url
+        cards_payload = self._health_alert_cards_payload(cards, state, now=now)
+        for card_id, art_url in art_urls.items():
+            if card_id in cards_payload:
+                cards_payload[card_id]["art_url"] = art_url
         return {
             "alerts": alerts,
-            "cards": self._health_alert_cards_payload(cards, state, now=now),
+            "cards": cards_payload,
         }
 
     def acknowledge_health_alert(self, fingerprint: str) -> dict[str, Any]:
