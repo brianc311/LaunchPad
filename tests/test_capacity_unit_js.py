@@ -1,4 +1,4 @@
-from launchpad.config import APP_VERSION
+﻿from launchpad.config import APP_VERSION
 from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML
 from launchpad.health_server import DASHBOARD_HTML
 from launchpad.site_lookup import SITE_LOOKUP_HTML
@@ -34,4 +34,4 @@ def test_polled_pages_update_capacity_unit_mode_from_cards():
 
 
 def test_app_version_153():
-    assert APP_VERSION == "1.6.159"
+    assert APP_VERSION == "1.6.160"
