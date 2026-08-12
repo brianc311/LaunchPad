@@ -16,7 +16,10 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from launchpad.capacity_export import ExportSite
 from launchpad.capacity_units import bytes_to_capacity_unit, capacity_unit_header
-from launchpad.dell_report_capacity import select_dell_array_snapshot_summary
+from launchpad.dell_report_capacity import (
+    select_dell_array_snapshot_summary,
+    select_dell_capacity_summary,
+)
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.dell_report_identity import resolve_dell_identity
 from launchpad.dell_report_leds import UTIL_YELLOW_THRESHOLD
@@ -231,12 +234,19 @@ def collect_dell_report_rows(
         if family is None or card_id is None:
             continue
 
-        summary = select_dell_array_snapshot_summary(
+        display = select_dell_capacity_summary(
+            capacity_summary=_site_value(site, "capacity_summary"),
+            raw_capacity_summary=_site_value(site, "raw_capacity_summary"),
+            pools=_site_value(site, "pools") or [],
+            include_pools=include_pools,
+        )
+        snap_summary = select_dell_array_snapshot_summary(
             capacity_summary=_site_value(site, "capacity_summary"),
         )
-        total_bytes = float((summary or {}).get("total_bytes") or 0)
-        used_bytes = float((summary or {}).get("used_bytes") or 0)
-        if not summary or total_bytes <= 0:
+        display_total = float((display or {}).get("total_bytes") or 0)
+        display_used = float((display or {}).get("used_bytes") or 0)
+
+        if not display or display_total <= 0:
             if str(card_id) not in include_ids:
                 continue
             ident = resolve_dell_identity(
@@ -269,34 +279,41 @@ def collect_dell_report_rows(
             card_id=card_id,
             site_name=name,
             device_profile=device_profile,
-            summary_name=str(summary.get("name") or ""),
+            summary_name=str((display or {}).get("name") or ""),
             overrides=overrides,
         )
         facility = ident["facility"]
         model = ident["model"]
         array_name = ident["array_name"]
 
-        # Always refresh the current ISO week from live array/system capacity.
-        store = upsert_week_snapshot(
-            store,
-            card_id=card_id,
-            week=week,
-            usable_bytes=total_bytes,
-            used_bytes=used_bytes,
-            model=model,
-            facility=facility,
-            family=family,
-            array_name=array_name,
-            captured_at=captured_at,
-        )
+        if snap_summary and float(snap_summary.get("total_bytes") or 0) > 0:
+            store = upsert_week_snapshot(
+                store,
+                card_id=card_id,
+                week=week,
+                usable_bytes=float(snap_summary.get("total_bytes") or 0),
+                used_bytes=float(snap_summary.get("used_bytes") or 0),
+                model=model,
+                facility=facility,
+                family=family,
+                array_name=array_name,
+                captured_at=captured_at,
+            )
+            prior, current = prior_and_current_for_card(
+                store, card_id, current_week=week
+            )
+            if current is None:
+                continue
+            row = _row_from_snapshots(prior, current)
+        else:
+            row = _row_from_display_summary(
+                facility=facility,
+                array_name=array_name,
+                model=model,
+                total_bytes=display_total,
+                used_bytes=display_used,
+            )
 
-        prior, current = prior_and_current_for_card(
-            store, card_id, current_week=week
-        )
-        if current is None:
-            continue
-
-        row = _row_from_snapshots(prior, current)
         row["card_id"] = card_id
         if family == "ibm":
             ibm_rows.append(row)
@@ -422,6 +439,28 @@ def _util_fraction(used_bytes: float, total_bytes: float) -> float | None:
     if total_bytes <= 0:
         return None
     return used_bytes / total_bytes
+
+
+def _row_from_display_summary(
+    *,
+    facility: str,
+    array_name: str,
+    model: str,
+    total_bytes: float,
+    used_bytes: float,
+) -> dict:
+    return {
+        "facility": facility or "",
+        "array_name": array_name or "",
+        "model": model or "",
+        "prior_usable_gib": None,
+        "prior_used_gib": None,
+        "prior_util": None,
+        "curr_usable_gib": bytes_to_capacity_unit(total_bytes),
+        "curr_used_gib": bytes_to_capacity_unit(used_bytes),
+        "curr_util": _util_fraction(used_bytes, total_bytes),
+        "weekly_growth": None,
+    }
 
 
 def _row_from_snapshots(prior: dict | None, current: dict) -> dict:
