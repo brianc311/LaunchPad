@@ -91,6 +91,12 @@ class DashboardView(ctk.CTkFrame):
         self._ssh_status_in_flight: set[int] = set()
         self._ssh_status_timer: str | None = None
         self._capacity_alert_timer: str | None = None
+        self._health_alert_timer: str | None = None
+        self._health_alert_dialog = None
+        self._health_alert_queue: list[dict] = []
+        self._health_alert_queue_index = 0
+        self._health_alert_beeped: set[str] = set()
+        self._health_alert_poll_in_flight = False
         self._capacity_email_timer: str | None = None
         self._capacity_email_send_in_flight = False
         self._visible_cards: dict[int, Card] = {}
@@ -608,6 +614,9 @@ class DashboardView(ctk.CTkFrame):
         if self._capacity_alert_timer:
             self.after_cancel(self._capacity_alert_timer)
             self._capacity_alert_timer = None
+        if self._health_alert_timer:
+            self.after_cancel(self._health_alert_timer)
+            self._health_alert_timer = None
 
         for widget in self.cards_frame.winfo_children():
             widget.destroy()
@@ -650,6 +659,8 @@ class DashboardView(ctk.CTkFrame):
             ).grid(row=0, column=0, columnspan=cols, padx=12, pady=24, sticky="w")
             self._refresh_capacity_alerts()
             self._schedule_capacity_alert_poll()
+            self._refresh_health_alerts()
+            self._schedule_health_alert_poll()
             return
 
         self._load_monitor_states()
@@ -735,6 +746,8 @@ class DashboardView(ctk.CTkFrame):
         self._probe_monitored_ssh_status()
         self._refresh_capacity_alerts()
         self._schedule_capacity_alert_poll()
+        self._refresh_health_alerts()
+        self._schedule_health_alert_poll()
 
         # SSH stats run only when Monitor is on and you click Refresh Stats.
 
@@ -802,6 +815,150 @@ class DashboardView(ctk.CTkFrame):
                 for i in filter_capacity_issues(payload.get("health_issues"))
             ]
             widget.set_capacity_alert(severity, messages)
+
+    def _schedule_health_alert_poll(self) -> None:
+        if self._health_alert_timer:
+            self.after_cancel(self._health_alert_timer)
+        from launchpad.ui.health_alert_dialog import HEALTH_ALERT_POLL_MS
+
+        self._health_alert_timer = self.after(
+            HEALTH_ALERT_POLL_MS, self._on_health_alert_timer
+        )
+
+    def _on_health_alert_timer(self) -> None:
+        self._health_alert_timer = None
+        self._refresh_health_alerts()
+        self._schedule_health_alert_poll()
+
+    def _refresh_health_alerts(self) -> None:
+        if self._health_alert_poll_in_flight:
+            return
+        self._health_alert_poll_in_flight = True
+        try:
+            server = get_health_server()
+            payload = server.get_health_alerts()
+        except Exception:
+            return
+        finally:
+            self._health_alert_poll_in_flight = False
+        self._apply_health_alert_payload(payload)
+
+    def _apply_health_alert_payload(self, payload: dict) -> None:
+        from launchpad.ui.health_alert_dialog import (
+            group_health_alerts,
+            play_health_alert_beep,
+        )
+
+        alerts = payload.get("alerts") or []
+        active_fingerprints = {
+            str(alert.get("fingerprint"))
+            for alert in alerts
+            if alert.get("fingerprint") is not None
+        }
+        self._health_alert_beeped &= active_fingerprints
+        for alert in alerts:
+            fingerprint = str(alert.get("fingerprint") or "")
+            if not fingerprint or fingerprint in self._health_alert_beeped:
+                continue
+            play_health_alert_beep()
+            self._health_alert_beeped.add(fingerprint)
+
+        if self._health_alert_dialog is not None:
+            return
+
+        self._health_alert_queue = group_health_alerts(alerts)
+        self._health_alert_queue_index = 0
+        self._show_next_health_alert()
+
+    def _show_next_health_alert(self) -> None:
+        while self._health_alert_queue_index < len(self._health_alert_queue):
+            group = self._health_alert_queue[self._health_alert_queue_index]
+            if group.get("issues"):
+                self._open_health_alert_dialog(group)
+                return
+            self._health_alert_queue_index += 1
+
+    def _open_health_alert_dialog(self, group: dict) -> None:
+        from launchpad.ui.health_alert_dialog import HealthAlertDialog
+
+        if self._health_alert_dialog is not None:
+            return
+        self._health_alert_dialog = HealthAlertDialog(
+            self.winfo_toplevel(),
+            theme_name=self.theme_name,
+            group=group,
+            on_acknowledge=self._on_health_alert_acknowledge,
+            on_pause=self._on_health_alert_pause,
+            on_alarm_off=self._on_health_alert_alarm_off,
+            on_close=self._on_health_alert_close,
+        )
+
+    def _close_health_alert_dialog(self, *, advance_queue: bool) -> None:
+        dialog = self._health_alert_dialog
+        self._health_alert_dialog = None
+        if dialog is not None:
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+        if advance_queue:
+            self._health_alert_queue_index += 1
+            self._show_next_health_alert()
+
+    def _on_health_alert_close(self, advance_queue: bool) -> None:
+        self._close_health_alert_dialog(advance_queue=advance_queue)
+
+    def _on_health_alert_acknowledge(self) -> None:
+        dialog = self._health_alert_dialog
+        if dialog is None:
+            return
+        fingerprints = [
+            str(issue.get("fingerprint") or "")
+            for issue in dialog.group.get("issues") or []
+            if issue.get("fingerprint") is not None
+        ]
+        if not fingerprints:
+            return
+        try:
+            server = get_health_server()
+            payload = server.acknowledge_health_alerts(fingerprints)
+        except Exception as exc:
+            self.status_label.configure(text=f"Could not acknowledge health alert: {exc}")
+            return
+        self._close_health_alert_dialog(advance_queue=False)
+        self._apply_health_alert_payload(payload)
+
+    def _on_health_alert_pause(self, minutes: int) -> None:
+        dialog = self._health_alert_dialog
+        if dialog is None:
+            return
+        card_id = dialog.group.get("card_id")
+        if card_id is None:
+            return
+        try:
+            server = get_health_server()
+            payload = server.pause_health_alert(int(card_id), int(minutes))
+        except Exception as exc:
+            self.status_label.configure(text=f"Could not pause health alert: {exc}")
+            return
+        self._close_health_alert_dialog(advance_queue=False)
+        self._apply_health_alert_payload(payload)
+
+    def _on_health_alert_alarm_off(self) -> None:
+        dialog = self._health_alert_dialog
+        if dialog is None:
+            return
+        card_id = dialog.group.get("card_id")
+        if card_id is None:
+            return
+        try:
+            server = get_health_server()
+            payload = server.set_health_alarm(int(card_id), True)
+        except Exception as exc:
+            self.status_label.configure(text=f"Could not mute health alarm: {exc}")
+            return
+        self._close_health_alert_dialog(advance_queue=False)
+        self._apply_health_alert_payload(payload)
 
     def _apply_array_rail_collapsed(self) -> None:
         if self.array_rail_collapsed:
