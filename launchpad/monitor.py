@@ -20,6 +20,8 @@ class HealthDashboardEntry:
     category: str = ""
     url: str = ""
     sudo_password: str = ""
+    dscli_path: str = ""
+    dscli_hmc: str = ""
 
 
 def _register_entry(server, entry: HealthDashboardEntry) -> None:
@@ -38,6 +40,8 @@ def _register_entry(server, entry: HealthDashboardEntry) -> None:
         entry.category,
         entry.url,
         entry.sudo_password,
+        dscli_path=entry.dscli_path,
+        dscli_hmc=entry.dscli_hmc,
     )
 
 
@@ -69,6 +73,8 @@ def build_health_dashboard_entries(db, crypto_key: bytes) -> list[HealthDashboar
                     if card.device_profile == "hadoop_linux"
                     else ""
                 ),
+                dscli_path=getattr(card, "dscli_path", "") or "",
+                dscli_hmc=getattr(card, "dscli_hmc", "") or "",
             )
         )
     return entries

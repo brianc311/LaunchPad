@@ -64,7 +64,11 @@ def run_interactive_shell(
         authenticate_with_password(transport, username, (password or "").rstrip("\r\n"))
         client._transport = transport
     except paramiko.AuthenticationException:
-        print("Authentication failed. Check username and password in LaunchPad Admin.")
+        print(
+            "Authentication failed. Check card Host (management desktop), "
+            "username/password in LaunchPad Admin, and that OpenSSH Server "
+            "is enabled on the desktop."
+        )
         if transport is not None:
             try:
                 transport.close()

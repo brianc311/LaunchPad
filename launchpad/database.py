@@ -28,6 +28,8 @@ class Card:
     device_profile: str
     custom_commands: str
     encrypted_sudo_password: str = ""
+    dscli_path: str = ""
+    dscli_hmc: str = ""
 
 
 class Database:
@@ -91,6 +93,8 @@ class Database:
                     "encrypted_sudo_password",
                     "ALTER TABLE cards ADD COLUMN encrypted_sudo_password TEXT DEFAULT ''",
                 ),
+                ("dscli_path", "ALTER TABLE cards ADD COLUMN dscli_path TEXT DEFAULT ''"),
+                ("dscli_hmc", "ALTER TABLE cards ADD COLUMN dscli_hmc TEXT DEFAULT ''"),
             ):
                 try:
                     conn.execute(ddl)
@@ -175,8 +179,8 @@ class Database:
                     name, card_type, host, port, serial_number, username,
                     encrypted_password, encrypted_sudo_password, encrypted_key_passphrase, encrypted_key, url,
                     icon, category, sort_order, glow_color, key_file_path,
-                    device_profile, custom_commands
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    device_profile, custom_commands, dscli_path, dscli_hmc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data["name"],
@@ -197,6 +201,8 @@ class Database:
                     data.get("key_file_path", ""),
                     data.get("device_profile", ""),
                     data.get("custom_commands", ""),
+                    data.get("dscli_path", ""),
+                    data.get("dscli_hmc", ""),
                 ),
             )
             return int(cursor.lastrowid)
@@ -209,7 +215,8 @@ class Database:
                     name = ?, card_type = ?, host = ?, port = ?, serial_number = ?, username = ?,
                     encrypted_password = ?, encrypted_sudo_password = ?, encrypted_key_passphrase = ?, encrypted_key = ?, url = ?,
                     icon = ?, category = ?, sort_order = ?, glow_color = ?,
-                    key_file_path = ?, device_profile = ?, custom_commands = ?
+                    key_file_path = ?, device_profile = ?, custom_commands = ?,
+                    dscli_path = ?, dscli_hmc = ?
                 WHERE id = ?
                 """,
                 (
@@ -231,6 +238,8 @@ class Database:
                     data.get("key_file_path", ""),
                     data.get("device_profile", ""),
                     data.get("custom_commands", ""),
+                    data.get("dscli_path", ""),
+                    data.get("dscli_hmc", ""),
                     card_id,
                 ),
             )
@@ -269,6 +278,8 @@ class Database:
                 "key_file_path": card.key_file_path,
                 "device_profile": card.device_profile,
                 "custom_commands": card.custom_commands,
+                "dscli_path": card.dscli_path,
+                "dscli_hmc": card.dscli_hmc,
             }
             for card in cards
         ]
@@ -300,6 +311,8 @@ class Database:
                     "key_file_path": entry.get("key_file_path", ""),
                     "device_profile": entry.get("device_profile", ""),
                     "custom_commands": entry.get("custom_commands", ""),
+                    "dscli_path": entry.get("dscli_path", ""),
+                    "dscli_hmc": entry.get("dscli_hmc", ""),
                 }
             )
             imported += 1
@@ -337,4 +350,6 @@ class Database:
             key_file_path=(row["key_file_path"] if "key_file_path" in row.keys() else "") or "",
             device_profile=(row["device_profile"] if "device_profile" in row.keys() else "") or "",
             custom_commands=(row["custom_commands"] if "custom_commands" in row.keys() else "") or "",
+            dscli_path=(row["dscli_path"] if "dscli_path" in row.keys() else "") or "",
+            dscli_hmc=(row["dscli_hmc"] if "dscli_hmc" in row.keys() else "") or "",
         )

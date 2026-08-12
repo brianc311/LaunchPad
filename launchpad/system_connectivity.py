@@ -837,3 +837,25 @@ def topic_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "license_key": [],
         }
     return empty
+
+
+def wrap_topic_commands_for_card(
+    commands: dict[str, list[str]],
+    *,
+    dscli_path: str = "",
+    dscli_hmc: str = "",
+    username: str = "",
+    password: str = "",
+) -> dict[str, list[str]]:
+    from launchpad.dscli_wrap import wrap_dscli_command_list
+
+    return {
+        topic: wrap_dscli_command_list(
+            list(cmds),
+            dscli_path=dscli_path,
+            hmc_host=dscli_hmc,
+            username=username,
+            password=password,
+        )
+        for topic, cmds in commands.items()
+    }

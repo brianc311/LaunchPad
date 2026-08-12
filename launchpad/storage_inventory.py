@@ -106,6 +106,28 @@ def inventory_commands_for_profile(profile: str) -> dict[str, list[str]]:
     return empty
 
 
+def wrap_inventory_commands_for_card(
+    commands: dict[str, list[str]],
+    *,
+    dscli_path: str = "",
+    dscli_hmc: str = "",
+    username: str = "",
+    password: str = "",
+) -> dict[str, list[str]]:
+    from launchpad.dscli_wrap import wrap_dscli_command_list
+
+    return {
+        topic: wrap_dscli_command_list(
+            list(cmds),
+            dscli_path=dscli_path,
+            hmc_host=dscli_hmc,
+            username=username,
+            password=password,
+        )
+        for topic, cmds in commands.items()
+    }
+
+
 def parse_svc_lssystem_identity(output: str) -> tuple[str, str]:
     text = str(output or "")
     model = ""
@@ -477,6 +499,7 @@ __all__ = [
     "health_issue_messages",
     "hpe_call_home_na_row",
     "inventory_commands_for_profile",
+    "wrap_inventory_commands_for_card",
     "inventory_totals",
     "is_system_connectivity_eligible",
     "parse_ds_networkport_dns",
