@@ -178,6 +178,18 @@ from launchpad.flashsystem_fc import (
 from launchpad.capacity_pool_family import capacity_pool_family
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.health_alert_state import (
+    HEALTH_ALERT_SETTING,
+    acknowledge,
+    collect_critical_candidates,
+    dump_state,
+    empty_state,
+    list_popup_alerts,
+    load_state,
+    pause_card,
+    prune_acknowledgements,
+    set_alarm,
+)
 from launchpad.health_excel_export import (
     HealthExcelSections,
     build_health_workbook,
@@ -3304,6 +3316,12 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=filename,
             )
             return
+        if path == "/api/health-alerts":
+            try:
+                self._send_json(server.get_health_alerts())
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -3513,6 +3531,89 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     return
                 server.set_monitor_enabled(card_id=card_id, enabled=enabled)
             self._send_json({"states": server.monitor_states(), "default": False})
+            return
+        if path == "/api/health-alerts/acknowledge":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                if "fingerprints" in payload:
+                    fingerprints = payload.get("fingerprints")
+                    if not isinstance(fingerprints, list):
+                        self._send_json({"error": "fingerprints must be a list"}, status=400)
+                        return
+                    result = server.acknowledge_health_alerts(
+                        [str(item) for item in fingerprints]
+                    )
+                elif "fingerprint" in payload:
+                    result = server.acknowledge_health_alert(str(payload["fingerprint"]))
+                else:
+                    self._send_json({"error": "fingerprint or fingerprints required"}, status=400)
+                    return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+                return
+            self._send_json(result)
+            return
+        if path == "/api/health-alerts/pause":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+                minutes = int(payload.get("minutes"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id and minutes required"}, status=400)
+                return
+            try:
+                result = server.pause_health_alert(card_id, minutes)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+                return
+            self._send_json(result)
+            return
+        if path == "/api/health-alerts/alarm":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            if "muted" not in payload:
+                self._send_json({"error": "muted required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            try:
+                result = server.set_health_alarm(card_id, bool(payload.get("muted")))
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+                return
+            self._send_json(result)
             return
         if path == "/api/dell-report-settings":
             from launchpad.dell_report_settings import set_dell_report_include_card
@@ -5633,6 +5734,107 @@ class HealthServer:
     def is_monitor_enabled(self, card_id: int) -> bool:
         with self._lock:
             return self._monitor_enabled.get(card_id, False)
+
+    def health_alert_persist_available(self) -> bool:
+        with self._lock:
+            return self._get_setting is not None and self._set_setting is not None
+
+    def _load_health_alert_state(self) -> dict[str, Any]:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return empty_state()
+        return load_state(getter(HEALTH_ALERT_SETTING, "") or "")
+
+    def _save_health_alert_state(self, state: dict[str, Any]) -> None:
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError("LaunchPad must be unlocked to save health alert state.")
+        setter(HEALTH_ALERT_SETTING, dump_state(state))
+
+    @staticmethod
+    def _active_health_alert_fingerprints(
+        cards: list[dict[str, Any]], monitor_states: dict[str, bool]
+    ) -> set[str]:
+        active: set[str] = set()
+        for card in cards:
+            card_id = card.get("id")
+            if not monitor_states.get(str(card_id), False):
+                continue
+            for candidate in collect_critical_candidates(card, monitor_on=True):
+                active.add(candidate["fingerprint"])
+        return active
+
+    def _health_alert_cards_payload(
+        self,
+        cards: list[dict[str, Any]],
+        state: dict[str, Any],
+        *,
+        now: float,
+    ) -> dict[str, dict[str, Any]]:
+        alarm_muted = state.get("alarm_muted") or {}
+        paused_until = state.get("paused_until") or {}
+        out: dict[str, dict[str, Any]] = {}
+        for card in cards:
+            card_id = card.get("id")
+            if card_id is None:
+                continue
+            key = str(card_id)
+            pause_end = paused_until.get(key)
+            if pause_end is not None and now >= float(pause_end):
+                pause_end = None
+            out[key] = {
+                "alarm_muted": bool(alarm_muted.get(key)),
+                "paused_until": float(pause_end) if pause_end is not None else None,
+            }
+        return out
+
+    def get_health_alerts(self) -> dict[str, Any]:
+        cards = self.list_cards(allow_sync=False)
+        monitor = self.monitor_states()
+        state = self._load_health_alert_state()
+        active = self._active_health_alert_fingerprints(cards, monitor)
+        pruned = prune_acknowledgements(state, active)
+        if dump_state(pruned) != dump_state(state):
+            try:
+                self._save_health_alert_state(pruned)
+            except RuntimeError:
+                pass
+            state = pruned
+        now = time.time()
+        alerts = list_popup_alerts(cards, monitor, state, now=now)
+        return {
+            "alerts": alerts,
+            "cards": self._health_alert_cards_payload(cards, state, now=now),
+        }
+
+    def acknowledge_health_alert(self, fingerprint: str) -> dict[str, Any]:
+        state = acknowledge(self._load_health_alert_state(), str(fingerprint))
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
+
+    def acknowledge_health_alerts(self, fingerprints: list[str]) -> dict[str, Any]:
+        state = self._load_health_alert_state()
+        for fingerprint in fingerprints:
+            state = acknowledge(state, str(fingerprint))
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
+
+    def pause_health_alert(self, card_id: int, minutes: int) -> dict[str, Any]:
+        state = pause_card(
+            self._load_health_alert_state(),
+            card_id,
+            minutes,
+            now=time.time(),
+        )
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
+
+    def set_health_alarm(self, card_id: int, muted: bool) -> dict[str, Any]:
+        state = set_alarm(self._load_health_alert_state(), card_id, muted)
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
 
     def update_volume_find_card_host(self, card_id: int, host: str) -> dict:
         if not self.is_unlocked():
