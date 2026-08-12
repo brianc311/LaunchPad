@@ -34,6 +34,7 @@ from launchpad.dashboard_array_rail import (
 )
 from launchpad.database import Card
 from launchpad.health_format import card_stats_columns, command_results_columns
+from launchpad.health_alert_art import ensure_health_alert_art_dir
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.health_server import get_health_server
 from launchpad.launchers import launch_card
@@ -62,6 +63,12 @@ from launchpad.ssh_utils import (
     ssh_stats_prereq_message,
 )
 from launchpad.ui.card_widget import GlowCard
+from launchpad.ui.health_alert_dialog import (
+    HEALTH_ALERT_POLL_MS,
+    HealthAlertDialog,
+    group_health_alerts,
+    play_health_alert_beep,
+)
 from launchpad.ui.stats_snapshot_dialog import StatsSnapshotDialog
 from launchpad.ui.colors import normalize_color
 from launchpad.ui.theme import get_theme
@@ -98,6 +105,8 @@ class DashboardView(ctk.CTkFrame):
         self._health_alert_beeped: set[str] = set()
         self._health_alert_poll_in_flight = False
         self._health_alert_cards_meta: dict[str, dict] = {}
+        self._health_alert_overlay_dismissed: dict[int, str] = {}
+        ensure_health_alert_art_dir()
         self._capacity_email_timer: str | None = None
         self._capacity_email_send_in_flight = False
         self._visible_cards: dict[int, Card] = {}
@@ -820,7 +829,6 @@ class DashboardView(ctk.CTkFrame):
     def _schedule_health_alert_poll(self) -> None:
         if self._health_alert_timer:
             self.after_cancel(self._health_alert_timer)
-        from launchpad.ui.health_alert_dialog import HEALTH_ALERT_POLL_MS
 
         self._health_alert_timer = self.after(
             HEALTH_ALERT_POLL_MS, self._on_health_alert_timer
@@ -845,11 +853,6 @@ class DashboardView(ctk.CTkFrame):
         self._apply_health_alert_payload(payload)
 
     def _apply_health_alert_payload(self, payload: dict) -> None:
-        from launchpad.ui.health_alert_dialog import (
-            group_health_alerts,
-            play_health_alert_beep,
-        )
-
         alerts = payload.get("alerts") or []
         active_fingerprints = {
             str(alert.get("fingerprint"))
@@ -869,13 +872,68 @@ class DashboardView(ctk.CTkFrame):
 
         self._health_alert_cards_meta = payload.get("cards") or {}
         self._sync_health_alarm_muted_indicators()
+        groups = group_health_alerts(alerts)
+        self._sync_health_alert_overlays(groups)
 
         if self._health_alert_dialog is not None:
             return
 
-        self._health_alert_queue = group_health_alerts(alerts)
+        self._health_alert_queue = groups
         self._health_alert_queue_index = 0
         self._show_next_health_alert()
+
+    @staticmethod
+    def _health_alert_group_key(group: dict) -> str:
+        return "\x1f".join(
+            sorted(
+                str(issue.get("fingerprint") or issue.get("message") or "")
+                for issue in group.get("issues") or []
+            )
+        )
+
+    def _dismiss_health_alert_overlay(self, widget, group_key: str) -> None:
+        # Remember the dismissal so the next poll does not immediately re-raise the
+        # same overlay; a new fingerprint set clears it.
+        self._health_alert_overlay_dismissed[widget.card_id] = group_key
+        widget.clear_health_alert_overlay()
+
+    def _sync_health_alert_overlays(self, groups: list[dict]) -> None:
+        by_card_id = {
+            int(group.get("card_id")): group
+            for group in groups
+            if group.get("card_id") is not None
+        }
+        for widget in self.card_widgets:
+            group = by_card_id.get(widget.card_id)
+            if group is None:
+                self._health_alert_overlay_dismissed.pop(widget.card_id, None)
+                widget.clear_health_alert_overlay()
+                continue
+            group_key = self._health_alert_group_key(group)
+            if self._health_alert_overlay_dismissed.get(widget.card_id) == group_key:
+                widget.clear_health_alert_overlay()
+                continue
+            self._health_alert_overlay_dismissed.pop(widget.card_id, None)
+            widget.set_health_alert_overlay(
+                group,
+                on_acknowledge=(
+                    lambda alert_group=group: self._acknowledge_health_alert_group(alert_group)
+                ),
+                on_pause=(
+                    lambda minutes, card_id=widget.card_id: self._pause_health_alert_card(
+                        card_id, minutes
+                    )
+                ),
+                on_alarm_toggle=(
+                    lambda card_id=widget.card_id: self._toggle_health_alarm_for_card(card_id)
+                ),
+                on_close=(
+                    lambda card_widget=widget, key=group_key: (
+                        self._dismiss_health_alert_overlay(card_widget, key)
+                    )
+                ),
+                alarm_muted=self._card_alarm_muted(widget.card_id),
+            )
 
     def _sync_health_alarm_muted_indicators(self) -> None:
         for widget in self.card_widgets:
@@ -899,8 +957,6 @@ class DashboardView(ctk.CTkFrame):
             self._health_alert_queue_index += 1
 
     def _open_health_alert_dialog(self, group: dict) -> None:
-        from launchpad.ui.health_alert_dialog import HealthAlertDialog
-
         if self._health_alert_dialog is not None:
             return
         self._health_alert_dialog = HealthAlertDialog(
@@ -933,9 +989,12 @@ class DashboardView(ctk.CTkFrame):
         dialog = self._health_alert_dialog
         if dialog is None:
             return
+        self._acknowledge_health_alert_group(dialog.group)
+
+    def _acknowledge_health_alert_group(self, group: dict) -> None:
         fingerprints = [
             str(issue.get("fingerprint") or "")
-            for issue in dialog.group.get("issues") or []
+            for issue in group.get("issues") or []
             if issue.get("fingerprint") is not None
         ]
         if not fingerprints:
@@ -946,7 +1005,7 @@ class DashboardView(ctk.CTkFrame):
         except Exception as exc:
             self.status_label.configure(text=f"Could not acknowledge health alert: {exc}")
             return
-        self._close_health_alert_dialog(advance_queue=False)
+        self._close_matching_health_alert_dialog(group.get("card_id"))
         self._apply_health_alert_payload(payload)
 
     def _on_health_alert_pause(self, minutes: int) -> None:
@@ -956,13 +1015,16 @@ class DashboardView(ctk.CTkFrame):
         card_id = dialog.group.get("card_id")
         if card_id is None:
             return
+        self._pause_health_alert_card(int(card_id), minutes)
+
+    def _pause_health_alert_card(self, card_id: int, minutes: int) -> None:
         try:
             server = get_health_server()
             payload = server.pause_health_alert(int(card_id), int(minutes))
         except Exception as exc:
             self.status_label.configure(text=f"Could not pause health alert: {exc}")
             return
-        self._close_health_alert_dialog(advance_queue=False)
+        self._close_matching_health_alert_dialog(card_id)
         self._apply_health_alert_payload(payload)
 
     def _on_health_alert_alarm_toggle(self) -> None:
@@ -972,8 +1034,18 @@ class DashboardView(ctk.CTkFrame):
         card_id = dialog.group.get("card_id")
         if card_id is None:
             return
-        muted = not self._card_alarm_muted(int(card_id))
-        self._set_health_alarm(int(card_id), muted, close_dialog=True)
+        self._toggle_health_alarm_for_card(int(card_id))
+
+    def _toggle_health_alarm_for_card(self, card_id: int) -> None:
+        muted = not self._card_alarm_muted(card_id)
+        self._set_health_alarm(card_id, muted, close_dialog=True)
+
+    def _close_matching_health_alert_dialog(self, card_id) -> None:
+        dialog = self._health_alert_dialog
+        if dialog is None:
+            return
+        if dialog.group.get("card_id") == card_id:
+            self._close_health_alert_dialog(advance_queue=False)
 
     def _on_card_health_alarm_on(self, card_id: int) -> None:
         self._set_health_alarm(card_id, False, close_dialog=False)
@@ -987,7 +1059,7 @@ class DashboardView(ctk.CTkFrame):
             self.status_label.configure(text=f"Could not {action} health alarm: {exc}")
             return
         if close_dialog:
-            self._close_health_alert_dialog(advance_queue=False)
+            self._close_matching_health_alert_dialog(card_id)
         self._apply_health_alert_payload(payload)
 
     def _apply_array_rail_collapsed(self) -> None:

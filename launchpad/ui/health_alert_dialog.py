@@ -6,6 +6,11 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
+from launchpad.health_alert_art import resolve_health_alert_art
+from launchpad.ui.health_alert_layout import (
+    build_health_alert_surface,
+    load_alert_art_image,
+)
 from launchpad.ui.theme import get_theme
 
 HEALTH_ALERT_POLL_MS = 30_000
@@ -56,7 +61,6 @@ class HealthAlertDialog(ctk.CTkToplevel):
         on_pause: PauseHandler,
         on_alarm_toggle: AlarmToggleHandler,
         on_close: CloseHandler,
-        *,
         alarm_muted: bool = False,
     ) -> None:
         super().__init__(master)
@@ -67,6 +71,7 @@ class HealthAlertDialog(ctk.CTkToplevel):
         self._on_alarm_toggle = on_alarm_toggle
         self._on_close = on_close
         self._alarm_muted = alarm_muted
+        self._art_image = None
 
         card_name = str(group.get("card_name") or f"Card {group.get('card_id')}")
         self.title("Critical Health Alert")
@@ -78,103 +83,25 @@ class HealthAlertDialog(ctk.CTkToplevel):
         self.bind("<Escape>", lambda _e: self._on_close(True))
         self.after(200, self.lift)
 
-        pad = 20
-        frame = ctk.CTkFrame(self, fg_color=self.theme["surface"], corner_radius=16)
-        frame.pack(padx=pad, pady=pad, fill="both", expand=True)
+        art_path = resolve_health_alert_art(card_name)
+        self._art_image = load_alert_art_image(art_path, (640, 360))
 
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=(20, 8))
-
-        ctk.CTkLabel(
-            header,
-            text="Critical Health Alert",
-            font=ctk.CTkFont(size=22, weight="bold"),
-            text_color=self.theme["danger"],
-            anchor="w",
-        ).pack(fill="x")
-
-        ctk.CTkLabel(
-            header,
-            text=card_name,
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=self.theme["accent"],
-            anchor="w",
-        ).pack(fill="x", pady=(8, 0))
-
-        issues_box = ctk.CTkScrollableFrame(
-            frame,
-            fg_color=self.theme["surface_alt"],
-            corner_radius=12,
-            height=160,
+        build_health_alert_surface(
+            self,
+            theme=self.theme,
+            group=group,
+            art_image=self._art_image,
+            on_acknowledge=self._on_acknowledge,
+            on_pause=self._on_pause,
+            on_alarm_toggle=self._on_alarm_toggle,
+            on_close=lambda: self._on_close(True),
+            alarm_muted=alarm_muted,
+            title="Critical Health Alert" if self._art_image is not None else "ALERT",
+            title_size=22,
+            message_size=14,
+            wraplength=520,
+            button_height=32,
         )
-        issues_box.pack(fill="both", expand=True, padx=20, pady=(8, 12))
-
-        for issue in group.get("issues") or []:
-            category = str(issue.get("category") or "")
-            message = str(issue.get("message") or "")
-            severity = str(issue.get("severity") or "critical")
-            prefix = f"{category} · " if category else ""
-            text_color = self.theme["danger"] if severity == "critical" else self.theme["text"]
-            ctk.CTkLabel(
-                issues_box,
-                text=f"{prefix}{message}",
-                font=ctk.CTkFont(size=13),
-                text_color=text_color,
-                anchor="w",
-                justify="left",
-                wraplength=460,
-            ).pack(fill="x", padx=12, pady=4)
-
-        actions = ctk.CTkFrame(frame, fg_color="transparent")
-        actions.pack(fill="x", padx=20, pady=(0, 12))
-        actions.grid_columnconfigure(0, weight=1)
-        actions.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkButton(
-            actions,
-            text="Acknowledge",
-            fg_color=self.theme["accent"],
-            hover_color=self.theme["accent_soft"],
-            command=self._on_acknowledge,
-        ).grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
-
-        ctk.CTkButton(
-            actions,
-            text="Alarm on" if alarm_muted else "Alarm off",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=self._on_alarm_toggle,
-        ).grid(row=0, column=1, padx=(6, 0), pady=(0, 6), sticky="ew")
-
-        pause_row = ctk.CTkFrame(frame, fg_color="transparent")
-        pause_row.pack(fill="x", padx=20, pady=(0, 12))
-        for col in range(5):
-            pause_row.grid_columnconfigure(col, weight=1)
-
-        ctk.CTkLabel(
-            pause_row,
-            text="Pause:",
-            font=ctk.CTkFont(size=12),
-            text_color=self.theme["muted"],
-        ).grid(row=0, column=0, padx=(0, 8), sticky="w")
-
-        for index, minutes in enumerate((5, 10, 15, 20), start=1):
-            ctk.CTkButton(
-                pause_row,
-                text=f"Pause {minutes} min",
-                height=28,
-                fg_color=self.theme["surface_alt"],
-                hover_color=self.theme["border"],
-                command=lambda m=minutes: self._on_pause(m),
-            ).grid(row=0, column=index, padx=4, sticky="ew")
-
-        ctk.CTkButton(
-            frame,
-            text="Close",
-            fg_color=self.theme["surface_alt"],
-            hover_color=self.theme["border"],
-            command=lambda: self._on_close(True),
-        ).pack(fill="x", padx=20, pady=(0, 20))
 
         self.update_idletasks()
         self.geometry(f"{max(520, self.winfo_reqwidth())}x{max(360, self.winfo_reqheight())}")

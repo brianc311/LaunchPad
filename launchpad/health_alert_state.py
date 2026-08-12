@@ -154,18 +154,30 @@ def _dedupe_node_controller_candidates(
         entity
         for candidate in candidates
         if candidate.get("category") == "controller"
-        and (entity := _issue_entity_key(str(candidate.get("message") or "")))
-    }
-    if not controller_entities:
-        return candidates
-    return [
-        candidate
-        for candidate in candidates
-        if not (
-            candidate.get("category") == "node"
-            and _issue_entity_key(str(candidate.get("message") or "")) in controller_entities
+        and (
+            entity := _issue_entity_key(
+                str(candidate.get("_dedupe_message") or candidate.get("message") or "")
+            )
         )
-    ]
+    }
+    deduped = (
+        candidates
+        if not controller_entities
+        else [
+            candidate
+            for candidate in candidates
+            if not (
+                candidate.get("category") == "node"
+                and _issue_entity_key(
+                    str(candidate.get("_dedupe_message") or candidate.get("message") or "")
+                )
+                in controller_entities
+            )
+        ]
+    )
+    for candidate in deduped:
+        candidate.pop("_dedupe_message", None)
+    return deduped
 
 
 def _indicates_offline_degraded(issue: dict[str, Any]) -> bool:
@@ -191,6 +203,7 @@ def _candidate(
         "category": category,
         "message": message,
         "severity": severity,
+        "_dedupe_message": fp_message,
     }
 
 
@@ -233,7 +246,19 @@ def collect_critical_candidates(card: dict[str, Any], *, monitor_on: bool) -> li
                 severity = "critical"
         if not is_critical:
             continue
-        candidates.append(_candidate(card_id, card_name, category, message, severity))
+        fingerprint_message = issue.get("fingerprint_message")
+        candidates.append(
+            _candidate(
+                card_id,
+                card_name,
+                category,
+                message,
+                severity,
+                fingerprint_message=(
+                    None if fingerprint_message is None else str(fingerprint_message)
+                ),
+            )
+        )
     return _dedupe_node_controller_candidates(candidates)
 
 

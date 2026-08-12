@@ -55,19 +55,31 @@ def _patch_cards(monkeypatch, server: HealthServer, cards: list[dict]):
     )
 
 
-def _call_get_health_alerts(monkeypatch, server: HealthServer):
+def _call_get(monkeypatch, server: HealthServer, path: str):
     handler = object.__new__(_HealthHandler)
-    handler.path = "/api/health-alerts"
+    handler.path = path
     sent: dict = {}
 
     def _send_json(data, status=200):
         sent["json"] = data
         sent["status"] = status
 
+    def _send_bytes(body, *, content_type, filename=None, status=200):
+        sent["body"] = body
+        sent["content_type"] = content_type
+        sent["filename"] = filename
+        sent["status"] = status
+
     handler._send_json = _send_json
+    handler._send_bytes = _send_bytes
+    handler.send_error = lambda status: sent.update(status=status)
     monkeypatch.setattr("launchpad.health_server.get_health_server", lambda: server)
     handler.do_GET()
     return sent
+
+
+def _call_get_health_alerts(monkeypatch, server: HealthServer):
+    return _call_get(monkeypatch, server, "/api/health-alerts")
 
 
 def _call_post_health_alert(monkeypatch, server: HealthServer, path: str, payload: dict):
@@ -101,6 +113,25 @@ def test_get_health_alerts_returns_critical_popup(monkeypatch):
     assert payload["alerts"][0]["card_name"] == "Site A"
     assert payload["cards"]["1"]["alarm_muted"] is False
     assert payload["cards"]["1"]["paused_until"] is None
+
+
+def test_get_health_alerts_includes_art_url_when_card_art_exists(monkeypatch, tmp_path):
+    _, getter, setter = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(getter, setter)
+    _register(server, 1, "Site A", monitor_on=True)
+    _patch_cards(monkeypatch, server, [_critical_card()])
+    art_path = tmp_path / "SITE_A.png"
+    art_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setattr(
+        "launchpad.health_server.resolve_health_alert_art",
+        lambda card_name: art_path if card_name == "Site A" else None,
+    )
+
+    payload = server.get_health_alerts()
+
+    assert payload["alerts"][0]["art_url"] == "/api/health-alerts/art?card_id=1"
+    assert payload["cards"]["1"]["art_url"] == "/api/health-alerts/art?card_id=1"
 
 
 def test_get_health_alerts_excludes_warn_issues(monkeypatch):
@@ -303,6 +334,37 @@ def test_get_health_alerts_route(monkeypatch):
 
     assert sent["status"] == 200
     assert len(sent["json"]["alerts"]) == 1
+
+
+def test_get_health_alert_art_route_returns_png(monkeypatch, tmp_path):
+    server = HealthServer()
+    _register(server, 7, "Site Art", monitor_on=True)
+    art_path = tmp_path / "SITE_ART.png"
+    png = b"\x89PNG\r\n\x1a\nart"
+    art_path.write_bytes(png)
+    monkeypatch.setattr(
+        "launchpad.health_server.resolve_health_alert_art",
+        lambda card_name: art_path if card_name == "Site Art" else None,
+    )
+
+    sent = _call_get(monkeypatch, server, "/api/health-alerts/art?card_id=7")
+
+    assert sent["status"] == 200
+    assert sent["body"] == png
+    assert sent["content_type"] == "image/png"
+
+
+def test_get_health_alert_art_route_returns_404_without_art(monkeypatch):
+    server = HealthServer()
+    _register(server, 8, "No Art", monitor_on=True)
+    monkeypatch.setattr(
+        "launchpad.health_server.resolve_health_alert_art",
+        lambda _card_name: None,
+    )
+
+    sent = _call_get(monkeypatch, server, "/api/health-alerts/art?card_id=8")
+
+    assert sent["status"] == 404
 
 
 def test_post_acknowledge_route(monkeypatch):

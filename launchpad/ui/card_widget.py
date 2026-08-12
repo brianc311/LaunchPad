@@ -1,7 +1,12 @@
 import customtkinter as ctk
 
+from launchpad.health_alert_art import resolve_health_alert_art
 from launchpad.icons import resolve_icon
 from launchpad.ui.colors import ctk_color, normalize_color
+from launchpad.ui.health_alert_layout import (
+    build_health_alert_surface,
+    load_alert_art_image,
+)
 
 # CRIT/WARN hover tip: keep short-lived and never permanently topmost over other apps.
 CAPACITY_ALERT_TIP_MAX_MS = 4000
@@ -60,6 +65,7 @@ class GlowCard(ctk.CTkFrame):
         self.on_reorder = on_reorder
         self.on_selection_change = on_selection_change
         self.on_collapsed_change = on_collapsed_change
+        self.name = name
         self.card_id = card_id
         self.draggable = draggable
         self.dashboard = dashboard
@@ -69,6 +75,9 @@ class GlowCard(ctk.CTkFrame):
         self._stats_left_lines: list[str] = []
         self._stats_right_lines: list[str] = []
         self._stats_error: str | None = None
+        self._health_alert_overlay = None
+        self._health_alert_art_image = None
+        self._health_alert_signature: str | None = None
 
         self.grid_columnconfigure(0, weight=1)
         stats_row = 3 if show_stats else 2
@@ -962,6 +971,77 @@ class GlowCard(ctk.CTkFrame):
                 except Exception:
                     pass
                 self._capacity_alert_tip_window = None
+
+    def health_alert_overlay_signature(self, group: dict, *, alarm_muted: bool) -> str:
+        issues = group.get("issues") or []
+        parts = [str(group.get("card_id")), "1" if alarm_muted else "0"]
+        parts.extend(
+            str(issue.get("fingerprint") or issue.get("message") or "") for issue in issues
+        )
+        return "\x1f".join(parts)
+
+    def clear_health_alert_overlay(self) -> None:
+        overlay = self._health_alert_overlay
+        self._health_alert_overlay = None
+        self._health_alert_art_image = None
+        self._health_alert_signature = None
+        if overlay is not None:
+            try:
+                if overlay.winfo_exists():
+                    overlay.destroy()
+            except Exception:
+                pass
+
+    def set_health_alert_overlay(
+        self,
+        group: dict,
+        *,
+        on_acknowledge,
+        on_pause,
+        on_alarm_toggle,
+        on_close,
+        alarm_muted: bool = False,
+    ) -> None:
+        signature = self.health_alert_overlay_signature(group, alarm_muted=alarm_muted)
+        if (
+            self._health_alert_overlay is not None
+            and self._health_alert_signature == signature
+        ):
+            # Rebuilding an unchanged overlay every poll flickers and re-decodes the PNG.
+            return
+
+        self.clear_health_alert_overlay()
+        overlay = ctk.CTkFrame(
+            self,
+            fg_color=self.theme["surface"],
+            border_width=2,
+            border_color=self.theme["danger"],
+            corner_radius=16,
+        )
+        self._health_alert_overlay = overlay
+        self._health_alert_signature = signature
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        art_path = resolve_health_alert_art(str(group.get("card_name") or self.name))
+        self._health_alert_art_image = load_alert_art_image(art_path, (360, 210))
+
+        build_health_alert_surface(
+            overlay,
+            theme=self.theme,
+            group=group,
+            art_image=self._health_alert_art_image,
+            on_acknowledge=on_acknowledge,
+            on_pause=on_pause,
+            on_alarm_toggle=on_alarm_toggle,
+            on_close=on_close,
+            alarm_muted=alarm_muted,
+            title="ALERT",
+            title_size=18,
+            message_size=11,
+            wraplength=300,
+            button_height=24,
+        )
 
     def set_health_alarm_muted(
         self,

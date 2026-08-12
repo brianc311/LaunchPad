@@ -781,6 +781,68 @@ def _analyze_status_table(
             issues.append(issue)
 
 
+# lsportfc reports active / inactive_configured / inactive_unconfigured. Only the last
+# is unexpected: inactive_configured is the normal state for an SFP with no host on it,
+# so alerting on a bare "inactive" substring would page on every idle port in the fleet.
+_FC_PORT_OK_STATUS = frozenset(
+    {"active", "inactive_configured", "configured", "online", "ok", "yes"}
+)
+_FC_PORT_CRITICAL_STATUS = frozenset({"inactive_unconfigured"})
+_FC_PORT_BAD_TOKENS = ("offline", "fail", "degrad", "error", "dead", "fault", "excluded")
+
+
+def _fc_port_status_is_critical(status: str) -> bool:
+    lowered = str(status or "").strip().lower()
+    if not lowered or lowered in _FC_PORT_OK_STATUS:
+        return False
+    if lowered in _FC_PORT_CRITICAL_STATUS:
+        return True
+    return any(token in lowered for token in _FC_PORT_BAD_TOKENS)
+
+
+def _is_fc_port_row(record: dict[str, str]) -> bool:
+    port_type = str(record.get("type") or "").strip().lower()
+    return not port_type or port_type.startswith("fc")
+
+
+def _fc_port_label(record: dict[str, str]) -> str:
+    port = _first_text(
+        record.get("fc_io_port_id"),
+        record.get("port_id"),
+        record.get("id"),
+    ) or "unknown"
+    # fc_io_port_id repeats across nodes, so the node has to be part of the message
+    # (and therefore the fingerprint) or one Suppress would silence both ports.
+    node = _first_text(record.get("node_name"), record.get("node_id"))
+    location = _first_text(record.get("adapter_location"))
+    label = f"port {port}"
+    if node:
+        label += f" on {node}"
+    if location:
+        label += f" slot {location}"
+    return label
+
+
+def _analyze_fc_ports(issues: list[dict[str, Any]], *, server: str, output: str) -> None:
+    headers, rows = _table_rows(output)
+    if not headers or not rows:
+        return
+    for row in rows:
+        record = _row_map(headers, row)
+        if not _is_fc_port_row(record):
+            continue
+        if not _fc_port_status_is_critical(record.get("status", "")):
+            continue
+        issues.append(
+            {
+                "severity": "critical",
+                "category": "io",
+                "message": f"I/O card failed ({_fc_port_label(record)})",
+                "server": server,
+            }
+        )
+
+
 def _first_text(*values: str) -> str:
     for value in values:
         text = str(value or "").strip()
@@ -795,6 +857,11 @@ def _analyze_alerts(issues: list[dict[str, Any]], *, server: str, output: str) -
         return
     for row in rows:
         record = _row_map(headers, row)
+        operator_evidence = " ".join(
+            str(value or "").strip()
+            for value in record.values()
+            if str(value or "").strip()
+        )
         message = _first_text(
             record.get("message"),
             record.get("description"),
@@ -824,8 +891,48 @@ def _analyze_alerts(issues: list[dict[str, Any]], *, server: str, output: str) -
                 "category": category,
                 "message": message[:140],
                 "server": server,
+                "_operator_evidence": operator_evidence,
             }
         )
+
+
+def _apply_operator_wording(
+    issues: list[dict[str, Any]], alert_issues: list[dict[str, Any]]
+) -> None:
+    canister_offline = any(
+        issue.get("category") in {"node", "controller"}
+        and "offline" in str(issue.get("message") or "").lower()
+        for issue in issues
+    )
+    bad_status_pattern = re.compile(
+        r"\bis (offline|degraded|failed|error|down|missing|inactive|fault)$",
+        re.IGNORECASE,
+    )
+    for issue in issues:
+        category = issue.get("category")
+        original_message = str(issue.get("message") or "")
+        match = bad_status_pattern.search(original_message)
+        if category in {"node", "controller"} and match:
+            status = match.group(1).lower()
+            if status in {"offline", "failed", "down"}:
+                issue["fingerprint_message"] = original_message
+                issue["message"] = f"Canister {status}"
+        elif category in {"drive", "disk", "mdisk", "nvme"} and match:
+            issue["fingerprint_message"] = original_message
+            issue["message"] = "Hard drive failed"
+        elif (
+            category in {"connectivity", "network"}
+            and issue.get("severity") == "critical"
+        ):
+            issue["fingerprint_message"] = original_message
+            issue["message"] = "Network down"
+    power_pattern = re.compile(r"\b(?:power|psu|ups|battery)\b", re.IGNORECASE)
+    for issue in alert_issues:
+        evidence = str(issue.pop("_operator_evidence", "") or "")
+        if canister_offline and power_pattern.search(evidence):
+            issue["fingerprint_message"] = evidence
+            issue["message"] = "Canister lost power"
+            issue["severity"] = "critical"
 
 
 def _analyze_volume_capacity(issues: list[dict[str, Any]], *, server: str, output: str) -> None:
@@ -972,6 +1079,11 @@ def analyze_health(
             category="controller",
             item_label="Controller",
         )
+        _analyze_fc_ports(
+            issues,
+            server=server_name,
+            output=_result_output(_find_result(command_results, "lsportfc", "fc - ports")),
+        )
         _analyze_status_table(
             issues,
             server=server_name,
@@ -1013,6 +1125,7 @@ def analyze_health(
             server=server_name,
             output=_result_output(_find_result(command_results, "lsvdisk", "memory - volumes")),
         )
+        alert_start = len(issues)
         _analyze_alerts(
             issues,
             server=server_name,
@@ -1020,6 +1133,7 @@ def analyze_health(
                 _find_result(command_results, "lseventlog", "health - alerts", "showalert", "event_list")
             ),
         )
+        _apply_operator_wording(issues, issues[alert_start:])
         check_output = _result_output(_find_result(command_results, "checkhealth", "health - overall"))
         if check_output:
             lower = check_output.lower()
