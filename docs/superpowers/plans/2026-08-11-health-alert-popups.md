@@ -233,7 +233,7 @@ def test_pause_and_alarm_mute():
 }
 ```
 
-`collect_critical_candidates`: if not monitor_on → []. If error and no useful health data → connectivity critical. Else include health_issues with severity critical; also include nvme/disk/mdisk/drive issues whose message/status indicates offline/degraded even if severity was warn (normalize to critical in the candidate).
+collect_critical_candidates: if not monitor_on then empty. If error and no useful health data then connectivity critical. Else include health_issues with severity critical; also include nvme/disk/mdisk/drive issues whose message/status indicates offline/degraded even if severity was warn (normalize to critical in the candidate).
 
 - [ ] **Step 4: Run — expect PASS**
 
