@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from typing import Any
 
 from launchpad.contingency_snap_create import cli_token, parse_capacity_to_gb
 from launchpad.lun_builder_data import expand_lun_batch, supports_live_run
 from launchpad.storage_presets import HP_3PAR_PROFILES, SVC_PROFILES
+
+_BARE_SIZE_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 
 
 def _command_token(value: Any) -> str:
@@ -20,10 +23,22 @@ def _command_token(value: Any) -> str:
 
 
 def _size_gb(value: str) -> int | float:
-    size_gb = parse_capacity_to_gb(value)
+    raw = str(value or "").strip()
+    if _BARE_SIZE_RE.fullmatch(raw):
+        raw = f"{raw}GB"
+    size_gb = parse_capacity_to_gb(raw)
     if size_gb is None or size_gb <= 0:
         raise ValueError(f"Invalid LUN size: {value!r}")
     return int(size_gb) if size_gb == int(size_gb) else size_gb
+
+
+def _format_size_gb_cli(size_gb: int | float) -> str:
+    if isinstance(size_gb, int) or size_gb == int(size_gb):
+        return str(int(size_gb))
+    text = f"{float(size_gb):.10f}".rstrip("0").rstrip(".")
+    if not text or "e" in text.lower():
+        raise ValueError(f"Cannot format LUN size for CLI: {size_gb!r}")
+    return text
 
 
 def _inventory_for_card(
@@ -91,7 +106,7 @@ def build_lun_steps(
                         label=f"Create volume {name}",
                         cmd=(
                             f"svctask mkvdisk -name {name} -mdiskgrp {pool} "
-                            f"-size {size_gb} -unit gb"
+                            f"-size {_format_size_gb_cli(size_gb)} -unit gb"
                         ),
                         card_hint=card_hint,
                         profile=profile,

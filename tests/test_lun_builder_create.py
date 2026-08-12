@@ -292,3 +292,59 @@ def test_run_executes_only_live_non_skipped_steps():
         "plan-only",
         "skipped",
     ]
+
+
+def test_svc_bare_size_means_gb():
+    steps = build_lun_steps(
+        _build(
+            {
+                "purpose": "vol",
+                "count": 1,
+                "size": "100",
+                "pool_or_cpg": "MtVerno_Pool1",
+                "storage_profile": "flashsystem_5200",
+                "card_hint": "cardA",
+            }
+        ),
+        inventory_by_card=None,
+    )
+    assert "-size 100 -unit gb" in steps[0]["cmd"]
+    assert "e-" not in steps[0]["cmd"].lower()
+    assert "e+" not in steps[0]["cmd"].lower()
+
+
+def test_svc_explicit_gb_unchanged():
+    steps = build_lun_steps(
+        _build(
+            {
+                "purpose": "vol",
+                "count": 1,
+                "size": "100GB",
+                "pool_or_cpg": "Pool0",
+                "storage_profile": "flashsystem_5200",
+                "card_hint": "cardA",
+            }
+        ),
+        inventory_by_card=None,
+    )
+    assert "-size 100 -unit gb" in steps[0]["cmd"]
+
+
+def test_svc_fractional_size_has_no_scientific_notation():
+    steps = build_lun_steps(
+        _build(
+            {
+                "purpose": "vol",
+                "count": 1,
+                "size": "1.5",
+                "pool_or_cpg": "Pool0",
+                "storage_profile": "flashsystem_5200",
+                "card_hint": "cardA",
+            }
+        ),
+        inventory_by_card=None,
+    )
+    cmd = steps[0]["cmd"]
+    assert "-size 1.5 -unit gb" in cmd
+    size_token = cmd.split("-size", 1)[1].split("-unit", 1)[0]
+    assert "e" not in size_token.lower()
