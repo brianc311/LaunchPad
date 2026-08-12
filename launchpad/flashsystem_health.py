@@ -781,6 +781,26 @@ def _analyze_status_table(
             issues.append(issue)
 
 
+def _analyze_fc_ports(issues: list[dict[str, Any]], *, server: str, output: str) -> None:
+    headers, rows = _table_rows(output)
+    if not headers or not rows:
+        return
+    for row in rows:
+        record = _row_map(headers, row)
+        status = record.get("status", "")
+        if status.strip().lower() not in _BAD_STATUS:
+            continue
+        port = record.get("fc_io_port_id") or record.get("id") or "unknown"
+        issues.append(
+            {
+                "severity": "critical",
+                "category": "io",
+                "message": f"I/O card failed (port {port})",
+                "server": server,
+            }
+        )
+
+
 def _first_text(*values: str) -> str:
     for value in values:
         text = str(value or "").strip()
@@ -826,6 +846,41 @@ def _analyze_alerts(issues: list[dict[str, Any]], *, server: str, output: str) -
                 "server": server,
             }
         )
+
+
+def _apply_operator_wording(
+    issues: list[dict[str, Any]], alert_issues: list[dict[str, Any]]
+) -> None:
+    canister_offline = any(
+        issue.get("category") in {"node", "controller"}
+        and "offline" in str(issue.get("message") or "").lower()
+        for issue in issues
+    )
+    bad_status_pattern = re.compile(
+        r"\bis (offline|degraded|failed|error|down|missing|inactive|fault)$",
+        re.IGNORECASE,
+    )
+    for issue in issues:
+        category = issue.get("category")
+        match = bad_status_pattern.search(str(issue.get("message") or ""))
+        if category in {"node", "controller"} and match:
+            status = match.group(1).lower()
+            if status in {"offline", "failed", "down"}:
+                issue["message"] = f"Canister {status}"
+        elif category in {"drive", "disk", "mdisk", "nvme"} and match:
+            issue["message"] = "Hard drive failed"
+        elif (
+            category in {"connectivity", "network"}
+            and issue.get("severity") == "critical"
+        ):
+            issue["message"] = "Network down"
+    if not canister_offline:
+        return
+    power_pattern = re.compile(r"\b(?:power|psu|ups|battery)\b", re.IGNORECASE)
+    for issue in alert_issues:
+        if power_pattern.search(str(issue.get("message") or "")):
+            issue["message"] = "Canister lost power"
+            issue["severity"] = "critical"
 
 
 def _analyze_volume_capacity(issues: list[dict[str, Any]], *, server: str, output: str) -> None:
@@ -972,6 +1027,11 @@ def analyze_health(
             category="controller",
             item_label="Controller",
         )
+        _analyze_fc_ports(
+            issues,
+            server=server_name,
+            output=_result_output(_find_result(command_results, "lsportfc", "fc - ports")),
+        )
         _analyze_status_table(
             issues,
             server=server_name,
@@ -1013,6 +1073,7 @@ def analyze_health(
             server=server_name,
             output=_result_output(_find_result(command_results, "lsvdisk", "memory - volumes")),
         )
+        alert_start = len(issues)
         _analyze_alerts(
             issues,
             server=server_name,
@@ -1020,6 +1081,7 @@ def analyze_health(
                 _find_result(command_results, "lseventlog", "health - alerts", "showalert", "event_list")
             ),
         )
+        _apply_operator_wording(issues, issues[alert_start:])
         check_output = _result_output(_find_result(command_results, "checkhealth", "health - overall"))
         if check_output:
             lower = check_output.lower()
