@@ -908,6 +908,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 1.2rem;
     }
     .modal-body .table-wrap { max-height: 58vh; }
+    #health-alert-modal { z-index: 1100; }
+    .health-alert-card-name {
+      margin: 0 0 12px;
+      font-size: 1.35rem;
+      color: var(--bad);
+    }
+    .health-alert-issues {
+      margin: 0 0 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .health-alert-issues .issue { margin: 0; }
+    .health-alert-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .health-alert-actions .pause-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .health-alert-actions .pause-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-right: 2px;
+    }
   </style>
 </head>
 <body>
@@ -972,6 +1002,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div id="modal-body" class="modal-body"></div>
     </div>
   </div>
+  <div id="health-alert-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal health-alert-modal" role="dialog" aria-modal="true" aria-labelledby="health-alert-title">
+      <div class="modal-head">
+        <h3 id="health-alert-title">Critical Health Alert</h3>
+        <button type="button" class="secondary" id="health-alert-close-btn">Close</button>
+      </div>
+      <div class="modal-body">
+        <p id="health-alert-card-name" class="health-alert-card-name"></p>
+        <div id="health-alert-issues" class="health-alert-issues issue-list"></div>
+        <div class="health-alert-actions">
+          <button type="button" id="health-alert-ack-btn">Acknowledge</button>
+          <button type="button" class="secondary" id="health-alert-alarm-btn">Alarm off</button>
+          <div class="pause-group">
+            <span class="pause-label">Pause</span>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="5">Pause 5 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="10">Pause 10 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="15">Pause 15 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="20">Pause 20 min</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>
     let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const serversEl = document.getElementById("servers");
@@ -984,6 +1037,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalTitleEl = document.getElementById("modal-title");
     const modalBodyEl = document.getElementById("modal-body");
     const modalCloseEl = document.getElementById("modal-close");
+    const healthAlertModalEl = document.getElementById("health-alert-modal");
+    const healthAlertCardNameEl = document.getElementById("health-alert-card-name");
+    const healthAlertIssuesEl = document.getElementById("health-alert-issues");
+    const healthAlertAckBtn = document.getElementById("health-alert-ack-btn");
+    const healthAlertAlarmBtn = document.getElementById("health-alert-alarm-btn");
+    const healthAlertCloseBtn = document.getElementById("health-alert-close-btn");
+    const healthAlertPauseBtns = document.querySelectorAll(".health-alert-pause-btn");
     const showAlertsToggle = document.getElementById("show-alerts-toggle");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
     const includeOffToggle = document.getElementById("include-off-toggle");
@@ -1010,6 +1070,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     };
     const autoTimers = {};
     let monitorServerState = {};
+    const HEALTH_ALERT_POLL_MS = 30000;
+    let healthAlertQueue = [];
+    let healthAlertQueueIndex = 0;
+    let healthAlertCurrent = null;
+    let healthAlertModalOpen = false;
+    let healthAlertPollRunning = false;
 
     function isMonitorOn(cardId) {
       const key = String(cardId);
@@ -1449,8 +1515,179 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (event.target === modalEl) closeModal();
     });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeModal();
+      if (event.key !== "Escape") return;
+      if (healthAlertModalOpen) {
+        closeHealthAlertModal(false);
+        return;
+      }
+      closeModal();
     });
+
+    function groupHealthAlerts(alerts) {
+      const groups = new Map();
+      (alerts || []).forEach((alert) => {
+        const cardId = alert.card_id;
+        const key = String(cardId);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            card_id: cardId,
+            card_name: alert.card_name || `Card ${cardId}`,
+            issues: [],
+          });
+        }
+        groups.get(key).issues.push(alert);
+      });
+      return [...groups.values()].sort(
+        (a, b) =>
+          String(a.card_name).localeCompare(String(b.card_name)) ||
+          Number(a.card_id) - Number(b.card_id)
+      );
+    }
+
+    function renderHealthAlertIssues(issues) {
+      return (issues || [])
+        .map((issue) => {
+          const sev = escapeHtml(issue.severity || "critical");
+          const cat = escapeHtml(issue.category || "");
+          const msg = escapeHtml(issue.message || "");
+          return `<div class="issue ${sev}"><span>${cat ? cat + " · " : ""}${msg}</span></div>`;
+        })
+        .join("");
+    }
+
+    function openHealthAlertModal(group) {
+      if (!group || !group.issues?.length || !healthAlertModalEl) return;
+      healthAlertCurrent = group;
+      healthAlertModalOpen = true;
+      if (healthAlertCardNameEl) {
+        healthAlertCardNameEl.textContent = group.card_name || `Card ${group.card_id}`;
+      }
+      if (healthAlertIssuesEl) {
+        healthAlertIssuesEl.innerHTML = renderHealthAlertIssues(group.issues);
+      }
+      healthAlertModalEl.classList.add("open");
+      healthAlertModalEl.setAttribute("aria-hidden", "false");
+    }
+
+    function closeHealthAlertModal(advanceQueue) {
+      if (!healthAlertModalEl) return;
+      healthAlertModalOpen = false;
+      healthAlertCurrent = null;
+      healthAlertModalEl.classList.remove("open");
+      healthAlertModalEl.setAttribute("aria-hidden", "true");
+      if (healthAlertIssuesEl) healthAlertIssuesEl.innerHTML = "";
+      if (advanceQueue) {
+        healthAlertQueueIndex += 1;
+        showNextHealthAlertFromQueue();
+      }
+    }
+
+    function showNextHealthAlertFromQueue() {
+      while (healthAlertQueueIndex < healthAlertQueue.length) {
+        const group = healthAlertQueue[healthAlertQueueIndex];
+        if (group?.issues?.length) {
+          openHealthAlertModal(group);
+          return;
+        }
+        healthAlertQueueIndex += 1;
+      }
+    }
+
+    function applyHealthAlertPayload(payload) {
+      healthAlertQueue = groupHealthAlerts(payload?.alerts || []);
+      if (healthAlertModalOpen) return;
+      healthAlertQueueIndex = 0;
+      showNextHealthAlertFromQueue();
+    }
+
+    async function postHealthAlertAction(path, body) {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || "Request failed");
+      return payload;
+    }
+
+    async function pollHealthAlerts() {
+      if (healthAlertPollRunning) return;
+      healthAlertPollRunning = true;
+      try {
+        const res = await fetch("/api/health-alerts");
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.error || "Alert poll failed");
+        applyHealthAlertPayload(payload);
+      } catch (_err) {
+        /* best-effort poll */
+      } finally {
+        healthAlertPollRunning = false;
+      }
+    }
+
+    async function acknowledgeCurrentHealthAlert() {
+      if (!healthAlertCurrent?.issues?.length) return;
+      const fingerprints = healthAlertCurrent.issues.map((issue) => issue.fingerprint);
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/acknowledge", {
+          fingerprints,
+        });
+        closeHealthAlertModal(false);
+        applyHealthAlertPayload(payload);
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    async function pauseCurrentHealthAlert(minutes) {
+      if (!healthAlertCurrent) return;
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/pause", {
+          card_id: healthAlertCurrent.card_id,
+          minutes,
+        });
+        closeHealthAlertModal(false);
+        applyHealthAlertPayload(payload);
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    async function muteCurrentHealthAlarm() {
+      if (!healthAlertCurrent) return;
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/alarm", {
+          card_id: healthAlertCurrent.card_id,
+          muted: true,
+        });
+        closeHealthAlertModal(false);
+        applyHealthAlertPayload(payload);
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    if (healthAlertCloseBtn) {
+      healthAlertCloseBtn.addEventListener("click", () => closeHealthAlertModal(true));
+    }
+    if (healthAlertAckBtn) {
+      healthAlertAckBtn.addEventListener("click", () => acknowledgeCurrentHealthAlert());
+    }
+    if (healthAlertAlarmBtn) {
+      healthAlertAlarmBtn.addEventListener("click", () => muteCurrentHealthAlarm());
+    }
+    healthAlertPauseBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const minutes = parseInt(btn.dataset.minutes, 10);
+        if (minutes) pauseCurrentHealthAlert(minutes);
+      });
+    });
+    if (healthAlertModalEl) {
+      healthAlertModalEl.addEventListener("click", (event) => {
+        if (event.target === healthAlertModalEl) closeHealthAlertModal(true);
+      });
+    }
 
     function escapeHtml(value) {
       return String(value)
@@ -1915,6 +2152,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         updateSummary(cardsCache);
         renderIssues(cardsCache);
         wireInteractiveButtons();
+        pollHealthAlerts();
         return card;
       } catch (err) {
         if (section) {
@@ -2204,8 +2442,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     loadJigglerStatus();
     loadCards();
+    pollHealthAlerts();
     setInterval(loadCards, 15000);
     setInterval(loadJigglerStatus, 30000);
+    setInterval(pollHealthAlerts, HEALTH_ALERT_POLL_MS);
   </script>
 </body>
 </html>"""
