@@ -68,7 +68,7 @@ def test_collect_splits_ibm_and_hp_rows():
     assert "3" not in store
 
 
-def test_collect_skips_when_only_raw_no_array_summary():
+def test_collect_emits_row_when_only_raw_no_array_snapshot():
     sites = [
         {
             "card_id": 5,
@@ -91,7 +91,13 @@ def test_collect_skips_when_only_raw_no_array_summary():
         now=datetime(2026, 8, 5, tzinfo=timezone.utc),
     )
     assert ibm == []
-    assert hp == []
+    assert len(hp) == 1
+    assert hp[0]["array_name"]  # identity resolved
+    assert hp[0]["curr_usable_gib"] == pytest.approx(200.0)
+    assert hp[0]["curr_used_gib"] == pytest.approx(50.0)
+    assert hp[0]["curr_util"] == pytest.approx(0.25)
+    assert hp[0]["prior_usable_gib"] is None
+    assert hp[0]["weekly_growth"] is None
     assert store == {}
 
 
@@ -128,7 +134,7 @@ def test_collect_snapshots_array_not_raw_when_both_present():
     assert snap["layer"] == "system"
 
 
-def test_collect_skips_all_cpgs_even_when_raw_present():
+def test_collect_emits_raw_when_all_cpgs_and_raw_cpg_off():
     sites = [
         {
             "card_id": 5,
@@ -154,7 +160,9 @@ def test_collect_skips_all_cpgs_even_when_raw_present():
         now=datetime(2026, 8, 5, tzinfo=timezone.utc),
     )
     assert ibm == []
-    assert hp == []
+    assert len(hp) == 1
+    assert hp[0]["curr_usable_gib"] == pytest.approx(200.0)
+    assert hp[0]["curr_used_gib"] == pytest.approx(50.0)
     assert store == {}
 
 
