@@ -586,6 +586,7 @@ def _build_report_wkly_sheet(
     snapshot_store: dict,
 ) -> None:
     weeks = _weeks_for_report_wkly(rows, snapshot_store)
+    current_week = iso_week_key(report_date)
     _add_logos(ws, sheet_title=ws.title)
     ws.cell(row=_META_ROW, column=2, value="Home")
     first_week_col = _FIRST_DATA_COL + 3
@@ -638,21 +639,33 @@ def _build_report_wkly_sheet(
         for week_i, week in enumerate(weeks):
             base = _FIRST_DATA_COL + 3 + week_i * 3
             snap = card_weeks.get(week) if isinstance(card_weeks, dict) else None
-            if not isinstance(snap, dict):
+            if isinstance(snap, dict):
+                usable = float(snap.get("usable_bytes") or 0)
+                used = float(snap.get("used_bytes") or 0)
+                usable_cell = ws.cell(
+                    row=excel_row, column=base, value=bytes_to_capacity_unit(usable)
+                )
+                usable_cell.number_format = "0.00"
+                used_cell = ws.cell(
+                    row=excel_row, column=base + 1, value=bytes_to_capacity_unit(used)
+                )
+                used_cell.number_format = "0.00"
+                util = _util_fraction(used, usable)
+                util_cell = ws.cell(row=excel_row, column=base + 2, value=util)
+                util_cell.number_format = "0.0%"
+            elif week == current_week and row.get("curr_usable_gib") is not None:
+                usable_cell = ws.cell(
+                    row=excel_row, column=base, value=row.get("curr_usable_gib")
+                )
+                usable_cell.number_format = "0.00"
+                used_cell = ws.cell(
+                    row=excel_row, column=base + 1, value=row.get("curr_used_gib")
+                )
+                used_cell.number_format = "0.00"
+                util_cell = ws.cell(row=excel_row, column=base + 2, value=row.get("curr_util"))
+                util_cell.number_format = "0.0%"
+            else:
                 continue
-            usable = float(snap.get("usable_bytes") or 0)
-            used = float(snap.get("used_bytes") or 0)
-            usable_cell = ws.cell(
-                row=excel_row, column=base, value=bytes_to_capacity_unit(usable)
-            )
-            usable_cell.number_format = "0.00"
-            used_cell = ws.cell(
-                row=excel_row, column=base + 1, value=bytes_to_capacity_unit(used)
-            )
-            used_cell.number_format = "0.00"
-            util = _util_fraction(used, usable)
-            util_cell = ws.cell(row=excel_row, column=base + 2, value=util)
-            util_cell.number_format = "0.0%"
 
     if sorted_rows and util_columns:
         end_row = data_start + len(sorted_rows) - 1
