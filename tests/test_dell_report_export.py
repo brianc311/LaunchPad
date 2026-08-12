@@ -442,3 +442,31 @@ def test_home_lists_forecast_sheets():
     assert "IBM Forecast" in home_text
     assert "HP Forecast" in home_text
     assert "PowerMax Forecast - Wkly" in home_text
+
+
+def test_hp_report_wkly_uses_row_curr_when_no_snapshot():
+    rows = [
+        _minimal_row(
+            card_id=5,
+            facility="Data center -WAG2",
+            array_name="HPE - VDIPRIMERA101 - WAG2",
+            model="HPE Primera 600 4-way",
+            curr_usable_gib=200.0,
+            curr_used_gib=50.0,
+            curr_util=0.25,
+        )
+    ]
+    wb = build_dell_report_workbook(
+        ibm_rows=[],
+        hp_rows=rows,
+        snapshot_store={},
+        report_date=datetime(2026, 8, 12, tzinfo=timezone.utc),
+    )
+    ws = wb["HP Report - Wkly"]
+    assert ws.cell(row=10, column=_FIRST_DATA_COL + 1).value == (
+        "HPE - VDIPRIMERA101 - WAG2"
+    )
+    # First week metric columns start at _FIRST_DATA_COL + 3
+    assert ws.cell(row=10, column=_FIRST_DATA_COL + 3).value == pytest.approx(200.0)
+    assert ws.cell(row=10, column=_FIRST_DATA_COL + 4).value == pytest.approx(50.0)
+    assert ws.cell(row=10, column=_FIRST_DATA_COL + 5).value == pytest.approx(0.25)
