@@ -14,8 +14,9 @@ SVC_FC_COMMANDS: list[tuple[str, str]] = [
 # IBM Spectrum Virtualize / SVC CLI (FlashSystem, Storwize)
 SVC_COMMANDS: list[tuple[str, str]] = [
     ("Health - Nodes", "svcinfo lsnode -delim :"),
-    ("Health - Controllers", "svcinfo lsnode -delim :"),
+    ("Health - Controllers", "svcinfo lsnodecanister -delim :"),
     ("Health - Alerts", "svcinfo lseventlog -alert yes -delim :"),
+    ("Health - Drives", "svcinfo lsdrive -delim :"),
     ("Capacity - System %", "svcinfo lssystem -delim :"),
     ("Capacity - Pools %", "svcinfo lsmdiskgrp -delim :"),
     ("Capacity - MDisks", "svcinfo lsmdisk -delim :"),
