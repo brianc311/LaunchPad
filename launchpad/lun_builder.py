@@ -68,7 +68,10 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
     .lun-table th:nth-child(2) { min-width:150px; }   /* Purpose */
     .lun-table th:nth-child(3) { min-width:70px; }    /* Count */
     .lun-table th:nth-child(4) { min-width:220px; }   /* Volume names */
-    .lun-table th:nth-child(5) { min-width:90px; }    /* Size */
+    .lun-table th:nth-child(5) { min-width:140px; }   /* Size */
+    .size-cell { display:flex; gap:6px; align-items:center; }
+    .size-cell input { flex:1; min-width:4rem; }
+    .size-cell select { width:4.5rem; flex:0 0 4.5rem; }
     .lun-table th:nth-child(6) { min-width:64px; }    /* Shared */
     .lun-table th:nth-child(7) { min-width:210px; }   /* Storage profile */
     .lun-table th:nth-child(8) { min-width:130px; }   /* Pool / CPG */
@@ -820,6 +823,35 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       scheduleCompletionSave(build);
     }
     function input(key, value, index, kind, type="text") { return `<input type="${type}" data-kind="${kind}" data-index="${index}" data-key="${key}" value="${esc(value)}">`; }
+    function splitLunSizeForUi(size) {
+      const text = String(size || "").trim();
+      if (!text) return { amount: "", unit: "GB" };
+      const match = text.match(/^(-?\\d+(?:\\.\\d+)?)\\s*(GB|TB|MB|KB|PB|B)?$/i);
+      if (!match) return { amount: text, unit: "GB" };
+      const amount = match[1];
+      const suffix = String(match[2] || "").toUpperCase();
+      if (suffix === "GB" || suffix === "TB") return { amount, unit: suffix };
+      return { amount, unit: "GB" };
+    }
+    function joinLunSize(amount, unit) {
+      const text = String(amount || "").trim();
+      if (!text) return "";
+      const match = text.match(/^(-?\\d+(?:\\.\\d+)?)\\s*(GB|TB|MB|KB|PB|B)?$/i);
+      if (match) {
+        const suffix = String(match[2] || "").toUpperCase();
+        if (suffix === "GB" || suffix === "TB") return `${match[1]}${suffix}`;
+      }
+      let normalized = String(unit || "").trim().toUpperCase();
+      if (normalized !== "GB" && normalized !== "TB") normalized = "GB";
+      if (match) return `${match[1]}${normalized}`;
+      return `${text}${normalized}`;
+    }
+    function sizeCell(lun, index) {
+      const parts = splitLunSizeForUi(lun.size);
+      const gbSelected = parts.unit === "GB" ? " selected" : "";
+      const tbSelected = parts.unit === "TB" ? " selected" : "";
+      return `<td class="size-cell"><input type="text" data-kind="luns" data-index="${index}" data-key="size_amount" value="${esc(parts.amount)}"><select data-kind="luns" data-index="${index}" data-key="size_unit"><option value="GB"${gbSelected}>GB</option><option value="TB"${tbSelected}>TB</option></select></td>`;
+    }
     function render() {
       const build = activeBuild();
       const inventoryMode = viewMode === "inventory";
@@ -880,13 +912,16 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td class="done-cell"><input type="checkbox" data-kind="luns" data-index="${index}" data-key="done" title="Mark row done" ${lun.done ? "checked" : ""}></td>
         <td>${input("purpose", lun.purpose, index, "luns")}</td><td>${input("count", lun.count || 1, index, "luns", "number")}</td>
         <td class="volume-names">${esc(volumeNames.join(", "))}</td>
-        <td>${input("size", lun.size, index, "luns")}</td><td><input type="checkbox" data-kind="luns" data-index="${index}" data-key="shared" ${lun.shared ? "checked" : ""}></td>
+        ${sizeCell(lun, index)}<td><input type="checkbox" data-kind="luns" data-index="${index}" data-key="shared" ${lun.shared ? "checked" : ""}></td>
         <td><select data-kind="luns" data-index="${index}" data-key="storage_profile"><option value="">Select profile</option>${PROFILE_OPTIONS}</select></td>
         <td>${input("pool_or_cpg", lun.pool_or_cpg, index, "luns")}</td><td>${input("host_names", (lun.host_names || []).join(", "), index, "luns")}</td>
         <td>${input("scsi_or_lun_id", lun.scsi_or_lun_id, index, "luns")}</td><td>${input("card_hint", lun.card_hint, index, "luns")}</td>
         <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`;
       }).join("") : '<tr><td colspan="13" class="empty">No LUN specs yet.</td></tr>';
-      (build.luns || []).forEach((lun, index) => { const select = lunsBody.querySelector(`select[data-index="${index}"]`); if (select) select.value = lun.storage_profile || ""; });
+      (build.luns || []).forEach((lun, index) => {
+        const profileSelect = lunsBody.querySelector(`select[data-key="storage_profile"][data-index="${index}"]`);
+        if (profileSelect) profileSelect.value = lun.storage_profile || "";
+      });
       applyLunSearchFilter(build);
       renderPlanTable(build);
       updateSectionHeadings(build);
@@ -958,6 +993,28 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       const target = event.target;
       const item = (activeBuild()[target.dataset.kind] || [])[Number(target.dataset.index)];
       if (!item || !target.dataset.key) return;
+      if (target.dataset.key === "size_amount" || target.dataset.key === "size_unit") {
+        const row = target.closest("tr");
+        const amountEl = row && row.querySelector('[data-key="size_amount"]');
+        const unitEl = row && row.querySelector('[data-key="size_unit"]');
+        let amount = amountEl ? amountEl.value : "";
+        let unit = unitEl ? unitEl.value : "GB";
+        const rawMatch = String(amount || "").trim().match(/^(-?\\d+(?:\\.\\d+)?)\\s*(GB|TB|MB|KB|PB|B)?$/i);
+        if (rawMatch && rawMatch[2]) {
+          const suf = String(rawMatch[2]).toUpperCase();
+          if (suf !== "GB" && suf !== "TB") {
+            amount = rawMatch[1];
+          }
+        }
+        item.size = joinLunSize(amount, unit);
+        const parts = splitLunSizeForUi(item.size);
+        if (amountEl) amountEl.value = parts.amount;
+        if (unitEl) unitEl.value = parts.unit;
+        invalidatePreview();
+        document.getElementById("run-btn").disabled = true;
+        if (target.dataset.kind === "luns") refreshExpandedNames();
+        return;
+      }
       const value = target.type === "checkbox" ? target.checked : target.value;
       item[target.dataset.key] = target.dataset.key === "host_names" ? String(value).split(",").map((name) => name.trim()).filter(Boolean) : value;
       if (target.dataset.key === "done") {
