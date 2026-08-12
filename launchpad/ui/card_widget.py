@@ -1,5 +1,7 @@
 import customtkinter as ctk
+from PIL import Image
 
+from launchpad.health_alert_art import resolve_health_alert_art
 from launchpad.icons import resolve_icon
 from launchpad.ui.colors import ctk_color, normalize_color
 
@@ -60,6 +62,7 @@ class GlowCard(ctk.CTkFrame):
         self.on_reorder = on_reorder
         self.on_selection_change = on_selection_change
         self.on_collapsed_change = on_collapsed_change
+        self.name = name
         self.card_id = card_id
         self.draggable = draggable
         self.dashboard = dashboard
@@ -69,6 +72,8 @@ class GlowCard(ctk.CTkFrame):
         self._stats_left_lines: list[str] = []
         self._stats_right_lines: list[str] = []
         self._stats_error: str | None = None
+        self._health_alert_overlay = None
+        self._health_alert_art_image = None
 
         self.grid_columnconfigure(0, weight=1)
         stats_row = 3 if show_stats else 2
@@ -962,6 +967,114 @@ class GlowCard(ctk.CTkFrame):
                 except Exception:
                     pass
                 self._capacity_alert_tip_window = None
+
+    def clear_health_alert_overlay(self) -> None:
+        overlay = self._health_alert_overlay
+        self._health_alert_overlay = None
+        self._health_alert_art_image = None
+        if overlay is not None:
+            try:
+                if overlay.winfo_exists():
+                    overlay.destroy()
+            except Exception:
+                pass
+
+    def set_health_alert_overlay(
+        self,
+        group: dict,
+        *,
+        on_acknowledge,
+        on_pause,
+        on_alarm_toggle,
+        on_close,
+        alarm_muted: bool = False,
+    ) -> None:
+        self.clear_health_alert_overlay()
+        overlay = ctk.CTkFrame(
+            self,
+            fg_color=self.theme["surface"],
+            border_width=2,
+            border_color=self.theme["danger"],
+            corner_radius=16,
+        )
+        self._health_alert_overlay = overlay
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        art_path = resolve_health_alert_art(str(group.get("card_name") or self.name))
+        if art_path is not None:
+            try:
+                art = Image.open(art_path).convert("RGBA")
+                self._health_alert_art_image = ctk.CTkImage(
+                    light_image=art,
+                    dark_image=art,
+                    size=(360, 210),
+                )
+                ctk.CTkLabel(
+                    overlay,
+                    text="",
+                    image=self._health_alert_art_image,
+                ).place(relx=0, rely=0, relwidth=1, relheight=1)
+            except OSError:
+                self._health_alert_art_image = None
+
+        content = ctk.CTkFrame(overlay, fg_color="transparent")
+        content.place(relx=0, rely=0, relwidth=1, relheight=1)
+        ctk.CTkLabel(
+            content,
+            text="ALERT",
+            font=ctk.CTkFont(size=22, weight="bold"),
+            text_color=self.theme["danger"],
+        ).pack(pady=(10, 2))
+
+        issues = group.get("issues") or []
+        issue_text = "\n".join(
+            str(issue.get("message") or "")
+            for issue in issues[:2]
+            if issue.get("message")
+        )
+        ctk.CTkLabel(
+            content,
+            text=issue_text or "Critical health issue",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=self.theme["text"],
+            wraplength=320,
+        ).pack(padx=12, pady=(0, 6))
+
+        primary = ctk.CTkFrame(content, fg_color="transparent")
+        primary.pack(fill="x", padx=12, pady=2)
+        ctk.CTkButton(
+            primary,
+            text="Suppress",
+            height=26,
+            command=on_acknowledge,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        ctk.CTkButton(
+            primary,
+            text="Alarm on" if alarm_muted else "Alarm off",
+            height=26,
+            command=on_alarm_toggle,
+        ).pack(side="left", fill="x", expand=True, padx=(3, 0))
+
+        snooze = ctk.CTkFrame(content, fg_color="transparent")
+        snooze.pack(fill="x", padx=12, pady=2)
+        for minutes in (5, 10, 15, 20):
+            ctk.CTkButton(
+                snooze,
+                text=f"Snooze {minutes}",
+                width=62,
+                height=24,
+                font=ctk.CTkFont(size=10),
+                command=lambda m=minutes: on_pause(m),
+            ).pack(side="left", fill="x", expand=True, padx=2)
+
+        ctk.CTkButton(
+            content,
+            text="Close",
+            height=24,
+            fg_color=self.theme["surface_alt"],
+            command=on_close,
+        ).pack(fill="x", padx=12, pady=(2, 10))
 
     def set_health_alarm_muted(
         self,

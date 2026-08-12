@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import customtkinter as ctk
+from PIL import Image
 
+from launchpad.health_alert_art import resolve_health_alert_art
 from launchpad.ui.theme import get_theme
 
 HEALTH_ALERT_POLL_MS = 30_000
@@ -56,7 +58,6 @@ class HealthAlertDialog(ctk.CTkToplevel):
         on_pause: PauseHandler,
         on_alarm_toggle: AlarmToggleHandler,
         on_close: CloseHandler,
-        *,
         alarm_muted: bool = False,
     ) -> None:
         super().__init__(master)
@@ -67,6 +68,7 @@ class HealthAlertDialog(ctk.CTkToplevel):
         self._on_alarm_toggle = on_alarm_toggle
         self._on_close = on_close
         self._alarm_muted = alarm_muted
+        self._art_image = None
 
         card_name = str(group.get("card_name") or f"Card {group.get('card_id')}")
         self.title("Critical Health Alert")
@@ -79,7 +81,29 @@ class HealthAlertDialog(ctk.CTkToplevel):
         self.after(200, self.lift)
 
         pad = 20
-        frame = ctk.CTkFrame(self, fg_color=self.theme["surface"], corner_radius=16)
+        art_path = resolve_health_alert_art(card_name)
+        if art_path is not None:
+            try:
+                art = Image.open(art_path).convert("RGBA")
+                self._art_image = ctk.CTkImage(
+                    light_image=art,
+                    dark_image=art,
+                    size=(640, 360),
+                )
+                ctk.CTkLabel(self, text="", image=self._art_image).place(
+                    relx=0,
+                    rely=0,
+                    relwidth=1,
+                    relheight=1,
+                )
+            except OSError:
+                self._art_image = None
+
+        frame = ctk.CTkFrame(
+            self,
+            fg_color="transparent" if self._art_image is not None else self.theme["surface"],
+            corner_radius=16,
+        )
         frame.pack(padx=pad, pady=pad, fill="both", expand=True)
 
         header = ctk.CTkFrame(frame, fg_color="transparent")
@@ -87,8 +111,8 @@ class HealthAlertDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             header,
-            text="Critical Health Alert",
-            font=ctk.CTkFont(size=22, weight="bold"),
+            text="Critical Health Alert" if self._art_image is not None else "ALERT",
+            font=ctk.CTkFont(size=22 if self._art_image is not None else 32, weight="bold"),
             text_color=self.theme["danger"],
             anchor="w",
         ).pack(fill="x")
@@ -132,7 +156,7 @@ class HealthAlertDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             actions,
-            text="Acknowledge",
+            text="Suppress",
             fg_color=self.theme["accent"],
             hover_color=self.theme["accent_soft"],
             command=self._on_acknowledge,
@@ -153,7 +177,7 @@ class HealthAlertDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             pause_row,
-            text="Pause:",
+            text="Snooze:",
             font=ctk.CTkFont(size=12),
             text_color=self.theme["muted"],
         ).grid(row=0, column=0, padx=(0, 8), sticky="w")
@@ -161,7 +185,7 @@ class HealthAlertDialog(ctk.CTkToplevel):
         for index, minutes in enumerate((5, 10, 15, 20), start=1):
             ctk.CTkButton(
                 pause_row,
-                text=f"Pause {minutes} min",
+                text=f"Snooze {minutes}",
                 height=28,
                 fg_color=self.theme["surface_alt"],
                 hover_color=self.theme["border"],
