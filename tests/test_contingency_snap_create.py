@@ -1,3 +1,5 @@
+import pytest
+
 from launchpad.contingency_snap_create import (
     SnapStep,
     append_snap_cg_assign_steps,
@@ -12,6 +14,11 @@ from launchpad.contingency_snap_create import (
 
 def test_parse_capacity_tib():
     assert parse_capacity_to_gb("4.00 TiB") == 4096.0
+
+
+def test_parse_capacity_bare_number_still_bytes():
+    # LUN Builder treats bare numbers as GB; Contingency must keep bytes.
+    assert parse_capacity_to_gb("100") == pytest.approx(100 / (1024**3))
 
 
 def test_build_steps_blocking_without_pool_size():
