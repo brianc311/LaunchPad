@@ -1,4 +1,4 @@
-from launchpad.flashsystem_health import analyze_health
+from launchpad.flashsystem_health import _apply_operator_wording, analyze_health
 from launchpad.health_alert_state import collect_critical_candidates, issue_fingerprint
 
 
@@ -148,3 +148,38 @@ def test_bad_components_use_operator_wording():
         issue_fingerprint(7, "drive", "Drive 0 is degraded"),
         issue_fingerprint(7, "drive", "Drive 1 is failed"),
     } == {candidate["fingerprint"] for candidate in drive_candidates}
+
+
+def test_canister_wording_retains_distinct_node_controller_candidates():
+    issues = [
+        {
+            "severity": "critical",
+            "category": "controller",
+            "message": "Controller node1 is offline",
+        },
+        {
+            "severity": "critical",
+            "category": "node",
+            "message": "Node node2 is offline",
+        },
+    ]
+    _apply_operator_wording(issues, [])
+
+    candidates = collect_critical_candidates(
+        {
+            "id": 7,
+            "name": "Site",
+            "error": None,
+            "health_issues": issues,
+        },
+        monitor_on=True,
+    )
+
+    assert [issue["message"] for issue in issues] == [
+        "Canister offline",
+        "Canister offline",
+    ]
+    assert {(candidate["category"], candidate["message"]) for candidate in candidates} == {
+        ("controller", "Canister offline"),
+        ("node", "Canister offline"),
+    }
