@@ -139,7 +139,32 @@ def test_unreachable_card_is_connectivity_alert(monkeypatch):
     server = HealthServer()
     server.set_settings_backend(getter, setter)
     _register(server, 2, "Valparaiso, IN", monitor_on=True)
-    server._cards[2].error = "SSH timeout"
+    _patch_cards(
+        monkeypatch,
+        server,
+        [
+            {
+                "id": 2,
+                "name": "Valparaiso, IN",
+                "error": "Connection refused",
+                "metrics": None,
+                "health_issues": [
+                    {
+                        "severity": "critical",
+                        "category": "command",
+                        "message": "Health - Nodes failed",
+                        "server": "Valparaiso, IN",
+                    },
+                    {
+                        "severity": "critical",
+                        "category": "command",
+                        "message": "Health - Alerts failed",
+                        "server": "Valparaiso, IN",
+                    },
+                ],
+            }
+        ],
+    )
 
     payload = server.get_health_alerts()
 

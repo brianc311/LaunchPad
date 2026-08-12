@@ -97,6 +97,7 @@ class DashboardView(ctk.CTkFrame):
         self._health_alert_queue_index = 0
         self._health_alert_beeped: set[str] = set()
         self._health_alert_poll_in_flight = False
+        self._health_alert_cards_meta: dict[str, dict] = {}
         self._capacity_email_timer: str | None = None
         self._capacity_email_send_in_flight = False
         self._visible_cards: dict[int, Card] = {}
@@ -856,12 +857,18 @@ class DashboardView(ctk.CTkFrame):
             if alert.get("fingerprint") is not None
         }
         self._health_alert_beeped &= active_fingerprints
+        beeped_this_poll = False
         for alert in alerts:
             fingerprint = str(alert.get("fingerprint") or "")
             if not fingerprint or fingerprint in self._health_alert_beeped:
                 continue
-            play_health_alert_beep()
+            if not beeped_this_poll:
+                play_health_alert_beep()
+                beeped_this_poll = True
             self._health_alert_beeped.add(fingerprint)
+
+        self._health_alert_cards_meta = payload.get("cards") or {}
+        self._sync_health_alarm_muted_indicators()
 
         if self._health_alert_dialog is not None:
             return
@@ -869,6 +876,19 @@ class DashboardView(ctk.CTkFrame):
         self._health_alert_queue = group_health_alerts(alerts)
         self._health_alert_queue_index = 0
         self._show_next_health_alert()
+
+    def _sync_health_alarm_muted_indicators(self) -> None:
+        for widget in self.card_widgets:
+            meta = self._health_alert_cards_meta.get(str(widget.card_id), {})
+            muted = bool(meta.get("alarm_muted"))
+            widget.set_health_alarm_muted(
+                muted,
+                on_alarm_on=(lambda cid=widget.card_id: self._on_card_health_alarm_on(cid)),
+            )
+
+    def _card_alarm_muted(self, card_id: int) -> bool:
+        meta = self._health_alert_cards_meta.get(str(card_id), {})
+        return bool(meta.get("alarm_muted"))
 
     def _show_next_health_alert(self) -> None:
         while self._health_alert_queue_index < len(self._health_alert_queue):
@@ -889,8 +909,9 @@ class DashboardView(ctk.CTkFrame):
             group=group,
             on_acknowledge=self._on_health_alert_acknowledge,
             on_pause=self._on_health_alert_pause,
-            on_alarm_off=self._on_health_alert_alarm_off,
+            on_alarm_toggle=self._on_health_alert_alarm_toggle,
             on_close=self._on_health_alert_close,
+            alarm_muted=self._card_alarm_muted(int(group.get("card_id") or 0)),
         )
 
     def _close_health_alert_dialog(self, *, advance_queue: bool) -> None:
@@ -944,20 +965,29 @@ class DashboardView(ctk.CTkFrame):
         self._close_health_alert_dialog(advance_queue=False)
         self._apply_health_alert_payload(payload)
 
-    def _on_health_alert_alarm_off(self) -> None:
+    def _on_health_alert_alarm_toggle(self) -> None:
         dialog = self._health_alert_dialog
         if dialog is None:
             return
         card_id = dialog.group.get("card_id")
         if card_id is None:
             return
+        muted = not self._card_alarm_muted(int(card_id))
+        self._set_health_alarm(int(card_id), muted, close_dialog=True)
+
+    def _on_card_health_alarm_on(self, card_id: int) -> None:
+        self._set_health_alarm(card_id, False, close_dialog=False)
+
+    def _set_health_alarm(self, card_id: int, muted: bool, *, close_dialog: bool) -> None:
         try:
             server = get_health_server()
-            payload = server.set_health_alarm(int(card_id), True)
+            payload = server.set_health_alarm(int(card_id), muted)
         except Exception as exc:
-            self.status_label.configure(text=f"Could not mute health alarm: {exc}")
+            action = "mute" if muted else "restore"
+            self.status_label.configure(text=f"Could not {action} health alarm: {exc}")
             return
-        self._close_health_alert_dialog(advance_queue=False)
+        if close_dialog:
+            self._close_health_alert_dialog(advance_queue=False)
         self._apply_health_alert_payload(payload)
 
     def _apply_array_rail_collapsed(self) -> None:

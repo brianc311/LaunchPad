@@ -938,6 +938,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 0.82rem;
       margin-right: 2px;
     }
+    .alarm-muted-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #fde68a;
+      background: rgba(251, 191, 36, 0.15);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+    }
+    .server.alarm-muted .server-head h2::after {
+      content: " · alarm muted";
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -1076,6 +1093,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let healthAlertCurrent = null;
     let healthAlertModalOpen = false;
     let healthAlertPollRunning = false;
+    let healthAlertCardsMeta = {};
 
     function isMonitorOn(cardId) {
       const key = String(cardId);
@@ -1517,7 +1535,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
       if (healthAlertModalOpen) {
-        closeHealthAlertModal(false);
+        closeHealthAlertModal(true);
         return;
       }
       closeModal();
@@ -1555,6 +1573,61 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .join("");
     }
 
+    function isCardAlarmMuted(cardId) {
+      const meta = healthAlertCardsMeta[String(cardId)] || {};
+      return Boolean(meta.alarm_muted);
+    }
+
+    function syncHealthAlertAlarmButton() {
+      if (!healthAlertAlarmBtn || !healthAlertCurrent) return;
+      const muted = isCardAlarmMuted(healthAlertCurrent.card_id);
+      healthAlertAlarmBtn.textContent = muted ? "Alarm on" : "Alarm off";
+      healthAlertAlarmBtn.title = muted
+        ? "Re-enable popups and sound for this site"
+        : "Mute popups and sound for this site until Alarm on";
+    }
+
+    function updateAlarmMutedVisuals() {
+      document.querySelectorAll(".server[data-id]").forEach((section) => {
+        const cardId = section.dataset.id;
+        const muted = isCardAlarmMuted(cardId);
+        section.classList.toggle("alarm-muted", muted);
+        let btn = section.querySelector(".alarm-on-btn");
+        if (muted) {
+          if (!btn) {
+            btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "alarm-on-btn secondary";
+            btn.dataset.id = cardId;
+            btn.textContent = "Alarm on";
+            btn.title = "Re-enable popups and sound for this site";
+            btn.onclick = () => setCardHealthAlarm(cardId, false);
+            const controls = section.querySelector(".controls");
+            if (controls) controls.appendChild(btn);
+          }
+        } else if (btn) {
+          btn.remove();
+        }
+      });
+    }
+
+    async function setCardHealthAlarm(cardId, muted) {
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/alarm", {
+          card_id: cardId,
+          muted,
+        });
+        healthAlertCardsMeta = payload?.cards || healthAlertCardsMeta;
+        updateAlarmMutedVisuals();
+        syncHealthAlertAlarmButton();
+        if (!healthAlertModalOpen) {
+          applyHealthAlertPayload(payload);
+        }
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
     function openHealthAlertModal(group) {
       if (!group || !group.issues?.length || !healthAlertModalEl) return;
       healthAlertCurrent = group;
@@ -1567,6 +1640,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       healthAlertModalEl.classList.add("open");
       healthAlertModalEl.setAttribute("aria-hidden", "false");
+      syncHealthAlertAlarmButton();
     }
 
     function closeHealthAlertModal(advanceQueue) {
@@ -1594,6 +1668,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function applyHealthAlertPayload(payload) {
+      healthAlertCardsMeta = payload?.cards || healthAlertCardsMeta;
+      updateAlarmMutedVisuals();
       healthAlertQueue = groupHealthAlerts(payload?.alerts || []);
       if (healthAlertModalOpen) return;
       healthAlertQueueIndex = 0;
@@ -1654,13 +1730,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    async function muteCurrentHealthAlarm() {
+    async function toggleCurrentHealthAlarm() {
       if (!healthAlertCurrent) return;
+      const muted = !isCardAlarmMuted(healthAlertCurrent.card_id);
       try {
         const payload = await postHealthAlertAction("/api/health-alerts/alarm", {
           card_id: healthAlertCurrent.card_id,
-          muted: true,
+          muted,
         });
+        healthAlertCardsMeta = payload?.cards || healthAlertCardsMeta;
+        updateAlarmMutedVisuals();
         closeHealthAlertModal(false);
         applyHealthAlertPayload(payload);
       } catch (err) {
@@ -1675,7 +1754,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       healthAlertAckBtn.addEventListener("click", () => acknowledgeCurrentHealthAlert());
     }
     if (healthAlertAlarmBtn) {
-      healthAlertAlarmBtn.addEventListener("click", () => muteCurrentHealthAlarm());
+      healthAlertAlarmBtn.addEventListener("click", () => toggleCurrentHealthAlarm());
     }
     healthAlertPauseBtns.forEach((btn) => {
       btn.addEventListener("click", () => {

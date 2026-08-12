@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 HEALTH_ALERT_SETTING = "health_alert_state"
+CONNECTIVITY_SENTINEL = "connectivity"
 
 PAUSE_MINUTES = frozenset({5, 10, 15, 20})
 
@@ -132,6 +133,41 @@ def _has_useful_health_data(card: dict[str, Any]) -> bool:
     return metrics not in (None, {}, [])
 
 
+def _issues_are_only_command_failures(health_issues: list[Any]) -> bool:
+    issues = [issue for issue in health_issues if isinstance(issue, dict)]
+    if not issues:
+        return False
+    return all(str(issue.get("category") or "") == "command" for issue in issues)
+
+
+def _issue_entity_key(message: str) -> str | None:
+    parts = str(message or "").split()
+    if len(parts) >= 2:
+        return parts[1].lower()
+    return None
+
+
+def _dedupe_node_controller_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    controller_entities = {
+        entity
+        for candidate in candidates
+        if candidate.get("category") == "controller"
+        and (entity := _issue_entity_key(str(candidate.get("message") or "")))
+    }
+    if not controller_entities:
+        return candidates
+    return [
+        candidate
+        for candidate in candidates
+        if not (
+            candidate.get("category") == "node"
+            and _issue_entity_key(str(candidate.get("message") or "")) in controller_entities
+        )
+    ]
+
+
 def _indicates_offline_degraded(issue: dict[str, Any]) -> bool:
     message = str(issue.get("message") or "").lower()
     status = str(issue.get("status") or "").lower()
@@ -144,9 +180,12 @@ def _candidate(
     category: str,
     message: str,
     severity: str,
+    *,
+    fingerprint_message: str | None = None,
 ) -> dict[str, Any]:
+    fp_message = message if fingerprint_message is None else fingerprint_message
     return {
-        "fingerprint": issue_fingerprint(card_id, category, message),
+        "fingerprint": issue_fingerprint(card_id, category, fp_message),
         "card_id": card_id,
         "card_name": card_name,
         "category": category,
@@ -164,7 +203,10 @@ def collect_critical_candidates(card: dict[str, Any], *, monitor_on: bool) -> li
     error = card.get("error")
     health_issues = card.get("health_issues") or []
 
-    if error and not _has_useful_health_data(card):
+    if error and (
+        not _has_useful_health_data(card)
+        or _issues_are_only_command_failures(health_issues)
+    ):
         message = str(error)
         return [
             _candidate(
@@ -173,6 +215,7 @@ def collect_critical_candidates(card: dict[str, Any], *, monitor_on: bool) -> li
                 "connectivity",
                 message,
                 "critical",
+                fingerprint_message=CONNECTIVITY_SENTINEL,
             )
         ]
 
@@ -191,7 +234,7 @@ def collect_critical_candidates(card: dict[str, Any], *, monitor_on: bool) -> li
         if not is_critical:
             continue
         candidates.append(_candidate(card_id, card_name, category, message, severity))
-    return candidates
+    return _dedupe_node_controller_candidates(candidates)
 
 
 def list_popup_alerts(

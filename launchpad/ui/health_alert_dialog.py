@@ -12,6 +12,7 @@ HEALTH_ALERT_POLL_MS = 30_000
 
 PauseHandler = Callable[[int], None]
 CloseHandler = Callable[[bool], None]
+AlarmToggleHandler = Callable[[], None]
 
 
 def group_health_alerts(alerts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -53,16 +54,19 @@ class HealthAlertDialog(ctk.CTkToplevel):
         group: dict[str, Any],
         on_acknowledge: Callable[[], None],
         on_pause: PauseHandler,
-        on_alarm_off: Callable[[], None],
+        on_alarm_toggle: AlarmToggleHandler,
         on_close: CloseHandler,
+        *,
+        alarm_muted: bool = False,
     ) -> None:
         super().__init__(master)
         self.theme = get_theme(theme_name)
         self._group = group
         self._on_acknowledge = on_acknowledge
         self._on_pause = on_pause
-        self._on_alarm_off = on_alarm_off
+        self._on_alarm_toggle = on_alarm_toggle
         self._on_close = on_close
+        self._alarm_muted = alarm_muted
 
         card_name = str(group.get("card_name") or f"Card {group.get('card_id')}")
         self.title("Critical Health Alert")
@@ -136,10 +140,10 @@ class HealthAlertDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             actions,
-            text="Alarm off",
+            text="Alarm on" if alarm_muted else "Alarm off",
             fg_color=self.theme["surface_alt"],
             hover_color=self.theme["border"],
-            command=self._on_alarm_off,
+            command=self._on_alarm_toggle,
         ).grid(row=0, column=1, padx=(6, 0), pady=(0, 6), sticky="ew")
 
         pause_row = ctk.CTkFrame(frame, fg_color="transparent")
