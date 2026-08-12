@@ -733,7 +733,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       hostsBody.innerHTML = hosts.length
         ? hosts.map((host) => `<tr>
             <td class="read-only-cell">—</td>
-            <td class="read-only-cell">${esc(host.lpar_name || "")}</td>
+            <td class="read-only-cell">${esc(String(host.lpar_name || "").trim())}</td>
             <td class="read-only-cell">${esc(host.slot || "")}</td>
             <td class="read-only-cell">${esc(host.state || "")}</td>
             <td class="read-only-cell">${host.required ? "Yes" : "No"}</td>
@@ -822,7 +822,10 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
       }
       scheduleCompletionSave(build);
     }
-    function input(key, value, index, kind, type="text") { return `<input type="${type}" data-kind="${kind}" data-index="${index}" data-key="${key}" value="${esc(value)}">`; }
+    function input(key, value, index, kind, type="text") {
+      const shown = key === "lpar_name" ? String(value ?? "").trim() : value;
+      return `<input type="${type}" data-kind="${kind}" data-index="${index}" data-key="${key}" value="${esc(shown)}">`;
+    }
     function splitLunSizeForUi(size) {
       const text = String(size || "").trim();
       if (!text) return { amount: "", unit: "GB" };
@@ -914,7 +917,7 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         <td class="volume-names">${esc(volumeNames.join(", "))}</td>
         ${sizeCell(lun, index)}<td><input type="checkbox" data-kind="luns" data-index="${index}" data-key="shared" ${lun.shared ? "checked" : ""}></td>
         <td><select data-kind="luns" data-index="${index}" data-key="storage_profile"><option value="">Select profile</option>${PROFILE_OPTIONS}</select></td>
-        <td>${input("pool_or_cpg", lun.pool_or_cpg, index, "luns")}</td><td>${input("host_names", (lun.host_names || []).join(", "), index, "luns")}</td>
+        <td>${input("pool_or_cpg", lun.pool_or_cpg, index, "luns")}</td><td>${input("host_names", (lun.host_names || []).map((name) => String(name || "").trim()).filter(Boolean).join(", "), index, "luns")}</td>
         <td>${input("scsi_or_lun_id", lun.scsi_or_lun_id, index, "luns")}</td><td>${input("card_hint", lun.card_hint, index, "luns")}</td>
         <td>${input("cluster", lun.cluster, index, "luns")}</td><td><button type="button" class="remove" data-remove="luns" data-index="${index}">Remove</button></td></tr>`;
       }).join("") : '<tr><td colspan="13" class="empty">No LUN specs yet.</td></tr>';
@@ -1015,8 +1018,24 @@ LUN_BUILDER_HTML = """<!DOCTYPE html>
         if (target.dataset.kind === "luns") refreshExpandedNames();
         return;
       }
-      const value = target.type === "checkbox" ? target.checked : target.value;
-      item[target.dataset.key] = target.dataset.key === "host_names" ? String(value).split(",").map((name) => name.trim()).filter(Boolean) : value;
+      if (target.type === "checkbox") {
+        item[target.dataset.key] = target.checked;
+      } else if (target.dataset.key === "host_names") {
+        item.host_names = String(target.value || "")
+          .split(",")
+          .map((name) => name.trim())
+          .filter(Boolean);
+      } else if (target.dataset.key === "lpar_name") {
+        const trimmed = String(target.value || "").trim();
+        item.lpar_name = trimmed;
+        // Keep the visible field trimmed so select/copy never includes padding.
+        if (target.value !== trimmed) {
+          target.value = trimmed;
+        }
+      } else {
+        item[target.dataset.key] = target.value;
+      }
+      const value = item[target.dataset.key];
       if (target.dataset.key === "done") {
         const row = target.closest("tr");
         if (row) row.classList.toggle("row-done", Boolean(value));
