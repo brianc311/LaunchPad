@@ -147,6 +147,7 @@ from launchpad.system_connectivity import (
     parse_svc_snmp,
     parse_svc_svqueryclock,
     topic_commands_for_profile,
+    wrap_topic_commands_for_card,
     vendor_for_profile as system_connectivity_vendor,
 )
 from launchpad.system_connectivity_page import (
@@ -158,6 +159,7 @@ from launchpad.storage_inventory import (
     export_storage_inventory_xlsx,
     inventory_commands_for_profile,
     inventory_totals,
+    wrap_inventory_commands_for_card,
     parse_hpe_showrcopy_protection,
     parse_svc_lsemailserver,
     parse_svc_lsrcrelationship,
@@ -308,6 +310,8 @@ class HealthCard:
     device_profile: str = ""
     custom_commands: str = ""
     serial_number: str = ""
+    dscli_path: str = ""
+    dscli_hmc: str = ""
     category: str = ""
     url: str = ""
     metrics: dict[str, Any] | None = None
@@ -342,6 +346,10 @@ class HealthCard:
                     self.device_profile,
                     self.custom_commands,
                     instance_id=self.serial_number,
+                    dscli_path=self.dscli_path or "",
+                    dscli_hmc=self.dscli_hmc or "",
+                    username=str(self.username or ""),
+                    password=self.password or "",
                 )
             ),
             "metrics": self.metrics,
@@ -5469,6 +5477,10 @@ class HealthServer:
                 card.device_profile,
                 card.custom_commands,
                 instance_id=card.serial_number,
+                dscli_path=getattr(card, "dscli_path", "") or "",
+                dscli_hmc=getattr(card, "dscli_hmc", "") or "",
+                username=str(getattr(card, "username", "") or ""),
+                password=card.password or "",
             ),
         }
 
@@ -7066,7 +7078,13 @@ class HealthServer:
         catalog: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
         run = self._lun_run_command(card)
-        commands = topic_commands_for_profile(card.device_profile or "")
+        commands = wrap_topic_commands_for_card(
+            topic_commands_for_profile(card.device_profile or ""),
+            dscli_path=getattr(card, "dscli_path", "") or "",
+            dscli_hmc=getattr(card, "dscli_hmc", "") or "",
+            username=str(card.username or ""),
+            password=card.password or "",
+        )
         profile = str(card.device_profile or "")
         fw_catalog = catalog or {}
         rows: dict[str, dict[str, Any]] = {}
@@ -7593,6 +7611,13 @@ class HealthServer:
                 self._scan_storage_inventory_hpe_card(card, commands)
             )
         elif profile.strip().lower() == "ibm_ds8884":
+            commands = wrap_inventory_commands_for_card(
+                commands,
+                dscli_path=getattr(card, "dscli_path", "") or "",
+                dscli_hmc=getattr(card, "dscli_hmc", "") or "",
+                username=str(card.username or ""),
+                password=card.password or "",
+            )
             model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
                 self._scan_storage_inventory_ds_card(card, commands)
             )
@@ -8015,6 +8040,8 @@ class HealthServer:
         category: str = "",
         url: str = "",
         sudo_password: str = "",
+        dscli_path: str = "",
+        dscli_hmc: str = "",
     ) -> None:
         with self._lock:
             existing = self._cards.get(card_id)
@@ -8031,6 +8058,8 @@ class HealthServer:
                 device_profile=device_profile,
                 custom_commands=custom_commands,
                 serial_number=serial_number,
+                dscli_path=dscli_path,
+                dscli_hmc=dscli_hmc,
                 category=category,
                 url=url,
                 metrics=existing.metrics if existing else None,
@@ -8060,6 +8089,8 @@ class HealthServer:
             device_profile = card.device_profile
             custom_commands = card.custom_commands
             serial_number = card.serial_number
+            dscli_path = card.dscli_path
+            dscli_hmc = card.dscli_hmc
             prior_results = list(card.command_results or [])
 
         from launchpad.command_format import (
@@ -8071,6 +8102,10 @@ class HealthServer:
             device_profile,
             custom_commands,
             instance_id=serial_number,
+            dscli_path=dscli_path or "",
+            dscli_hmc=dscli_hmc or "",
+            username=str(username or ""),
+            password=password or "",
         )
         if (focus or "").strip().lower() == "capacity":
             commands = filter_capacity_focus_commands(

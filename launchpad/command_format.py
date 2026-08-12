@@ -25,8 +25,13 @@ def resolve_card_commands(
     custom_commands: str,
     *,
     instance_id: str = "",
+    dscli_path: str = "",
+    dscli_hmc: str = "",
+    username: str = "",
+    password: str = "",
 ) -> list[tuple[str, str]]:
     # Inline import avoids circular import with storage_presets → command_format.
+    from launchpad.dscli_wrap import wrap_dscli_labeled_commands
     from launchpad.storage_presets import (
         ensure_hpe_capacity_commands,
         ensure_svc_fc_commands,
@@ -42,7 +47,16 @@ def resolve_card_commands(
     commands = ensure_svc_fc_commands(device_profile, commands)
     commands = ensure_svc_health_commands(device_profile, commands)
     commands = ensure_hpe_capacity_commands(device_profile, commands)
-    return apply_command_placeholders(commands, instance_id=instance_id)
+    commands = apply_command_placeholders(commands, instance_id=instance_id)
+    if device_profile.strip().lower() == "ibm_ds8884":
+        commands = wrap_dscli_labeled_commands(
+            commands,
+            dscli_path=dscli_path,
+            hmc_host=dscli_hmc,
+            username=username,
+            password=password,
+        )
+    return commands
 
 
 def _is_pool_capacity_command(label: str, command: str) -> bool:

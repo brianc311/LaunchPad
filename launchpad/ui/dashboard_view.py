@@ -1516,6 +1516,10 @@ class DashboardView(ctk.CTkFrame):
                 card.device_profile,
                 card.custom_commands,
                 instance_id=getattr(card, "serial_number", "") or "",
+                dscli_path=getattr(card, "dscli_path", "") or "",
+                dscli_hmc=getattr(card, "dscli_hmc", "") or "",
+                username=str(getattr(card, "username", "") or ""),
+                password=auth.password,
             )
             if commands:
                 results = run_remote_command_suite(
@@ -1842,6 +1846,10 @@ class DashboardView(ctk.CTkFrame):
                 card.device_profile,
                 card.custom_commands,
                 instance_id=getattr(card, "serial_number", "") or "",
+                dscli_path=getattr(card, "dscli_path", "") or "",
+                dscli_hmc=getattr(card, "dscli_hmc", "") or "",
+                username=str(getattr(card, "username", "") or ""),
+                password=auth.password,
             )
             if commands:
                 results = run_remote_command_suite(
