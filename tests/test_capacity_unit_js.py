@@ -34,4 +34,4 @@ def test_polled_pages_update_capacity_unit_mode_from_cards():
 
 
 def test_app_version_153():
-    assert APP_VERSION == "1.6.154"
+    assert APP_VERSION == "1.6.155"

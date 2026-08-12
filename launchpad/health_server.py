@@ -178,6 +178,18 @@ from launchpad.flashsystem_fc import (
 from launchpad.capacity_pool_family import capacity_pool_family
 from launchpad.dell_report_family import dell_report_family, dell_report_family_for_site
 from launchpad.flashsystem_health import analyze_health, pool_capacity_from_commands
+from launchpad.health_alert_state import (
+    HEALTH_ALERT_SETTING,
+    acknowledge,
+    collect_critical_candidates,
+    dump_state,
+    empty_state,
+    list_popup_alerts,
+    load_state,
+    pause_card,
+    prune_acknowledgements,
+    set_alarm,
+)
 from launchpad.health_excel_export import (
     HealthExcelSections,
     build_health_workbook,
@@ -896,6 +908,53 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 1.2rem;
     }
     .modal-body .table-wrap { max-height: 58vh; }
+    #health-alert-modal { z-index: 1100; }
+    .health-alert-card-name {
+      margin: 0 0 12px;
+      font-size: 1.35rem;
+      color: var(--bad);
+    }
+    .health-alert-issues {
+      margin: 0 0 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .health-alert-issues .issue { margin: 0; }
+    .health-alert-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .health-alert-actions .pause-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .health-alert-actions .pause-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-right: 2px;
+    }
+    .alarm-muted-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #fde68a;
+      background: rgba(251, 191, 36, 0.15);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+    }
+    .server.alarm-muted .server-head h2::after {
+      content: " · alarm muted";
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -960,6 +1019,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div id="modal-body" class="modal-body"></div>
     </div>
   </div>
+  <div id="health-alert-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal health-alert-modal" role="dialog" aria-modal="true" aria-labelledby="health-alert-title">
+      <div class="modal-head">
+        <h3 id="health-alert-title">Critical Health Alert</h3>
+        <button type="button" class="secondary" id="health-alert-close-btn">Close</button>
+      </div>
+      <div class="modal-body">
+        <p id="health-alert-card-name" class="health-alert-card-name"></p>
+        <div id="health-alert-issues" class="health-alert-issues issue-list"></div>
+        <div class="health-alert-actions">
+          <button type="button" id="health-alert-ack-btn">Acknowledge</button>
+          <button type="button" class="secondary" id="health-alert-alarm-btn">Alarm off</button>
+          <div class="pause-group">
+            <span class="pause-label">Pause</span>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="5">Pause 5 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="10">Pause 10 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="15">Pause 15 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="20">Pause 20 min</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>
     let CAPACITY_UNIT_MODE = "{{CAPACITY_UNIT_MODE}}";
     const serversEl = document.getElementById("servers");
@@ -972,6 +1054,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const modalTitleEl = document.getElementById("modal-title");
     const modalBodyEl = document.getElementById("modal-body");
     const modalCloseEl = document.getElementById("modal-close");
+    const healthAlertModalEl = document.getElementById("health-alert-modal");
+    const healthAlertCardNameEl = document.getElementById("health-alert-card-name");
+    const healthAlertIssuesEl = document.getElementById("health-alert-issues");
+    const healthAlertAckBtn = document.getElementById("health-alert-ack-btn");
+    const healthAlertAlarmBtn = document.getElementById("health-alert-alarm-btn");
+    const healthAlertCloseBtn = document.getElementById("health-alert-close-btn");
+    const healthAlertPauseBtns = document.querySelectorAll(".health-alert-pause-btn");
     const showAlertsToggle = document.getElementById("show-alerts-toggle");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
     const includeOffToggle = document.getElementById("include-off-toggle");
@@ -998,6 +1087,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     };
     const autoTimers = {};
     let monitorServerState = {};
+    const HEALTH_ALERT_POLL_MS = 30000;
+    let healthAlertQueue = [];
+    let healthAlertQueueIndex = 0;
+    let healthAlertCurrent = null;
+    let healthAlertModalOpen = false;
+    let healthAlertPollRunning = false;
+    let healthAlertCardsMeta = {};
 
     function isMonitorOn(cardId) {
       const key = String(cardId);
@@ -1437,8 +1533,240 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (event.target === modalEl) closeModal();
     });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeModal();
+      if (event.key !== "Escape") return;
+      if (healthAlertModalOpen) {
+        closeHealthAlertModal(true);
+        return;
+      }
+      closeModal();
     });
+
+    function groupHealthAlerts(alerts) {
+      const groups = new Map();
+      (alerts || []).forEach((alert) => {
+        const cardId = alert.card_id;
+        const key = String(cardId);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            card_id: cardId,
+            card_name: alert.card_name || `Card ${cardId}`,
+            issues: [],
+          });
+        }
+        groups.get(key).issues.push(alert);
+      });
+      return [...groups.values()].sort(
+        (a, b) =>
+          String(a.card_name).localeCompare(String(b.card_name)) ||
+          Number(a.card_id) - Number(b.card_id)
+      );
+    }
+
+    function renderHealthAlertIssues(issues) {
+      return (issues || [])
+        .map((issue) => {
+          const sev = escapeHtml(issue.severity || "critical");
+          const cat = escapeHtml(issue.category || "");
+          const msg = escapeHtml(issue.message || "");
+          return `<div class="issue ${sev}"><span>${cat ? cat + " · " : ""}${msg}</span></div>`;
+        })
+        .join("");
+    }
+
+    function isCardAlarmMuted(cardId) {
+      const meta = healthAlertCardsMeta[String(cardId)] || {};
+      return Boolean(meta.alarm_muted);
+    }
+
+    function syncHealthAlertAlarmButton() {
+      if (!healthAlertAlarmBtn || !healthAlertCurrent) return;
+      const muted = isCardAlarmMuted(healthAlertCurrent.card_id);
+      healthAlertAlarmBtn.textContent = muted ? "Alarm on" : "Alarm off";
+      healthAlertAlarmBtn.title = muted
+        ? "Re-enable popups and sound for this site"
+        : "Mute popups and sound for this site until Alarm on";
+    }
+
+    function updateAlarmMutedVisuals() {
+      document.querySelectorAll(".server[data-id]").forEach((section) => {
+        const cardId = section.dataset.id;
+        const muted = isCardAlarmMuted(cardId);
+        section.classList.toggle("alarm-muted", muted);
+        let btn = section.querySelector(".alarm-on-btn");
+        if (muted) {
+          if (!btn) {
+            btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "alarm-on-btn secondary";
+            btn.dataset.id = cardId;
+            btn.textContent = "Alarm on";
+            btn.title = "Re-enable popups and sound for this site";
+            btn.onclick = () => setCardHealthAlarm(cardId, false);
+            const controls = section.querySelector(".controls");
+            if (controls) controls.appendChild(btn);
+          }
+        } else if (btn) {
+          btn.remove();
+        }
+      });
+    }
+
+    async function setCardHealthAlarm(cardId, muted) {
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/alarm", {
+          card_id: cardId,
+          muted,
+        });
+        healthAlertCardsMeta = payload?.cards || healthAlertCardsMeta;
+        updateAlarmMutedVisuals();
+        syncHealthAlertAlarmButton();
+        if (!healthAlertModalOpen) {
+          applyHealthAlertPayload(payload);
+        }
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    function openHealthAlertModal(group) {
+      if (!group || !group.issues?.length || !healthAlertModalEl) return;
+      healthAlertCurrent = group;
+      healthAlertModalOpen = true;
+      if (healthAlertCardNameEl) {
+        healthAlertCardNameEl.textContent = group.card_name || `Card ${group.card_id}`;
+      }
+      if (healthAlertIssuesEl) {
+        healthAlertIssuesEl.innerHTML = renderHealthAlertIssues(group.issues);
+      }
+      healthAlertModalEl.classList.add("open");
+      healthAlertModalEl.setAttribute("aria-hidden", "false");
+      syncHealthAlertAlarmButton();
+    }
+
+    function closeHealthAlertModal(advanceQueue) {
+      if (!healthAlertModalEl) return;
+      healthAlertModalOpen = false;
+      healthAlertCurrent = null;
+      healthAlertModalEl.classList.remove("open");
+      healthAlertModalEl.setAttribute("aria-hidden", "true");
+      if (healthAlertIssuesEl) healthAlertIssuesEl.innerHTML = "";
+      if (advanceQueue) {
+        healthAlertQueueIndex += 1;
+        showNextHealthAlertFromQueue();
+      }
+    }
+
+    function showNextHealthAlertFromQueue() {
+      while (healthAlertQueueIndex < healthAlertQueue.length) {
+        const group = healthAlertQueue[healthAlertQueueIndex];
+        if (group?.issues?.length) {
+          openHealthAlertModal(group);
+          return;
+        }
+        healthAlertQueueIndex += 1;
+      }
+    }
+
+    function applyHealthAlertPayload(payload) {
+      healthAlertCardsMeta = payload?.cards || healthAlertCardsMeta;
+      updateAlarmMutedVisuals();
+      healthAlertQueue = groupHealthAlerts(payload?.alerts || []);
+      if (healthAlertModalOpen) return;
+      healthAlertQueueIndex = 0;
+      showNextHealthAlertFromQueue();
+    }
+
+    async function postHealthAlertAction(path, body) {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || "Request failed");
+      return payload;
+    }
+
+    async function pollHealthAlerts() {
+      if (healthAlertPollRunning) return;
+      healthAlertPollRunning = true;
+      try {
+        const res = await fetch("/api/health-alerts");
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.error || "Alert poll failed");
+        applyHealthAlertPayload(payload);
+      } catch (_err) {
+        /* best-effort poll */
+      } finally {
+        healthAlertPollRunning = false;
+      }
+    }
+
+    async function acknowledgeCurrentHealthAlert() {
+      if (!healthAlertCurrent?.issues?.length) return;
+      const fingerprints = healthAlertCurrent.issues.map((issue) => issue.fingerprint);
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/acknowledge", {
+          fingerprints,
+        });
+        closeHealthAlertModal(false);
+        applyHealthAlertPayload(payload);
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    async function pauseCurrentHealthAlert(minutes) {
+      if (!healthAlertCurrent) return;
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/pause", {
+          card_id: healthAlertCurrent.card_id,
+          minutes,
+        });
+        closeHealthAlertModal(false);
+        applyHealthAlertPayload(payload);
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    async function toggleCurrentHealthAlarm() {
+      if (!healthAlertCurrent) return;
+      const muted = !isCardAlarmMuted(healthAlertCurrent.card_id);
+      try {
+        const payload = await postHealthAlertAction("/api/health-alerts/alarm", {
+          card_id: healthAlertCurrent.card_id,
+          muted,
+        });
+        healthAlertCardsMeta = payload?.cards || healthAlertCardsMeta;
+        updateAlarmMutedVisuals();
+        closeHealthAlertModal(false);
+        applyHealthAlertPayload(payload);
+      } catch (err) {
+        window.alert(err.message || err);
+      }
+    }
+
+    if (healthAlertCloseBtn) {
+      healthAlertCloseBtn.addEventListener("click", () => closeHealthAlertModal(true));
+    }
+    if (healthAlertAckBtn) {
+      healthAlertAckBtn.addEventListener("click", () => acknowledgeCurrentHealthAlert());
+    }
+    if (healthAlertAlarmBtn) {
+      healthAlertAlarmBtn.addEventListener("click", () => toggleCurrentHealthAlarm());
+    }
+    healthAlertPauseBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const minutes = parseInt(btn.dataset.minutes, 10);
+        if (minutes) pauseCurrentHealthAlert(minutes);
+      });
+    });
+    if (healthAlertModalEl) {
+      healthAlertModalEl.addEventListener("click", (event) => {
+        if (event.target === healthAlertModalEl) closeHealthAlertModal(true);
+      });
+    }
 
     function escapeHtml(value) {
       return String(value)
@@ -1903,6 +2231,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         updateSummary(cardsCache);
         renderIssues(cardsCache);
         wireInteractiveButtons();
+        pollHealthAlerts();
         return card;
       } catch (err) {
         if (section) {
@@ -2192,8 +2521,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     loadJigglerStatus();
     loadCards();
+    pollHealthAlerts();
     setInterval(loadCards, 15000);
     setInterval(loadJigglerStatus, 30000);
+    setInterval(pollHealthAlerts, HEALTH_ALERT_POLL_MS);
   </script>
 </body>
 </html>"""
@@ -3304,6 +3635,12 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=filename,
             )
             return
+        if path == "/api/health-alerts":
+            try:
+                self._send_json(server.get_health_alerts())
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=500)
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -3513,6 +3850,89 @@ class _HealthHandler(BaseHTTPRequestHandler):
                     return
                 server.set_monitor_enabled(card_id=card_id, enabled=enabled)
             self._send_json({"states": server.monitor_states(), "default": False})
+            return
+        if path == "/api/health-alerts/acknowledge":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                if "fingerprints" in payload:
+                    fingerprints = payload.get("fingerprints")
+                    if not isinstance(fingerprints, list):
+                        self._send_json({"error": "fingerprints must be a list"}, status=400)
+                        return
+                    result = server.acknowledge_health_alerts(
+                        [str(item) for item in fingerprints]
+                    )
+                elif "fingerprint" in payload:
+                    result = server.acknowledge_health_alert(str(payload["fingerprint"]))
+                else:
+                    self._send_json({"error": "fingerprint or fingerprints required"}, status=400)
+                    return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+                return
+            self._send_json(result)
+            return
+        if path == "/api/health-alerts/pause":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+                minutes = int(payload.get("minutes"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id and minutes required"}, status=400)
+                return
+            try:
+                result = server.pause_health_alert(card_id, minutes)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+                return
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+                return
+            self._send_json(result)
+            return
+        if path == "/api/health-alerts/alarm":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            if "muted" not in payload:
+                self._send_json({"error": "muted required"}, status=400)
+                return
+            try:
+                card_id = int(payload.get("card_id"))
+            except (TypeError, ValueError):
+                self._send_json({"error": "card_id required"}, status=400)
+                return
+            try:
+                result = server.set_health_alarm(card_id, bool(payload.get("muted")))
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+                return
+            self._send_json(result)
             return
         if path == "/api/dell-report-settings":
             from launchpad.dell_report_settings import set_dell_report_include_card
@@ -5633,6 +6053,107 @@ class HealthServer:
     def is_monitor_enabled(self, card_id: int) -> bool:
         with self._lock:
             return self._monitor_enabled.get(card_id, False)
+
+    def health_alert_persist_available(self) -> bool:
+        with self._lock:
+            return self._get_setting is not None and self._set_setting is not None
+
+    def _load_health_alert_state(self) -> dict[str, Any]:
+        with self._lock:
+            getter = self._get_setting
+        if not getter:
+            return empty_state()
+        return load_state(getter(HEALTH_ALERT_SETTING, "") or "")
+
+    def _save_health_alert_state(self, state: dict[str, Any]) -> None:
+        with self._lock:
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError("LaunchPad must be unlocked to save health alert state.")
+        setter(HEALTH_ALERT_SETTING, dump_state(state))
+
+    @staticmethod
+    def _active_health_alert_fingerprints(
+        cards: list[dict[str, Any]], monitor_states: dict[str, bool]
+    ) -> set[str]:
+        active: set[str] = set()
+        for card in cards:
+            card_id = card.get("id")
+            if not monitor_states.get(str(card_id), False):
+                continue
+            for candidate in collect_critical_candidates(card, monitor_on=True):
+                active.add(candidate["fingerprint"])
+        return active
+
+    def _health_alert_cards_payload(
+        self,
+        cards: list[dict[str, Any]],
+        state: dict[str, Any],
+        *,
+        now: float,
+    ) -> dict[str, dict[str, Any]]:
+        alarm_muted = state.get("alarm_muted") or {}
+        paused_until = state.get("paused_until") or {}
+        out: dict[str, dict[str, Any]] = {}
+        for card in cards:
+            card_id = card.get("id")
+            if card_id is None:
+                continue
+            key = str(card_id)
+            pause_end = paused_until.get(key)
+            if pause_end is not None and now >= float(pause_end):
+                pause_end = None
+            out[key] = {
+                "alarm_muted": bool(alarm_muted.get(key)),
+                "paused_until": float(pause_end) if pause_end is not None else None,
+            }
+        return out
+
+    def get_health_alerts(self) -> dict[str, Any]:
+        cards = self.list_cards(allow_sync=False)
+        monitor = self.monitor_states()
+        state = self._load_health_alert_state()
+        active = self._active_health_alert_fingerprints(cards, monitor)
+        pruned = prune_acknowledgements(state, active)
+        if dump_state(pruned) != dump_state(state):
+            try:
+                self._save_health_alert_state(pruned)
+            except RuntimeError:
+                pass
+            state = pruned
+        now = time.time()
+        alerts = list_popup_alerts(cards, monitor, state, now=now)
+        return {
+            "alerts": alerts,
+            "cards": self._health_alert_cards_payload(cards, state, now=now),
+        }
+
+    def acknowledge_health_alert(self, fingerprint: str) -> dict[str, Any]:
+        state = acknowledge(self._load_health_alert_state(), str(fingerprint))
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
+
+    def acknowledge_health_alerts(self, fingerprints: list[str]) -> dict[str, Any]:
+        state = self._load_health_alert_state()
+        for fingerprint in fingerprints:
+            state = acknowledge(state, str(fingerprint))
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
+
+    def pause_health_alert(self, card_id: int, minutes: int) -> dict[str, Any]:
+        state = pause_card(
+            self._load_health_alert_state(),
+            card_id,
+            minutes,
+            now=time.time(),
+        )
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
+
+    def set_health_alarm(self, card_id: int, muted: bool) -> dict[str, Any]:
+        state = set_alarm(self._load_health_alert_state(), card_id, muted)
+        self._save_health_alert_state(state)
+        return self.get_health_alerts()
 
     def update_volume_find_card_host(self, card_id: int, host: str) -> dict:
         if not self.is_unlocked():

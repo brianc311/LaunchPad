@@ -30,6 +30,7 @@ def resolve_card_commands(
     from launchpad.storage_presets import (
         ensure_hpe_capacity_commands,
         ensure_svc_fc_commands,
+        ensure_svc_health_commands,
         preset_commands_for_profile,
     )
 
@@ -39,6 +40,7 @@ def resolve_card_commands(
     else:
         commands = preset_commands_for_profile(device_profile)
     commands = ensure_svc_fc_commands(device_profile, commands)
+    commands = ensure_svc_health_commands(device_profile, commands)
     commands = ensure_hpe_capacity_commands(device_profile, commands)
     return apply_command_placeholders(commands, instance_id=instance_id)
 

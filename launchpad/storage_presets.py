@@ -14,8 +14,9 @@ SVC_FC_COMMANDS: list[tuple[str, str]] = [
 # IBM Spectrum Virtualize / SVC CLI (FlashSystem, Storwize)
 SVC_COMMANDS: list[tuple[str, str]] = [
     ("Health - Nodes", "svcinfo lsnode -delim :"),
-    ("Health - Controllers", "svcinfo lsnode -delim :"),
+    ("Health - Controllers", "svcinfo lsnodecanister -delim :"),
     ("Health - Alerts", "svcinfo lseventlog -alert yes -delim :"),
+    ("Health - Drives", "svcinfo lsdrive -delim :"),
     ("Capacity - System %", "svcinfo lssystem -delim :"),
     ("Capacity - Pools %", "svcinfo lsmdiskgrp -delim :"),
     ("Capacity - MDisks", "svcinfo lsmdisk -delim :"),
@@ -533,6 +534,52 @@ def ensure_svc_fc_commands(
     if not has_command("lsfabric", "fc - fabric"):
         merged.append(SVC_FC_COMMANDS[3])
     return merged
+
+
+def ensure_svc_health_commands(
+    profile: str,
+    commands: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Append missing health CLI and upgrade controller lsnode → lsnodecanister.
+
+    Cards often keep older custom command lists that pre-date drive/canister presets.
+    """
+    if not is_svc_fc_profile(profile):
+        return list(commands)
+
+    def has_command(*needles: str, exclude: tuple[str, ...] = ()) -> bool:
+        for label, command in commands:
+            haystack = f"{label} {command}".lower()
+            if exclude and any(token in haystack for token in exclude):
+                continue
+            if any(needle in haystack for needle in needles):
+                return True
+        return False
+
+    merged = list(commands)
+    if not has_command("lsdrive", "health - drives"):
+        drive_cmd = next(
+            (cmd for label, cmd in SVC_COMMANDS if "lsdrive" in cmd.lower()),
+            "svcinfo lsdrive -delim :",
+        )
+        merged.append(("Health - Drives", drive_cmd))
+
+    upgraded: list[tuple[str, str]] = []
+    for label, command in merged:
+        label_lower = (label or "").lower()
+        cmd_lower = command.lower()
+        is_controllers = "health - controllers" in label_lower or (
+            "controller" in label_lower and "health" in label_lower
+        )
+        if (
+            is_controllers
+            and "lsnodecanister" not in cmd_lower
+            and "lsnode" in cmd_lower
+        ):
+            upgraded.append((label, "svcinfo lsnodecanister -delim :"))
+        else:
+            upgraded.append((label, command))
+    return upgraded
 
 
 def ensure_hpe_capacity_commands(
