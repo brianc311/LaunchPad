@@ -1254,7 +1254,46 @@ class AdminView(ctk.CTkFrame):
             font=ctk.CTkFont(size=11),
         ).grid(row=profile_row, column=2, padx=8, pady=6, sticky="w")
 
-        alerts_row = profile_row + 1
+        dscli_path_row = profile_row + 1
+        self.dscli_path_label = ctk.CTkLabel(
+            scroll, text="DSCLI Path", text_color=self.theme["muted"]
+        )
+        self.dscli_path_label.grid(row=dscli_path_row, column=0, padx=8, pady=6, sticky="w")
+        self.entries["dscli_path"] = ctk.CTkEntry(
+            scroll,
+            placeholder_text=r"C:\Program Files\IBM\dscli\dscli.bat (optional if on PATH)",
+        )
+        self.entries["dscli_path"].grid(row=dscli_path_row, column=1, padx=8, pady=6, sticky="ew")
+
+        dscli_hmc_row = profile_row + 2
+        self.dscli_hmc_label = ctk.CTkLabel(
+            scroll, text="DSCLI HMC Host", text_color=self.theme["muted"]
+        )
+        self.dscli_hmc_label.grid(row=dscli_hmc_row, column=0, padx=8, pady=6, sticky="w")
+        self.entries["dscli_hmc"] = ctk.CTkEntry(
+            scroll,
+            placeholder_text="10.0.0.9 (optional — passed as -hmc1)",
+        )
+        self.entries["dscli_hmc"].grid(row=dscli_hmc_row, column=1, padx=8, pady=6, sticky="ew")
+
+        dscli_hint_row = profile_row + 3
+        self.dscli_hint_label = ctk.CTkLabel(
+            scroll,
+            text=(
+                "DS8884: Host is the management desktop (OpenSSH). Optional DSCLI path if not "
+                "on PATH; optional HMC host for -hmc1."
+            ),
+            text_color=self.theme["accent"],
+            font=ctk.CTkFont(size=11),
+            wraplength=420,
+            justify="left",
+        )
+        self.dscli_hint_label.grid(
+            row=dscli_hint_row, column=0, columnspan=2, padx=8, pady=(0, 8), sticky="w"
+        )
+        self._update_dscli_fields_visibility()
+
+        alerts_row = profile_row + 4
         ctk.CTkLabel(scroll, text="Alerts", text_color=self.theme["muted"]).grid(
             row=alerts_row, column=0, padx=8, pady=6, sticky="w"
         )
@@ -1510,6 +1549,7 @@ class AdminView(ctk.CTkFrame):
     def _on_device_profile_change(self, selected_label: str) -> None:
         profile_key = self._device_profile_label_to_key.get(selected_label, "")
         self._update_sudo_password_visibility()
+        self._update_dscli_fields_visibility()
         if is_storage_profile(profile_key):
             self.commands_box.delete("1.0", "end")
             self.commands_box.insert("1.0", preset_command_text(profile_key))
@@ -1537,6 +1577,17 @@ class AdminView(ctk.CTkFrame):
     def _update_sudo_password_visibility(self) -> None:
         visible = self._selected_device_profile_key() == "hadoop_linux"
         for widget in (self.sudo_password_label, self.entries["sudo_password"]):
+            widget.grid() if visible else widget.grid_remove()
+
+    def _update_dscli_fields_visibility(self) -> None:
+        visible = self._selected_device_profile_key() == "ibm_ds8884"
+        for widget in (
+            self.dscli_path_label,
+            self.entries["dscli_path"],
+            self.dscli_hmc_label,
+            self.entries["dscli_hmc"],
+            self.dscli_hint_label,
+        ):
             widget.grid() if visible else widget.grid_remove()
 
     def _get_commands_text(self) -> str:
@@ -1726,6 +1777,7 @@ class AdminView(ctk.CTkFrame):
         if hasattr(self, "device_profile_var"):
             self.device_profile_var.set(DEVICE_PROFILES[""])
             self._update_sudo_password_visibility()
+            self._update_dscli_fields_visibility()
         if hasattr(self, "commands_box"):
             self._set_commands_text("")
         if defaults:
@@ -1824,6 +1876,9 @@ class AdminView(ctk.CTkFrame):
         if hasattr(self, "device_profile_var"):
             self.device_profile_var.set(profile_label)
             self._update_sudo_password_visibility()
+            self._update_dscli_fields_visibility()
+        self.entries["dscli_path"].insert(0, getattr(card, "dscli_path", "") or "")
+        self.entries["dscli_hmc"].insert(0, getattr(card, "dscli_hmc", "") or "")
         if hasattr(self, "admin_status") and is_storage_profile(profile_key):
             self.admin_status.configure(
                 text=(
@@ -1895,6 +1950,8 @@ class AdminView(ctk.CTkFrame):
             "key_file_path": key_path,
             "device_profile": self._selected_device_profile_key(),
             "custom_commands": self._get_commands_text(),
+            "dscli_path": self.entries["dscli_path"].get().strip(),
+            "dscli_hmc": self.entries["dscli_hmc"].get().strip(),
         }
 
         if self.editing_id:
