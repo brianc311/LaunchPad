@@ -1044,11 +1044,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button type="button" id="health-alert-ack-btn">Suppress</button>
           <button type="button" class="secondary" id="health-alert-alarm-btn">Alarm off</button>
           <div class="pause-group">
-            <span class="pause-label">Snooze…</span>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="5">5 min</button>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="10">10 min</button>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="15">15 min</button>
-            <button type="button" class="secondary health-alert-pause-btn" data-minutes="20">20 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="5">Snooze 5 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="10">Snooze 10 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="15">Snooze 15 min</button>
+            <button type="button" class="secondary health-alert-pause-btn" data-minutes="20">Snooze 20 min</button>
           </div>
         </div>
       </div>
