@@ -3,6 +3,7 @@ import json
 import threading
 from pathlib import Path
 from tkinter import Menu, filedialog, messagebox
+from typing import Any
 
 from launchpad.branding import get_app_name, load_ctk_logo
 from launchpad.capacity_email_scheduler import is_capacity_email_due
@@ -35,6 +36,7 @@ from launchpad.dashboard_array_rail import (
 from launchpad.database import Card
 from launchpad.health_format import card_stats_columns, command_results_columns
 from launchpad.health_alert_art import ensure_health_alert_art_dir
+from launchpad.health_alert_state import same_health_alert_card_id
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.health_server import get_health_server
 from launchpad.launchers import launch_card
@@ -826,6 +828,53 @@ class DashboardView(ctk.CTkFrame):
             ]
             widget.set_capacity_alert(severity, messages)
 
+    @staticmethod
+    def _same_health_alert_card_id(left, right) -> bool:
+        return same_health_alert_card_id(left, right)
+
+    def _force_close_health_alert_dialog(self) -> None:
+        dialog = self._health_alert_dialog
+        self._health_alert_dialog = None
+        if dialog is None:
+            return
+        try:
+            dialog.withdraw()
+        except Exception:
+            pass
+        try:
+            dialog.destroy()
+        except Exception:
+            pass
+
+    def _finish_health_alert_dialog(
+        self,
+        dialog,
+        *,
+        advance_queue: bool,
+        payload: dict | None = None,
+    ) -> None:
+        if dialog is not None and self._health_alert_dialog is dialog:
+            self._health_alert_dialog = None
+        elif dialog is None:
+            self._health_alert_dialog = None
+        if dialog is not None:
+            try:
+                dialog.withdraw()
+            except Exception:
+                pass
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+        if payload is not None:
+            # Defer so Tk can finish tearing down the previous toplevel before
+            # opening the next card's dialog (prevents stacked orphan windows).
+            self.after(50, lambda p=payload: self._apply_health_alert_payload(p))
+            return
+        if advance_queue:
+            self._health_alert_queue_index += 1
+            self.after(50, self._show_next_health_alert)
+
     def _schedule_health_alert_poll(self) -> None:
         if self._health_alert_timer:
             self.after_cancel(self._health_alert_timer)
@@ -957,30 +1006,57 @@ class DashboardView(ctk.CTkFrame):
             self._health_alert_queue_index += 1
 
     def _open_health_alert_dialog(self, group: dict) -> None:
-        if self._health_alert_dialog is not None:
-            return
-        self._health_alert_dialog = HealthAlertDialog(
+        # Always tear down any prior toplevel first so a failed destroy / stale
+        # reference cannot leave multiple Critical Health Alert windows stacked.
+        self._force_close_health_alert_dialog()
+        holder: dict[str, Any] = {"dialog": None}
+
+        def on_acknowledge() -> None:
+            dialog = holder["dialog"]
+            if dialog is None:
+                return
+            self._acknowledge_health_alert_group(dialog.group, dialog=dialog)
+
+        def on_pause(minutes: int) -> None:
+            dialog = holder["dialog"]
+            if dialog is None:
+                return
+            card_id = dialog.group.get("card_id")
+            if card_id is None:
+                return
+            self._pause_health_alert_card(card_id, minutes, dialog=dialog)
+
+        def on_alarm_toggle() -> None:
+            dialog = holder["dialog"]
+            if dialog is None:
+                return
+            card_id = dialog.group.get("card_id")
+            if card_id is None:
+                return
+            self._toggle_health_alarm_for_card(card_id, dialog=dialog)
+
+        def on_close(advance_queue: bool) -> None:
+            dialog = holder["dialog"]
+            self._finish_health_alert_dialog(dialog, advance_queue=advance_queue)
+
+        dialog = HealthAlertDialog(
             self.winfo_toplevel(),
             theme_name=self.theme_name,
             group=group,
-            on_acknowledge=self._on_health_alert_acknowledge,
-            on_pause=self._on_health_alert_pause,
-            on_alarm_toggle=self._on_health_alert_alarm_toggle,
-            on_close=self._on_health_alert_close,
+            on_acknowledge=on_acknowledge,
+            on_pause=on_pause,
+            on_alarm_toggle=on_alarm_toggle,
+            on_close=on_close,
             alarm_muted=self._card_alarm_muted(int(group.get("card_id") or 0)),
         )
+        holder["dialog"] = dialog
+        self._health_alert_dialog = dialog
 
     def _close_health_alert_dialog(self, *, advance_queue: bool) -> None:
-        dialog = self._health_alert_dialog
-        self._health_alert_dialog = None
-        if dialog is not None:
-            try:
-                dialog.destroy()
-            except Exception:
-                pass
-        if advance_queue:
-            self._health_alert_queue_index += 1
-            self._show_next_health_alert()
+        self._finish_health_alert_dialog(
+            self._health_alert_dialog,
+            advance_queue=advance_queue,
+        )
 
     def _on_health_alert_close(self, advance_queue: bool) -> None:
         self._close_health_alert_dialog(advance_queue=advance_queue)
@@ -989,15 +1065,17 @@ class DashboardView(ctk.CTkFrame):
         dialog = self._health_alert_dialog
         if dialog is None:
             return
-        self._acknowledge_health_alert_group(dialog.group)
+        self._acknowledge_health_alert_group(dialog.group, dialog=dialog)
 
-    def _acknowledge_health_alert_group(self, group: dict) -> None:
+    def _acknowledge_health_alert_group(self, group: dict, *, dialog=None) -> None:
         fingerprints = [
             str(issue.get("fingerprint") or "")
             for issue in group.get("issues") or []
             if issue.get("fingerprint") is not None
         ]
         if not fingerprints:
+            if dialog is not None:
+                self._finish_health_alert_dialog(dialog, advance_queue=False)
             return
         try:
             server = get_health_server()
@@ -1005,8 +1083,16 @@ class DashboardView(ctk.CTkFrame):
         except Exception as exc:
             self.status_label.configure(text=f"Could not acknowledge health alert: {exc}")
             return
-        self._close_matching_health_alert_dialog(group.get("card_id"))
-        self._apply_health_alert_payload(payload)
+        target = dialog if dialog is not None else self._health_alert_dialog
+        if target is not None and self._same_health_alert_card_id(
+            target.group.get("card_id"), group.get("card_id")
+        ):
+            self._finish_health_alert_dialog(
+                target, advance_queue=False, payload=payload
+            )
+        else:
+            self._close_matching_health_alert_dialog(group.get("card_id"))
+            self._apply_health_alert_payload(payload)
 
     def _on_health_alert_pause(self, minutes: int) -> None:
         dialog = self._health_alert_dialog
@@ -1015,17 +1101,25 @@ class DashboardView(ctk.CTkFrame):
         card_id = dialog.group.get("card_id")
         if card_id is None:
             return
-        self._pause_health_alert_card(int(card_id), minutes)
+        self._pause_health_alert_card(card_id, minutes, dialog=dialog)
 
-    def _pause_health_alert_card(self, card_id: int, minutes: int) -> None:
+    def _pause_health_alert_card(self, card_id, minutes: int, *, dialog=None) -> None:
         try:
             server = get_health_server()
             payload = server.pause_health_alert(int(card_id), int(minutes))
         except Exception as exc:
             self.status_label.configure(text=f"Could not pause health alert: {exc}")
             return
-        self._close_matching_health_alert_dialog(card_id)
-        self._apply_health_alert_payload(payload)
+        target = dialog if dialog is not None else self._health_alert_dialog
+        if target is not None and self._same_health_alert_card_id(
+            target.group.get("card_id"), card_id
+        ):
+            self._finish_health_alert_dialog(
+                target, advance_queue=False, payload=payload
+            )
+        else:
+            self._close_matching_health_alert_dialog(card_id)
+            self._apply_health_alert_payload(payload)
 
     def _on_health_alert_alarm_toggle(self) -> None:
         dialog = self._health_alert_dialog
@@ -1034,23 +1128,25 @@ class DashboardView(ctk.CTkFrame):
         card_id = dialog.group.get("card_id")
         if card_id is None:
             return
-        self._toggle_health_alarm_for_card(int(card_id))
+        self._toggle_health_alarm_for_card(card_id, dialog=dialog)
 
-    def _toggle_health_alarm_for_card(self, card_id: int) -> None:
-        muted = not self._card_alarm_muted(card_id)
-        self._set_health_alarm(card_id, muted, close_dialog=True)
+    def _toggle_health_alarm_for_card(self, card_id, *, dialog=None) -> None:
+        muted = not self._card_alarm_muted(int(card_id))
+        self._set_health_alarm(card_id, muted, close_dialog=True, dialog=dialog)
 
     def _close_matching_health_alert_dialog(self, card_id) -> None:
         dialog = self._health_alert_dialog
         if dialog is None:
             return
-        if dialog.group.get("card_id") == card_id:
-            self._close_health_alert_dialog(advance_queue=False)
+        if self._same_health_alert_card_id(dialog.group.get("card_id"), card_id):
+            self._finish_health_alert_dialog(dialog, advance_queue=False)
 
     def _on_card_health_alarm_on(self, card_id: int) -> None:
         self._set_health_alarm(card_id, False, close_dialog=False)
 
-    def _set_health_alarm(self, card_id: int, muted: bool, *, close_dialog: bool) -> None:
+    def _set_health_alarm(
+        self, card_id, muted: bool, *, close_dialog: bool, dialog=None
+    ) -> None:
         try:
             server = get_health_server()
             payload = server.set_health_alarm(int(card_id), muted)
@@ -1059,6 +1155,14 @@ class DashboardView(ctk.CTkFrame):
             self.status_label.configure(text=f"Could not {action} health alarm: {exc}")
             return
         if close_dialog:
+            target = dialog if dialog is not None else self._health_alert_dialog
+            if target is not None and self._same_health_alert_card_id(
+                target.group.get("card_id"), card_id
+            ):
+                self._finish_health_alert_dialog(
+                    target, advance_queue=False, payload=payload
+                )
+                return
             self._close_matching_health_alert_dialog(card_id)
         self._apply_health_alert_payload(payload)
 
