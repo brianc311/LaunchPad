@@ -3,6 +3,7 @@ from pathlib import Path
 DASH = Path("launchpad/ui/dashboard_view.py").read_text(encoding="utf-8")
 DIALOG = Path("launchpad/ui/health_alert_dialog.py").read_text(encoding="utf-8")
 CARD = Path("launchpad/ui/card_widget.py").read_text(encoding="utf-8")
+LAYOUT = Path("launchpad/ui/health_alert_layout.py").read_text(encoding="utf-8")
 
 
 def test_health_alert_dialog_module():
@@ -10,15 +11,20 @@ def test_health_alert_dialog_module():
     assert "HEALTH_ALERT_POLL_MS" in DIALOG
     assert "group_health_alerts" in DIALOG
     assert "Critical Health Alert" in DIALOG
-    assert 'text="Suppress"' in DIALOG
-    assert "Alarm off" in DIALOG
-    assert "Alarm on" in DIALOG
-    assert "on_alarm_toggle" in DIALOG
-    assert 'f"Snooze {minutes}"' in DIALOG
-    assert "enumerate((5, 10, 15, 20)" in DIALOG
-    assert 'text="Close"' in DIALOG
     assert "resolve_health_alert_art" in DIALOG
-    assert "CTkImage" in DIALOG
+    assert "build_health_alert_surface" in DIALOG
+    assert "load_alert_art_image" in DIALOG
+
+
+def test_health_alert_layout_module():
+    assert "def build_health_alert_surface(" in LAYOUT
+    assert 'text="Suppress"' in LAYOUT
+    assert "Alarm off" in LAYOUT
+    assert "Alarm on" in LAYOUT
+    assert 'f"Snooze {minutes}"' in LAYOUT
+    assert "SNOOZE_MINUTES = (5, 10, 15, 20)" in LAYOUT
+    assert 'text="Close"' in LAYOUT
+    assert "CTkImage" in LAYOUT
 
 
 def test_dashboard_wires_health_alert_poll():
@@ -35,10 +41,23 @@ def test_dashboard_wires_health_alert_poll():
     assert "set_health_alert_overlay" in DASH
 
 
+def test_dashboard_remembers_dismissed_overlays():
+    assert "_health_alert_overlay_dismissed" in DASH
+    assert "_dismiss_health_alert_overlay" in DASH
+    assert "_health_alert_group_key" in DASH
+
+
 def test_card_widget_has_health_alert_overlay_contract():
     assert "def set_health_alert_overlay(" in CARD
     assert "def clear_health_alert_overlay(" in CARD
-    assert 'text="Suppress"' in CARD
-    assert 'f"Snooze {minutes}"' in CARD
-    assert '"Alarm on" if alarm_muted else "Alarm off"' in CARD
-    assert 'text="Close"' in CARD
+    assert "build_health_alert_surface(" in CARD
+    assert "health_alert_overlay_signature" in CARD
+
+
+def test_desktop_surfaces_do_not_cover_art_with_transparent_frames():
+    # CTk paints fg_color="transparent" with the master colour, so a full-bleed
+    # transparent frame would hide the art entirely (final review C1).
+    assert 'fg_color="transparent"' not in DIALOG
+    backdrop_place = "backdrop.place(relx=0, rely=0, relwidth=1, relheight=1)"
+    assert backdrop_place in LAYOUT
+    assert "relheight=1" not in LAYOUT.split(backdrop_place)[1]

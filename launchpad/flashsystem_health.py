@@ -781,21 +781,63 @@ def _analyze_status_table(
             issues.append(issue)
 
 
+# lsportfc reports active / inactive_configured / inactive_unconfigured. Only the last
+# is unexpected: inactive_configured is the normal state for an SFP with no host on it,
+# so alerting on a bare "inactive" substring would page on every idle port in the fleet.
+_FC_PORT_OK_STATUS = frozenset(
+    {"active", "inactive_configured", "configured", "online", "ok", "yes"}
+)
+_FC_PORT_CRITICAL_STATUS = frozenset({"inactive_unconfigured"})
+_FC_PORT_BAD_TOKENS = ("offline", "fail", "degrad", "error", "dead", "fault", "excluded")
+
+
+def _fc_port_status_is_critical(status: str) -> bool:
+    lowered = str(status or "").strip().lower()
+    if not lowered or lowered in _FC_PORT_OK_STATUS:
+        return False
+    if lowered in _FC_PORT_CRITICAL_STATUS:
+        return True
+    return any(token in lowered for token in _FC_PORT_BAD_TOKENS)
+
+
+def _is_fc_port_row(record: dict[str, str]) -> bool:
+    port_type = str(record.get("type") or "").strip().lower()
+    return not port_type or port_type.startswith("fc")
+
+
+def _fc_port_label(record: dict[str, str]) -> str:
+    port = _first_text(
+        record.get("fc_io_port_id"),
+        record.get("port_id"),
+        record.get("id"),
+    ) or "unknown"
+    # fc_io_port_id repeats across nodes, so the node has to be part of the message
+    # (and therefore the fingerprint) or one Suppress would silence both ports.
+    node = _first_text(record.get("node_name"), record.get("node_id"))
+    location = _first_text(record.get("adapter_location"))
+    label = f"port {port}"
+    if node:
+        label += f" on {node}"
+    if location:
+        label += f" slot {location}"
+    return label
+
+
 def _analyze_fc_ports(issues: list[dict[str, Any]], *, server: str, output: str) -> None:
     headers, rows = _table_rows(output)
     if not headers or not rows:
         return
     for row in rows:
         record = _row_map(headers, row)
-        status = record.get("status", "")
-        if status.strip().lower() not in _BAD_STATUS:
+        if not _is_fc_port_row(record):
             continue
-        port = record.get("fc_io_port_id") or record.get("id") or "unknown"
+        if not _fc_port_status_is_critical(record.get("status", "")):
+            continue
         issues.append(
             {
                 "severity": "critical",
                 "category": "io",
-                "message": f"I/O card failed (port {port})",
+                "message": f"I/O card failed ({_fc_port_label(record)})",
                 "server": server,
             }
         )

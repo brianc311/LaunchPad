@@ -105,6 +105,7 @@ class DashboardView(ctk.CTkFrame):
         self._health_alert_beeped: set[str] = set()
         self._health_alert_poll_in_flight = False
         self._health_alert_cards_meta: dict[str, dict] = {}
+        self._health_alert_overlay_dismissed: dict[int, str] = {}
         ensure_health_alert_art_dir()
         self._capacity_email_timer: str | None = None
         self._capacity_email_send_in_flight = False
@@ -881,6 +882,21 @@ class DashboardView(ctk.CTkFrame):
         self._health_alert_queue_index = 0
         self._show_next_health_alert()
 
+    @staticmethod
+    def _health_alert_group_key(group: dict) -> str:
+        return "\x1f".join(
+            sorted(
+                str(issue.get("fingerprint") or issue.get("message") or "")
+                for issue in group.get("issues") or []
+            )
+        )
+
+    def _dismiss_health_alert_overlay(self, widget, group_key: str) -> None:
+        # Remember the dismissal so the next poll does not immediately re-raise the
+        # same overlay; a new fingerprint set clears it.
+        self._health_alert_overlay_dismissed[widget.card_id] = group_key
+        widget.clear_health_alert_overlay()
+
     def _sync_health_alert_overlays(self, groups: list[dict]) -> None:
         by_card_id = {
             int(group.get("card_id")): group
@@ -890,8 +906,14 @@ class DashboardView(ctk.CTkFrame):
         for widget in self.card_widgets:
             group = by_card_id.get(widget.card_id)
             if group is None:
+                self._health_alert_overlay_dismissed.pop(widget.card_id, None)
                 widget.clear_health_alert_overlay()
                 continue
+            group_key = self._health_alert_group_key(group)
+            if self._health_alert_overlay_dismissed.get(widget.card_id) == group_key:
+                widget.clear_health_alert_overlay()
+                continue
+            self._health_alert_overlay_dismissed.pop(widget.card_id, None)
             widget.set_health_alert_overlay(
                 group,
                 on_acknowledge=(
@@ -905,7 +927,11 @@ class DashboardView(ctk.CTkFrame):
                 on_alarm_toggle=(
                     lambda card_id=widget.card_id: self._toggle_health_alarm_for_card(card_id)
                 ),
-                on_close=widget.clear_health_alert_overlay,
+                on_close=(
+                    lambda card_widget=widget, key=group_key: (
+                        self._dismiss_health_alert_overlay(card_widget, key)
+                    )
+                ),
                 alarm_muted=self._card_alarm_muted(widget.card_id),
             )
 

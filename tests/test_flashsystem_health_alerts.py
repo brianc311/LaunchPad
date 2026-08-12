@@ -51,8 +51,7 @@ def test_analyze_drives_offline_is_critical():
     assert all(i["severity"] == "critical" for i in drive_issues)
 
 
-def test_lsportfc_offline_is_io_critical():
-    output = "id:fc_io_port_id:status\n0:1:offline\n1:2:active\n"
+def _io_issues(output: str) -> list[dict]:
     result = analyze_health(
         "Site",
         [
@@ -65,14 +64,67 @@ def test_lsportfc_offline_is_io_critical():
         ],
         None,
     )
-    ios = [
+    return [
         issue
         for issue in result["health_issues"]
         if issue.get("category") in ("io", "fc")
     ]
+
+
+def test_lsportfc_active_and_inactive_configured_do_not_alert():
+    # inactive_configured is the normal state for an SFP with no host attached.
+    output = (
+        "id:fc_io_port_id:node_id:node_name:type:status\n"
+        "0:1:1:node1:fc:active\n"
+        "1:2:1:node1:fc:inactive_configured\n"
+    )
+    assert _io_issues(output) == []
+
+
+def test_lsportfc_inactive_unconfigured_is_io_critical():
+    output = (
+        "id:fc_io_port_id:node_id:node_name:type:status\n"
+        "0:1:1:node1:fc:active\n"
+        "1:2:1:node1:fc:inactive_unconfigured\n"
+    )
+    ios = _io_issues(output)
     assert len(ios) == 1
     assert ios[0]["severity"] == "critical"
+    assert ios[0]["message"] == "I/O card failed (port 2 on node1)"
+
+
+def test_lsportfc_offline_status_is_io_critical():
+    output = "id:fc_io_port_id:status\n0:1:offline\n1:2:active\n"
+    ios = _io_issues(output)
+    assert len(ios) == 1
     assert ios[0]["message"] == "I/O card failed (port 1)"
+
+
+def test_lsportfc_ethernet_rows_are_not_io_card_failures():
+    output = (
+        "id:fc_io_port_id:node_name:type:status\n"
+        "0:1:node1:ethernet:inactive_unconfigured\n"
+    )
+    assert _io_issues(output) == []
+
+
+def test_lsportfc_same_port_id_on_two_nodes_stays_distinct():
+    output = (
+        "id:fc_io_port_id:node_id:node_name:type:status\n"
+        "3:4:1:node1:fc:inactive_unconfigured\n"
+        "24:4:2:node2:fc:inactive_unconfigured\n"
+    )
+    ios = _io_issues(output)
+    assert len(ios) == 2
+    assert len({issue["message"] for issue in ios}) == 2
+
+    card = {"id": 9, "name": "Site", "error": None, "health_issues": ios}
+    candidates = [
+        candidate
+        for candidate in collect_critical_candidates(card, monitor_on=True)
+        if candidate["category"] == "io"
+    ]
+    assert len({candidate["fingerprint"] for candidate in candidates}) == 2
 
 
 def test_power_alert_with_offline_canister_wording():

@@ -3,6 +3,7 @@ import os
 import customtkinter
 
 ctk_assets = os.path.join(os.path.dirname(customtkinter.__file__), "assets")
+health_alert_art = os.path.join(SPECPATH, "launchpad", "resources", "health-alerts")
 
 block_cipher = None
 
@@ -10,7 +11,10 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[(ctk_assets, "customtkinter/assets")],
+    datas=[
+        (ctk_assets, "customtkinter/assets"),
+        (health_alert_art, "launchpad/resources/health-alerts"),
+    ],
     hiddenimports=['customtkinter', 'cryptography', 'paramiko', 'launchpad.storage_presets', 'launchpad.flashsystem_fc', 'launchpad.fc_wwpn_report', 'launchpad.fc_wwpn_export', 'launchpad.snapshot_schedule', 'launchpad.snapshot_schedule_export', 'openpyxl'],
     hookspath=[],
     hooksconfig={},
