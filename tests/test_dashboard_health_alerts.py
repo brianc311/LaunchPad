@@ -47,6 +47,17 @@ def test_dashboard_remembers_dismissed_overlays():
     assert "_health_alert_group_key" in DASH
 
 
+def test_dashboard_normalizes_health_alert_card_ids():
+    assert "_same_health_alert_card_id" in DASH
+    assert "_force_close_health_alert_dialog" in DASH
+    assert "_finish_health_alert_dialog" in DASH
+    assert "self.after(50," in DASH
+    # Dialog actions must bind to the opened dialog instance, not only the
+    # dashboard's current pointer (orphaned windows used to no-op).
+    assert 'holder: dict[str, Any] = {"dialog": None}' in DASH
+    assert "self._acknowledge_health_alert_group(dialog.group, dialog=dialog)" in DASH
+
+
 def test_card_widget_has_health_alert_overlay_contract():
     assert "def set_health_alert_overlay(" in CARD
     assert "def clear_health_alert_overlay(" in CARD

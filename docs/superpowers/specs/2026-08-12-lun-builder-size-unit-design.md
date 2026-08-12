@@ -44,7 +44,7 @@ Operators enter Size as free text. Bare `100` already means 100 GB on create (1.
 2. New rows and missing/unknown unit → unit = **GB**.
 3. Changing number or unit updates the underlying `lun.size` to `{number}{UNIT}` with no space (e.g. `100GB`, `1.5TB`).
 4. On load / re-render, parse `lun.size`:
-   - Bare number → amount as-is, unit **GB**, normalize stored value to `{n}GB` when the row is edited (optional normalize-on-load is allowed if it keeps the plan consistent).
+   - Bare number → amount as-is, unit **GB** (normalize to `{n}GB` on edit is enough; optional normalize-on-load OK).
    - Suffix `GB` / `TB` (case-insensitive) → split amount + unit.
    - Any other suffix (e.g. `MB`): show the numeric amount with unit **GB** in the controls, but rewrite `size` to `{amount}GB` only when the operator edits number or unit (do not silently rewrite on load alone).
 5. If the operator pastes a unit into the number field (e.g. `500GB`), on change/blur strip the unit into the dropdown and set `size` to `"500GB"`.

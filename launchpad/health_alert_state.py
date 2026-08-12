@@ -22,6 +22,16 @@ def issue_fingerprint(card_id: int | str, category: str, message: str) -> str:
     return f"{card_id}:{category}:{normalized}"
 
 
+def same_health_alert_card_id(left: Any, right: Any) -> bool:
+    """True when two alert card ids refer to the same card (int/str safe)."""
+    if left is None or right is None:
+        return False
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return str(left) == str(right)
+
+
 def empty_state() -> dict[str, Any]:
     return {"acknowledged": [], "alarm_muted": {}, "paused_until": {}}
 

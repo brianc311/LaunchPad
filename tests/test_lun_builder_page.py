@@ -360,3 +360,14 @@ def test_lun_builder_add_row_reads_summary_before_render():
     )[0]
     assert "readSummary(activeBuild())" in add_row
     assert add_row.index("readSummary(activeBuild())") < add_row.index("render()")
+
+
+def test_lun_builder_size_cell_has_gb_tb_unit_select():
+    assert 'data-key="size_amount"' in LUN_BUILDER_HTML
+    assert 'data-key="size_unit"' in LUN_BUILDER_HTML
+    assert 'option value="GB"' in LUN_BUILDER_HTML
+    assert 'option value="TB"' in LUN_BUILDER_HTML
+    assert ">GB</option>" in LUN_BUILDER_HTML
+    assert ">TB</option>" in LUN_BUILDER_HTML
+    assert "function splitLunSizeForUi" in LUN_BUILDER_HTML
+    assert "function joinLunSize" in LUN_BUILDER_HTML
