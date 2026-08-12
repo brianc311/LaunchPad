@@ -168,6 +168,16 @@ def test_lun_builder_wizard_overlay():
         assert text in LUN_BUILDER_HTML
 
 
+def test_lun_builder_trims_lpar_name_for_copy():
+    for text in (
+        'key === "lpar_name" ? String(value ?? "").trim()',
+        'target.dataset.key === "lpar_name"',
+        "String(host.lpar_name || \"\").trim()",
+        '.map((name) => String(name || "").trim()).filter(Boolean).join(", ")',
+    ):
+        assert text in LUN_BUILDER_HTML
+
+
 def test_lun_builder_exposes_collapsed_cli_panel():
     for text in (
         'id="cli-panel"',
