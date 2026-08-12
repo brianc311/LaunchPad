@@ -233,7 +233,19 @@ def collect_critical_candidates(card: dict[str, Any], *, monitor_on: bool) -> li
                 severity = "critical"
         if not is_critical:
             continue
-        candidates.append(_candidate(card_id, card_name, category, message, severity))
+        fingerprint_message = issue.get("fingerprint_message")
+        candidates.append(
+            _candidate(
+                card_id,
+                card_name,
+                category,
+                message,
+                severity,
+                fingerprint_message=(
+                    None if fingerprint_message is None else str(fingerprint_message)
+                ),
+            )
+        )
     return _dedupe_node_controller_candidates(candidates)
 
 

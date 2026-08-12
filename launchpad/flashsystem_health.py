@@ -815,6 +815,11 @@ def _analyze_alerts(issues: list[dict[str, Any]], *, server: str, output: str) -
         return
     for row in rows:
         record = _row_map(headers, row)
+        operator_evidence = " ".join(
+            str(value or "").strip()
+            for value in record.values()
+            if str(value or "").strip()
+        )
         message = _first_text(
             record.get("message"),
             record.get("description"),
@@ -844,6 +849,7 @@ def _analyze_alerts(issues: list[dict[str, Any]], *, server: str, output: str) -
                 "category": category,
                 "message": message[:140],
                 "server": server,
+                "_operator_evidence": operator_evidence,
             }
         )
 
@@ -862,23 +868,27 @@ def _apply_operator_wording(
     )
     for issue in issues:
         category = issue.get("category")
-        match = bad_status_pattern.search(str(issue.get("message") or ""))
+        original_message = str(issue.get("message") or "")
+        match = bad_status_pattern.search(original_message)
         if category in {"node", "controller"} and match:
             status = match.group(1).lower()
             if status in {"offline", "failed", "down"}:
+                issue["fingerprint_message"] = original_message
                 issue["message"] = f"Canister {status}"
         elif category in {"drive", "disk", "mdisk", "nvme"} and match:
+            issue["fingerprint_message"] = original_message
             issue["message"] = "Hard drive failed"
         elif (
             category in {"connectivity", "network"}
             and issue.get("severity") == "critical"
         ):
+            issue["fingerprint_message"] = original_message
             issue["message"] = "Network down"
-    if not canister_offline:
-        return
     power_pattern = re.compile(r"\b(?:power|psu|ups|battery)\b", re.IGNORECASE)
     for issue in alert_issues:
-        if power_pattern.search(str(issue.get("message") or "")):
+        evidence = str(issue.pop("_operator_evidence", "") or "")
+        if canister_offline and power_pattern.search(evidence):
+            issue["fingerprint_message"] = evidence
             issue["message"] = "Canister lost power"
             issue["severity"] = "critical"
 

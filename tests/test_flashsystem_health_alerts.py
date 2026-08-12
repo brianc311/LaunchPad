@@ -1,4 +1,5 @@
 from launchpad.flashsystem_health import analyze_health
+from launchpad.health_alert_state import collect_critical_candidates, issue_fingerprint
 
 
 def test_analyze_alerts_uses_description_when_message_empty():
@@ -69,12 +70,9 @@ def test_lsportfc_offline_is_io_critical():
         for issue in result["health_issues"]
         if issue.get("category") in ("io", "fc")
     ]
-    assert ios
-    assert all(issue["severity"] == "critical" for issue in ios)
-    assert any(
-        "I/O" in issue["message"] or "I/O card" in issue["message"]
-        for issue in ios
-    )
+    assert len(ios) == 1
+    assert ios[0]["severity"] == "critical"
+    assert ios[0]["message"] == "I/O card failed (port 1)"
 
 
 def test_power_alert_with_offline_canister_wording():
@@ -92,7 +90,7 @@ def test_power_alert_with_offline_canister_wording():
                 "command": "svcinfo lseventlog -alert yes -delim :",
                 "output": (
                     "id:message:description:object_name\n"
-                    "1::Power supply failure:node1\n"
+                    "1:Canister communication lost:Power supply failure:node1\n"
                 ),
                 "error": None,
             },
@@ -122,7 +120,7 @@ def test_bad_components_use_operator_wording():
             {
                 "label": "Health - Drives",
                 "command": "svcinfo lsdrive -delim :",
-                "output": "id:status\n0:degraded\n",
+                "output": "id:status\n0:degraded\n1:failed\n",
                 "error": None,
             },
         ],
@@ -132,3 +130,21 @@ def test_bad_components_use_operator_wording():
 
     assert "Canister failed" in messages
     assert "Hard drive failed" in messages
+
+    card = {
+        "id": 7,
+        "name": "Site",
+        "error": None,
+        "health_issues": result["health_issues"],
+    }
+    drive_candidates = [
+        candidate
+        for candidate in collect_critical_candidates(card, monitor_on=True)
+        if candidate["category"] == "drive"
+    ]
+    assert len(drive_candidates) == 2
+    assert len({candidate["fingerprint"] for candidate in drive_candidates}) == 2
+    assert {
+        issue_fingerprint(7, "drive", "Drive 0 is degraded"),
+        issue_fingerprint(7, "drive", "Drive 1 is failed"),
+    } == {candidate["fingerprint"] for candidate in drive_candidates}
