@@ -88,15 +88,16 @@ def authenticate_with_password(
 
     def raise_auth_failed(exc: Exception) -> None:
         detail = str(exc).strip() or "Authentication failed."
+        hint = (
+            " Check card Host (management desktop), username/password, "
+            "and that OpenSSH Server is enabled on the desktop."
+        )
         if seen_prompts:
             joined = "; ".join(seen_prompts[:6])
             raise paramiko.AuthenticationException(
-                f"{detail} Server prompts: {joined}"
+                f"{detail} Server prompts: {joined}.{hint}"
             ) from exc
-        raise paramiko.AuthenticationException(
-            f"{detail} Check username/password for keyboard-interactive SSH "
-            "(common on IBM DS8884)."
-        ) from exc
+        raise paramiko.AuthenticationException(f"{detail}{hint}") from exc
 
     # Prefer plain password when offered without keyboard-interactive.
     if "password" in allowed and "keyboard-interactive" not in allowed:
