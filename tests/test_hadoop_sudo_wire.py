@@ -129,5 +129,5 @@ def test_host_power_runner_ignores_sudo_password_for_non_hadoop(monkeypatch):
     assert captured["sudo_password"] == ""
 
 
-def test_version_153():
-    assert APP_VERSION == "1.6.153"
+def test_version_154():
+    assert APP_VERSION == "1.6.154"
