@@ -405,8 +405,10 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     });
 
     let progressTimer = null;
+    let progressActive = false;
 
     function hideProgress() {
+      progressActive = false;
       if (progressTimer) {
         clearInterval(progressTimer);
         progressTimer = null;
@@ -416,6 +418,9 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     }
 
     function applyProgress(data) {
+      if (!progressActive) {
+        return;
+      }
       const total = Number(data && data.total) || 0;
       const done = Number(data && data.done) || 0;
       const current = String((data && data.current) || "").trim();
@@ -435,7 +440,13 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     async function pollProgress() {
       try {
         const res = await fetch("/api/storage-inventory/progress");
+        if (!progressActive) {
+          return;
+        }
         const data = await res.json().catch(() => ({}));
+        if (!progressActive) {
+          return;
+        }
         applyProgress(data);
       } catch (_err) {
         /* ignore poll errors while live request is in flight */
@@ -445,6 +456,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     async function refreshLive() {
       refreshBtn.disabled = true;
       errorsEl.textContent = "";
+      progressActive = true;
       applyProgress({done:0,total:0,current:""});
       progressTimer = setInterval(pollProgress, 400);
       pollProgress();

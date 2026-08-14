@@ -65,3 +65,16 @@ def test_storage_inventory_age_toggle_and_progress_markers():
     assert "issues_older" in script
     assert 'ageMode = "recent"' in script or "ageMode = 'recent'" in script
     assert '"<div class="' not in script
+
+
+def test_storage_inventory_progress_ignores_polls_after_hide():
+    script = STORAGE_INVENTORY_HTML.split("<script>", 1)[1]
+    hide_fn = script.split("function hideProgress()", 1)[1].split("function applyProgress", 1)[0]
+    apply_fn = script.split("function applyProgress(data)", 1)[1].split("async function pollProgress", 1)[0]
+    poll_fn = script.split("async function pollProgress()", 1)[1].split("async function refreshLive", 1)[0]
+    refresh_fn = script.split("async function refreshLive()", 1)[1].split("async function exportExcel", 1)[0]
+    assert "progressActive = false" in hide_fn
+    assert "if (!progressActive)" in apply_fn
+    assert "if (!progressActive)" in poll_fn
+    assert "progressActive = true" in refresh_fn
+    assert poll_fn.count("if (!progressActive)") >= 2
