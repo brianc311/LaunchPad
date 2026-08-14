@@ -156,6 +156,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     const INVENTORY_COLSPAN = 10;
     const ISSUES_COLSPAN = 6;
     let allRows = [];
+    let knownSites = [];
     let hasCache = false;
 
     function escapeHtml(value) {
@@ -179,9 +180,8 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     }
 
     function updateSiteFilterOptions() {
-      const sites = Array.from(new Set(
-        allRows.map((row) => String(row.site || "").trim()).filter(Boolean)
-      )).sort((a, b) => a.localeCompare(b));
+      const fromRows = allRows.map((row) => String(row.site || "").trim()).filter(Boolean);
+      const sites = Array.from(new Set(knownSites.concat(fromRows))).sort((a, b) => a.localeCompare(b));
       const current = siteFilterEl.value || "";
       siteFilterEl.innerHTML = '<option value="">None</option>' + sites.map((site) => (
         '<option value="' + escapeHtml(site) + '">' + escapeHtml(site) + "</option>"
@@ -224,7 +224,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
         return;
       }
       issuesBodyEl.innerHTML = issueRows.map((row) => (
-        "<tr class=\"row-issue\">"
+        '<tr class="row-issue">'
         + "<td>" + escapeHtml(row.site || "") + "</td>"
         + "<td>" + escapeHtml(row.host || "") + "</td>"
         + "<td>" + escapeHtml(row.ip || "") + "</td>"
@@ -360,9 +360,25 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       }
     }
 
+    async function loadSiteOptions() {
+      try {
+        const res = await fetch("/api/cards");
+        if (!res.ok) return;
+        const cards = await res.json();
+        knownSites = (Array.isArray(cards) ? cards : [])
+          .map((card) => String(card.name || "").trim())
+          .filter(Boolean);
+        knownSites.sort((a, b) => a.localeCompare(b));
+        updateSiteFilterOptions();
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+
     siteFilterEl.addEventListener("change", renderAll);
     refreshBtn.addEventListener("click", refreshLive);
     exportBtn.addEventListener("click", exportExcel);
+    loadSiteOptions();
     loadCache();
   </script>
 </body>
