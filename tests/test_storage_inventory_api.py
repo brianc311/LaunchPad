@@ -61,6 +61,7 @@ def test_scan_storage_inventory_svc_happy_path(monkeypatch):
                     "id:78E37V9\nname:v7kcon-g3v1\n"
                     "product_name:IBM FlashSystem 7200\n"
                     "cluster_ntp_IP_address:10.3.3.3\n"
+                    "volume_protection:enabled\n"
                 )
             return ""
 
@@ -76,9 +77,77 @@ def test_scan_storage_inventory_svc_happy_path(monkeypatch):
     assert row["serial"] == "78E37V9"
     assert "172.29.62.98" in row["smtp"]
     assert row["data_protection"].lower().startswith("yes")
+    assert row["volume_protection"] == "Yes"
     cached = server.get_storage_inventory_cache()
     assert cached is not None
     assert len(cached["rows"]) == 1
+
+
+def test_scan_storage_inventory_volume_protection_off(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    def _runner(_card):
+        def run(command):
+            if "lscloudcallhome" in command:
+                return "id:status\n0:enabled\n"
+            if "lsdnsserver" in command:
+                return "id:name:IP_address\n0:dns1:10.1.1.1\n"
+            if "lsemailserver" in command:
+                return "id:name:IP_address:port\n0:smtp1:172.29.62.98:25\n"
+            if "lsrcrelationship" in command:
+                return "id:name:master_cluster_id\n0:rel1:1\n"
+            if "lssystem" in command:
+                return (
+                    "id:78E37V9\nname:v7kcon-g3v1\n"
+                    "product_name:IBM FlashSystem 7200\n"
+                    "cluster_ntp_IP_address:10.3.3.3\n"
+                    "volume_protection:disabled\n"
+                )
+            return ""
+        return run
+
+    monkeypatch.setattr(server, "_lun_run_command", _runner)
+    row = server.scan_storage_inventory_live()["rows"][0]
+    assert row["volume_protection"] == "No — Not configured"
+    assert "Volume Protection not configured" in row["issues"]
+    assert "Volume Protection not configured" in row["issues_recent"]
+
+
+def test_scan_storage_inventory_hpe_volume_protection_na(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    card = HealthCard(
+        card_id=2,
+        name="Tempe",
+        host="10.0.0.2",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="hpe_3par_8400",
+    )
+    server._cards[2] = card
+    server.set_monitor_enabled(card_id=2, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        "launchpad.health_server.run_ssh_auth_hpe_commands",
+        lambda *args, **kwargs: ("Model: 8400\nSerial: ABC\n", "", "Remote Copy is not configured on this system.\n"),
+    )
+    row = server.scan_storage_inventory_live()["rows"][0]
+    assert row["volume_protection"] == "n/a"
+    assert "Volume Protection not configured" not in (row.get("issues") or "")
 
 
 def test_scan_storage_inventory_success_includes_health_issue(monkeypatch):
@@ -119,6 +188,7 @@ def test_scan_storage_inventory_success_includes_health_issue(monkeypatch):
                     "id:78E37V9\nname:v7kcon-g3v1\n"
                     "product_name:IBM FlashSystem 7200\n"
                     "cluster_ntp_IP_address:10.3.3.3\n"
+                    "volume_protection:enabled\n"
                 )
             return ""
 
@@ -197,6 +267,7 @@ def test_scan_storage_inventory_svc_per_topic_failure_keeps_siblings(monkeypatch
                     "id:78E37V9\nname:v7kcon-g3v1\n"
                     "product_name:IBM FlashSystem 7200\n"
                     "cluster_ntp_IP_address:10.3.3.3\n"
+                    "volume_protection:enabled\n"
                 )
             return ""
 
@@ -244,6 +315,7 @@ def test_scan_storage_inventory_prefers_card_serial_over_cluster_id(monkeypatch)
                     "id:0000020420A18C4E\nname:v7kcon-g3v1\n"
                     "product_name:IBM FlashSystem 7200\n"
                     "cluster_ntp_IP_address:10.3.3.3\n"
+                    "volume_protection:enabled\n"
                 )
             return ""
 
@@ -418,6 +490,7 @@ def test_scan_storage_inventory_grandfathered_health_is_older(monkeypatch):
                     "id:78E37V9\nname:v7kcon-g3v1\n"
                     "product_name:IBM FlashSystem 7200\n"
                     "cluster_ntp_IP_address:10.3.3.3\n"
+                    "volume_protection:enabled\n"
                 )
             return ""
 

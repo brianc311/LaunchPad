@@ -26,6 +26,7 @@ from launchpad.storage_inventory import (
     parse_svc_lsemailserver,
     parse_svc_lsrcrelationship,
     parse_svc_lssystem_identity,
+    parse_svc_lssystem_volume_protection,
     row_has_issues,
     site_status,
     split_inventory_issue_fields,
@@ -127,6 +128,7 @@ def test_issues_notes_and_totals():
     assert "Data Protection not configured" in notes
     assert "SMTP not configured" in notes
     assert "NTP not configured" in notes
+    assert "Volume Protection not configured" not in notes
     assert "Running at 91.0% capacity" in notes
     assert format_phone_home_cell(configured="no", details="", vendor="IBM") == (
         "No — Not configured"
@@ -206,7 +208,13 @@ def test_site_status_red_orange_green_and_na_ignored():
         {"issues": "", "phone_home": "unknown", "data_protection": "Yes", "smtp": "10.0.0.1"},
     ]) == "orange"
     assert site_status([
-        {"issues": "", "phone_home": "n/a", "data_protection": "Yes", "smtp": "10.0.0.1"},
+        {
+            "issues": "",
+            "phone_home": "n/a",
+            "data_protection": "Yes",
+            "smtp": "10.0.0.1",
+            "volume_protection": "n/a",
+        },
     ]) == "green"
     assert site_status([
         {"issues": "", "phone_home": "Yes — IBM", "data_protection": "Unknown", "smtp": "n/a"},
@@ -344,3 +352,141 @@ def test_storage_inventory_progress_counts_cards():
     done = prog.snapshot()
     assert done["running"] is False
     assert done["done"] == 2
+
+
+def test_parse_svc_lssystem_volume_protection_on_off_missing():
+    yes_cfg, _, _ = parse_svc_lssystem_volume_protection(
+        "id:78E31NF\nproduct_name:IBM FlashSystem 7200\nvolume_protection:enabled\n"
+    )
+    assert yes_cfg == "yes"
+    on_cfg, _, _ = parse_svc_lssystem_volume_protection("volume_protection:on\n")
+    assert on_cfg == "yes"
+    no_cfg, _, _ = parse_svc_lssystem_volume_protection("volume_protection:disabled\n")
+    assert no_cfg == "no"
+    off_cfg, _, _ = parse_svc_lssystem_volume_protection("volume_protection:off\n")
+    assert off_cfg == "no"
+    missing_cfg, _, _ = parse_svc_lssystem_volume_protection(
+        "id:78E31NF\nproduct_name:IBM FlashSystem 7200\n"
+    )
+    assert missing_cfg == "unknown"
+    assert parse_svc_lssystem_volume_protection("")[0] == "unknown"
+
+
+def test_volume_protection_off_adds_issues_note_na_does_not():
+    off = build_issues_notes(
+        phone_configured="yes",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[],
+        extra_errors=[],
+        volume_protection_configured="no",
+    )
+    assert "Volume Protection not configured" in off
+    na = build_issues_notes(
+        phone_configured="yes",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[],
+        extra_errors=[],
+        volume_protection_configured="n/a",
+    )
+    assert "Volume Protection not configured" not in na
+    unknown = build_issues_notes(
+        phone_configured="yes",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[],
+        extra_errors=[],
+        volume_protection_configured="unknown",
+    )
+    assert "Volume Protection not configured" not in unknown
+
+
+def test_build_inventory_row_volume_protection_cell():
+    row = build_inventory_row(
+        site="A",
+        host="h",
+        ip="10.0.0.1",
+        model="m",
+        serial="s",
+        location="A",
+        vendor="IBM",
+        profile="flashsystem_7200",
+        card_id=1,
+        phone=("yes", "", ""),
+        data_protection=("yes", "", ""),
+        smtp=("yes", "", "10.0.0.1"),
+        dns=("yes", "", ""),
+        ntp=("yes", "", ""),
+        volume_protection=("yes", "configured", "enabled"),
+        health_issues=[],
+        extra_errors=[],
+    )
+    assert row["volume_protection"] == "Yes"
+    off = build_inventory_row(
+        site="A",
+        host="h",
+        ip="10.0.0.1",
+        model="m",
+        serial="s",
+        location="A",
+        vendor="IBM",
+        profile="flashsystem_7200",
+        card_id=1,
+        phone=("yes", "", ""),
+        data_protection=("yes", "", ""),
+        smtp=("yes", "", "10.0.0.1"),
+        dns=("yes", "", ""),
+        ntp=("yes", "", ""),
+        volume_protection=("no", "empty", "disabled"),
+        health_issues=[],
+        extra_errors=[],
+    )
+    assert off["volume_protection"] == "No — Not configured"
+    assert "Volume Protection not configured" in off["issues"]
+    assert "Volume Protection not configured" in off["issues_recent"]
+
+
+def test_site_status_volume_protection_unknown_and_na():
+    assert site_status([
+        {"issues": "", "phone_home": "Yes", "data_protection": "Yes", "smtp": "10.0.0.1", "volume_protection": "unknown"},
+    ]) == "orange"
+    assert site_status([
+        {"issues": "", "phone_home": "Yes", "data_protection": "Yes", "smtp": "10.0.0.1", "volume_protection": ""},
+    ]) == "orange"
+    assert site_status([
+        {"issues": "", "phone_home": "Yes", "data_protection": "Yes", "smtp": "10.0.0.1"},
+    ]) == "orange"
+    assert site_status([
+        {"issues": "", "phone_home": "Yes", "data_protection": "Yes", "smtp": "10.0.0.1", "volume_protection": "n/a"},
+    ]) == "green"
+    assert site_status([
+        {"issues": "", "phone_home": "Yes", "data_protection": "Yes", "smtp": "10.0.0.1", "volume_protection": "Yes"},
+    ]) == "green"
+
+
+def test_export_xlsx_volume_protection_after_data_protection():
+    rows = [{
+        "site": "SiteA",
+        "host": "array1",
+        "ip": "10.0.0.1",
+        "model": "IBM FlashSystem 7200",
+        "serial": "ABC",
+        "location": "SiteA",
+        "phone_home": "Yes — IBM",
+        "data_protection": "Yes",
+        "volume_protection": "Yes",
+        "smtp": "10.1.1.1",
+        "issues": "",
+    }]
+    wb = load_workbook(BytesIO(export_storage_inventory_xlsx(rows)))
+    headers = [c.value for c in wb["Inventory"][2]]
+    dp = headers.index("Data Protection")
+    assert headers[dp + 1] == "Volume Protection"
+    assert wb["Inventory"].cell(row=3, column=dp + 2).value == "Yes"

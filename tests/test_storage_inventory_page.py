@@ -78,3 +78,19 @@ def test_storage_inventory_progress_ignores_polls_after_hide():
     assert "if (!progressActive)" in poll_fn
     assert "progressActive = true" in refresh_fn
     assert poll_fn.count("if (!progressActive)") >= 2
+
+
+def test_storage_inventory_all_arrays_toggle_ip_and_volume_protection():
+    html = STORAGE_INVENTORY_HTML
+    heading = html.split("<script>", 1)[0]
+    script = html.split("<script>", 1)[1]
+    assert 'option value="">All Arrays</option>' in html
+    assert 'option value="">None</option>' not in html
+    assert "button.btn.secondary.si-age-btn.is-on" in html
+    assert "function ipLink(" in script
+    assert "https://" in script
+    assert "target=\"_blank\"" in script or "target='_blank'" in script
+    assert "Volume Protection" in heading or ">Volume Protection<" in script
+    assert "row.volume_protection" in script
+    assert "min-width" in html
+    assert '"<a href="' not in script
