@@ -1,4 +1,6 @@
-from launchpad.health_server import HealthServer, HealthCard
+import inspect
+
+from launchpad.health_server import HealthServer, HealthCard, _HealthHandler
 
 
 def _unlock(server: HealthServer) -> None:
@@ -368,3 +370,79 @@ def test_find_volumes_default_type_unchanged(monkeypatch):
     assert result["matches"]
     assert result["matches"][0]["volume"] == "pconsps_archvg_1"
     assert "host_name" not in result["matches"][0]
+
+
+def test_volume_find_progress_idle_and_after_cache(monkeypatch):
+    server = HealthServer()
+    idle = server.volume_find_progress_snapshot()
+    assert idle == {"running": False, "done": 0, "total": 0, "current": ""}
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+        command_results=[
+            {
+                "command": "svcinfo lsvdisk -delim :",
+                "output": "id:name:mdisk_grp_name\n0:pconsps_archvg_1:Pool0\n",
+            }
+        ],
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    result = server.find_volumes("archvg", mode="cache")
+    assert result["matches"]
+    done = server.volume_find_progress_snapshot()
+    assert done["running"] is False
+    assert done["done"] == 1
+    assert done["total"] == 1
+
+
+def test_volume_find_progress_live_counts_cards(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        server,
+        "_lun_run_command",
+        lambda _card: (lambda command: "id:name:mdisk_grp_name\n0:archvg_1:Pool0\n"),
+    )
+    server.find_volumes("archvg", mode="live")
+    done = server.volume_find_progress_snapshot()
+    assert done["running"] is False
+    assert done["done"] == 1
+    assert done["total"] == 1
+
+
+def test_volume_find_empty_query_does_not_start_progress():
+    server = HealthServer()
+    server.find_volumes("", mode="cache")
+    assert server.volume_find_progress_snapshot() == {
+        "running": False,
+        "done": 0,
+        "total": 0,
+        "current": "",
+    }
+
+
+def test_volume_find_progress_route_no_unlock():
+    source = inspect.getsource(_HealthHandler.do_GET)
+    assert "/api/volume-find/progress" in source
+    chunk = source.split('if path == "/api/volume-find/progress"')[1].split("if path ==")[0]
+    assert "is_unlocked" not in chunk
+    assert "volume_find_progress_snapshot" in chunk
