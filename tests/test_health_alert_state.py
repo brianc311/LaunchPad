@@ -1,13 +1,24 @@
+from datetime import datetime
+
 from launchpad.health_alert_state import (
     CONNECTIVITY_SENTINEL,
+    DEFAULT_ACTIVE_ISSUES_SINCE,
     acknowledge,
     collect_critical_candidates,
     empty_state,
+    ensure_first_seen,
+    grandfather_fingerprints,
     issue_fingerprint,
+    issue_is_visible,
     list_popup_alerts,
+    load_state,
+    parse_active_issues_since,
     pause_card,
     prune_acknowledgements,
+    set_active_issues_since,
     set_alarm,
+    set_limit_new_issues,
+    visible_health_issues,
 )
 
 
@@ -196,3 +207,97 @@ def test_pause_and_alarm_mute():
     )
     state = set_alarm(empty_state(), 3, True)
     assert list_popup_alerts([card], {3: True}, state, now=5000.0) == []
+
+
+def _ts(year: int, month: int, day: int) -> float:
+    return datetime(year, month, day, 12, 0, 0).timestamp()
+
+
+def _drive_issue(message: str = "Drive 0 is offline") -> dict:
+    return {
+        "severity": "critical",
+        "category": "drive",
+        "message": message,
+        "server": "A",
+    }
+
+
+def test_normalize_165_json_keeps_mute_and_defaults_limit():
+    raw = '{"acknowledged": ["old"], "alarm_muted": {"7": true}, "paused_until": {}}'
+    state = load_state(raw)
+    assert state["alarm_muted"]["7"] is True
+    assert state["acknowledged"] == ["old"]
+    assert state["limit_new_issues"] is True
+    assert state["active_issues_since"] == DEFAULT_ACTIVE_ISSUES_SINCE
+    assert state["first_seen"] == {}
+    assert state["grandfathered"] == []
+    assert state["baseline_applied"] is False
+    assert state["pending_grandfather"] is False
+
+
+def test_parse_active_issues_since_iso_and_us():
+    assert parse_active_issues_since("2026-08-14") == "2026-08-14"
+    assert parse_active_issues_since("8/14/2026") == "2026-08-14"
+    assert parse_active_issues_since("08/14/26") == "2026-08-14"
+    assert parse_active_issues_since("") is None
+    assert parse_active_issues_since("not-a-date") is None
+    assert parse_active_issues_since("2026-13-40") is None
+
+
+def test_grandfathered_hidden_when_limit_on():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    state = grandfather_fingerprints(state, {fp})
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 20))
+    assert issue_is_visible(state, fp, now=_ts(2026, 8, 20)) is False
+    issues = visible_health_issues([_drive_issue()], 1, state, now=_ts(2026, 8, 20))
+    assert issues == []
+
+
+def test_limit_off_shows_grandfathered():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = set_limit_new_issues(empty_state(), False)
+    state = grandfather_fingerprints(state, {fp})
+    assert issue_is_visible(state, fp, now=_ts(2026, 8, 20)) is True
+    issues = visible_health_issues([_drive_issue()], 1, state, now=_ts(2026, 8, 20))
+    assert len(issues) == 1
+
+
+def test_first_seen_before_cutoff_hidden_on_or_after_visible():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    before = empty_state()
+    before = set_active_issues_since(before, "2026-08-14")
+    before["first_seen"] = {fp: _ts(2026, 8, 13)}
+    assert issue_is_visible(before, fp, now=_ts(2026, 8, 20)) is False
+
+    after = empty_state()
+    after = set_active_issues_since(after, "2026-08-14")
+    after["first_seen"] = {fp: _ts(2026, 8, 14)}
+    assert issue_is_visible(after, fp, now=_ts(2026, 8, 20)) is True
+
+    later = empty_state()
+    later["first_seen"] = {fp: _ts(2026, 8, 15)}
+    assert issue_is_visible(later, fp, now=_ts(2026, 8, 20)) is True
+
+
+def test_moving_date_back_does_not_un_grandfather():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state["first_seen"] = {fp: _ts(2026, 8, 20)}
+    state = set_active_issues_since(state, "2026-08-01")
+    assert issue_is_visible(state, fp, now=_ts(2026, 8, 20)) is False
+
+
+def test_missing_first_seen_is_visible_when_not_grandfathered():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    assert issue_is_visible(state, fp, now=1000.0) is True
+
+
+def test_ensure_first_seen_does_not_overwrite():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 14))
+    first = state["first_seen"][fp]
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 20))
+    assert state["first_seen"][fp] == first

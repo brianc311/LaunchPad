@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import date, datetime
 from typing import Any
 
 HEALTH_ALERT_SETTING = "health_alert_state"
 CONNECTIVITY_SENTINEL = "connectivity"
+
+DEFAULT_ACTIVE_ISSUES_SINCE = "2026-08-14"
 
 PAUSE_MINUTES = frozenset({5, 10, 15, 20})
 
@@ -33,7 +36,33 @@ def same_health_alert_card_id(left: Any, right: Any) -> bool:
 
 
 def empty_state() -> dict[str, Any]:
-    return {"acknowledged": [], "alarm_muted": {}, "paused_until": {}}
+    return {
+        "acknowledged": [],
+        "alarm_muted": {},
+        "paused_until": {},
+        "limit_new_issues": True,
+        "active_issues_since": DEFAULT_ACTIVE_ISSUES_SINCE,
+        "first_seen": {},
+        "grandfathered": [],
+        "baseline_applied": False,
+        "pending_grandfather": False,
+    }
+
+
+def parse_active_issues_since(text: str) -> str | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        pass
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
 
 
 def _normalize_state(raw: Any) -> dict[str, Any]:
@@ -62,10 +91,42 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
 
+    limit_new_issues = data.get("limit_new_issues")
+    if not isinstance(limit_new_issues, bool):
+        limit_new_issues = True
+
+    active_issues_since = parse_active_issues_since(
+        str(data.get("active_issues_since") or "")
+    ) or DEFAULT_ACTIVE_ISSUES_SINCE
+
+    first_seen_raw = data.get("first_seen")
+    if not isinstance(first_seen_raw, dict):
+        first_seen_raw = {}
+    first_seen: dict[str, float] = {}
+    for key, value in first_seen_raw.items():
+        try:
+            first_seen[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+
+    grandfathered_raw = data.get("grandfathered")
+    if not isinstance(grandfathered_raw, list):
+        grandfathered_raw = []
+    grandfathered = [str(item) for item in grandfathered_raw if str(item).strip()]
+
+    baseline_applied = bool(data.get("baseline_applied"))
+    pending_grandfather = bool(data.get("pending_grandfather"))
+
     return {
         "acknowledged": acknowledged,
         "alarm_muted": alarm_muted,
         "paused_until": normalized_paused,
+        "limit_new_issues": limit_new_issues,
+        "active_issues_since": active_issues_since,
+        "first_seen": first_seen,
+        "grandfathered": grandfathered,
+        "baseline_applied": baseline_applied,
+        "pending_grandfather": pending_grandfather,
     }
 
 
@@ -115,6 +176,95 @@ def set_alarm(state: dict[str, Any], card_id: int | str, muted: bool) -> dict[st
     else:
         out["alarm_muted"].pop(key, None)
     return out
+
+
+def set_limit_new_issues(state: dict[str, Any], enabled: bool) -> dict[str, Any]:
+    out = _normalize_state(state)
+    out["limit_new_issues"] = bool(enabled)
+    return out
+
+
+def set_active_issues_since(state: dict[str, Any], iso_date: str) -> dict[str, Any]:
+    parsed = parse_active_issues_since(iso_date)
+    if parsed is None:
+        raise ValueError("active_issues_since must be YYYY-MM-DD")
+    out = _normalize_state(state)
+    out["active_issues_since"] = parsed
+    return out
+
+
+def grandfather_fingerprints(
+    state: dict[str, Any], fingerprints: set[str] | list[str]
+) -> dict[str, Any]:
+    out = _normalize_state(state)
+    existing = set(out["grandfathered"])
+    for fp in fingerprints:
+        text = str(fp).strip()
+        if text:
+            existing.add(text)
+    out["grandfathered"] = sorted(existing)
+    return out
+
+
+def ensure_first_seen(
+    state: dict[str, Any], fingerprints: set[str], *, now: float
+) -> dict[str, Any]:
+    out = _normalize_state(state)
+    first_seen = dict(out["first_seen"])
+    for fp in fingerprints:
+        key = str(fp)
+        if key and key not in first_seen:
+            first_seen[key] = float(now)
+    out["first_seen"] = first_seen
+    return out
+
+
+def issue_fingerprint_for_issue(card_id: int | str, issue: dict[str, Any]) -> str:
+    category = str(issue.get("category") or "")
+    fingerprint_message = issue.get("fingerprint_message")
+    message = (
+        str(fingerprint_message)
+        if fingerprint_message is not None
+        else str(issue.get("message") or "")
+    )
+    return issue_fingerprint(card_id, category, message)
+
+
+def _cutoff_date(state: dict[str, Any]) -> date:
+    parsed = parse_active_issues_since(str(state.get("active_issues_since") or ""))
+    return date.fromisoformat(parsed or DEFAULT_ACTIVE_ISSUES_SINCE)
+
+
+def issue_is_visible(state: dict[str, Any], fingerprint: str, *, now: float) -> bool:
+    del now  # cutoff uses stored first_seen, not the call clock
+    normalized = _normalize_state(state)
+    if not normalized["limit_new_issues"]:
+        return True
+    fp = str(fingerprint)
+    if fp in set(normalized["grandfathered"]):
+        return False
+    seen = normalized["first_seen"].get(fp)
+    if seen is None:
+        return True
+    seen_day = datetime.fromtimestamp(float(seen)).date()
+    return seen_day >= _cutoff_date(normalized)
+
+
+def visible_health_issues(
+    issues: list[Any],
+    card_id: int | str,
+    state: dict[str, Any],
+    *,
+    now: float,
+) -> list[Any]:
+    visible: list[Any] = []
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        fp = issue_fingerprint_for_issue(card_id, issue)
+        if issue_is_visible(state, fp, now=now):
+            visible.append(issue)
+    return visible
 
 
 def prune_acknowledgements(
@@ -270,6 +420,17 @@ def collect_critical_candidates(card: dict[str, Any], *, monitor_on: bool) -> li
             )
         )
     return _dedupe_node_controller_candidates(candidates)
+
+
+def fingerprints_for_card(card: dict[str, Any]) -> set[str]:
+    card_id = card.get("id")
+    fps: set[str] = set()
+    for issue in card.get("health_issues") or []:
+        if isinstance(issue, dict):
+            fps.add(issue_fingerprint_for_issue(card_id, issue))
+    for candidate in collect_critical_candidates(card, monitor_on=True):
+        fps.add(str(candidate["fingerprint"]))
+    return fps
 
 
 def list_popup_alerts(
