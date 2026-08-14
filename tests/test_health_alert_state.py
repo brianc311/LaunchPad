@@ -12,6 +12,7 @@ from launchpad.health_alert_state import (
     issue_is_visible,
     list_popup_alerts,
     load_state,
+    prepare_health_issue_limit,
     parse_active_issues_since,
     pause_card,
     prune_acknowledgements,
@@ -301,3 +302,95 @@ def test_ensure_first_seen_does_not_overwrite():
     first = state["first_seen"][fp]
     state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 20))
     assert state["first_seen"][fp] == first
+
+
+def test_list_popup_alerts_hides_grandfathered_when_limit_on():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state["first_seen"] = {fp: _ts(2026, 8, 20)}
+    assert list_popup_alerts([card], {1: True}, state, now=_ts(2026, 8, 20)) == []
+    state = set_limit_new_issues(state, False)
+    assert len(list_popup_alerts([card], {1: True}, state, now=_ts(2026, 8, 20))) == 1
+
+
+def test_list_popup_alerts_hides_first_seen_before_cutoff():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    state = empty_state()
+    state["first_seen"] = {fp: _ts(2026, 8, 13)}
+    assert list_popup_alerts([card], {1: True}, state, now=_ts(2026, 8, 20)) == []
+
+
+def test_prepare_first_upgrade_grandfathers_open_issues_once():
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = prepare_health_issue_limit(empty_state(), [card], now=_ts(2026, 8, 14))
+    assert state["baseline_applied"] is True
+    assert fp in state["grandfathered"]
+    assert fp in state["first_seen"]
+
+    later = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue(), _drive_issue("Drive 9 is offline")],
+    }
+    fp_new = issue_fingerprint(1, "drive", "Drive 9 is offline")
+    state2 = prepare_health_issue_limit(state, [later], now=_ts(2026, 8, 15))
+    assert fp_new not in state2["grandfathered"]
+    assert fp_new in state2["first_seen"]
+    assert issue_is_visible(state2, fp_new, now=_ts(2026, 8, 15)) is True
+
+
+def test_prune_drops_inactive_first_seen_and_grandfathered_return_is_new():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 13))
+    state["baseline_applied"] = True
+    cleared = prune_acknowledgements(state, set())
+    assert fp not in cleared["grandfathered"]
+    assert fp not in cleared["first_seen"]
+
+    returned = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    after = prepare_health_issue_limit(cleared, [returned], now=_ts(2026, 8, 20))
+    # baseline already applied, so recurrence is not re-grandfathered
+    assert fp not in after["grandfathered"]
+    assert issue_is_visible(after, fp, now=_ts(2026, 8, 20)) is True
+    assert len(list_popup_alerts([returned], {1: True}, after, now=_ts(2026, 8, 20))) == 1
+
+
+def test_pending_grandfather_runs_on_next_prepare():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    state["baseline_applied"] = True
+    state["pending_grandfather"] = True
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    out = prepare_health_issue_limit(state, [card], now=_ts(2026, 8, 20))
+    assert fp in out["grandfathered"]
+    assert out["pending_grandfather"] is False

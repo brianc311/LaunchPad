@@ -273,7 +273,35 @@ def prune_acknowledgements(
     out = _normalize_state(state)
     active = {str(fp) for fp in active_fingerprints}
     out["acknowledged"] = [fp for fp in out["acknowledged"] if fp in active]
+    out["grandfathered"] = [fp for fp in out["grandfathered"] if fp in active]
+    out["first_seen"] = {
+        fp: ts for fp, ts in out["first_seen"].items() if fp in active
+    }
     return out
+
+
+def set_pending_grandfather(state: dict[str, Any], pending: bool) -> dict[str, Any]:
+    out = _normalize_state(state)
+    out["pending_grandfather"] = bool(pending)
+    return out
+
+
+def prepare_health_issue_limit(
+    state: dict[str, Any],
+    cards: list[dict[str, Any]],
+    *,
+    now: float,
+) -> dict[str, Any]:
+    out = _normalize_state(state)
+    fps: set[str] = set()
+    for card in cards:
+        fps |= fingerprints_for_card(card)
+    if (not out["baseline_applied"]) or out["pending_grandfather"]:
+        out = grandfather_fingerprints(out, fps)
+        out["baseline_applied"] = True
+        out["pending_grandfather"] = False
+    out = ensure_first_seen(out, fps, now=now)
+    return prune_acknowledgements(out, fps)
 
 
 def _monitor_on(monitor_states: dict[Any, Any], card_id: Any) -> bool:
@@ -457,6 +485,10 @@ def list_popup_alerts(
         if alarm_muted.get(key):
             continue
         for candidate in collect_critical_candidates(card, monitor_on=True):
-            if candidate["fingerprint"] not in acknowledged:
-                alerts.append(deepcopy(candidate))
+            fp = candidate["fingerprint"]
+            if fp in acknowledged:
+                continue
+            if not issue_is_visible(normalized, fp, now=now):
+                continue
+            alerts.append(deepcopy(candidate))
     return alerts
