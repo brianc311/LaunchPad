@@ -293,7 +293,8 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
         }
         applyPayload(data);
         if (!allRows.length) {
-          statusEl.textContent = "No cached inventory — click Refresh live.";
+          statusEl.textContent =
+            "No FlashSystem / 3PAR inventory yet — unlock LaunchPad and click Refresh live.";
         }
       } catch (err) {
         statusEl.textContent = String(err && err.message ? err.message : err);
@@ -316,6 +317,10 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
           return;
         }
         applyPayload(data);
+        if (!allRows.length) {
+          statusEl.textContent =
+            "No FlashSystem, 3PAR, or DS8884 SSH cards found. Set Device Profile on those array cards in Admin, then Refresh live.";
+        }
       } catch (err) {
         statusEl.textContent = String(err && err.message ? err.message : err);
       } finally {

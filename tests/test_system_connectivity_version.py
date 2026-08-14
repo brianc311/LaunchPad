@@ -2,4 +2,4 @@
 
 
 def test_app_version_16153():
-    assert APP_VERSION == "1.6.164"
+    assert APP_VERSION == "1.6.165"

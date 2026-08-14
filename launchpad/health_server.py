@@ -159,6 +159,8 @@ from launchpad.storage_inventory import (
     export_storage_inventory_xlsx,
     inventory_commands_for_profile,
     inventory_totals,
+    is_hpe_inventory_profile,
+    is_storage_inventory_eligible,
     wrap_inventory_commands_for_card,
     parse_hpe_showrcopy_protection,
     parse_svc_lsemailserver,
@@ -7606,11 +7608,13 @@ class HealthServer:
         commands = inventory_commands_for_profile(profile)
         health_issues = self._storage_inventory_health_issues(card)
 
-        if profile in HPE_SHELL_PROFILES:
+        if is_hpe_inventory_profile(profile):
             model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
                 self._scan_storage_inventory_hpe_card(card, commands)
             )
-        elif profile.strip().lower() == "ibm_ds8884":
+        elif profile.strip().lower() == "ibm_ds8884" or profile.strip().lower().startswith(
+            "ibm_ds"
+        ):
             commands = wrap_inventory_commands_for_card(
                 commands,
                 dscli_path=getattr(card, "dscli_path", "") or "",
@@ -7663,11 +7667,6 @@ class HealthServer:
             except Exception:
                 pass
         cards = self.list_cards(allow_sync=False)
-        monitor = {
-            c["id"]: self.is_monitor_enabled(int(c["id"]))
-            for c in cards
-            if c.get("id") is not None
-        }
         rows: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for card_dict in cards:
@@ -7676,10 +7675,7 @@ class HealthServer:
                 continue
             if card_id is not None and int(current_id) != int(card_id):
                 continue
-            monitor_on = bool(
-                monitor.get(current_id, monitor.get(str(current_id), False))
-            )
-            if not is_system_connectivity_eligible(card_dict, monitor_on=monitor_on):
+            if not is_storage_inventory_eligible(card_dict):
                 continue
             card = self._cards.get(int(current_id))
             if card is None:

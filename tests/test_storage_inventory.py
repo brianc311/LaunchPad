@@ -9,12 +9,26 @@ from launchpad.storage_inventory import (
     format_smtp_cell,
     inventory_commands_for_profile,
     inventory_totals,
+    is_storage_inventory_eligible,
     parse_hpe_showrcopy_protection,
     parse_svc_lsemailserver,
     parse_svc_lsrcrelationship,
     parse_svc_lssystem_identity,
     row_has_issues,
 )
+
+
+def test_storage_inventory_eligible_without_monitor():
+    flash = {"card_type": "ssh", "device_profile": "flashsystem_7200"}
+    par = {"card_type": "ssh", "device_profile": "hpe_3par_8400"}
+    assert is_storage_inventory_eligible(flash)
+    assert is_storage_inventory_eligible(par)
+    assert not is_storage_inventory_eligible(
+        {"card_type": "ssh", "device_profile": "vultr_vps"}
+    )
+    assert not is_storage_inventory_eligible(
+        {"card_type": "rdp", "device_profile": "flashsystem_7200"}
+    )
 
 def test_inventory_commands_svc_includes_smtp_and_rcrelationship():
     cmds = inventory_commands_for_profile("flashsystem_7200")

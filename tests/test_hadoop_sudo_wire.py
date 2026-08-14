@@ -130,4 +130,4 @@ def test_host_power_runner_ignores_sudo_password_for_non_hadoop(monkeypatch):
 
 
 def test_version_160():
-    assert APP_VERSION == "1.6.164"
+    assert APP_VERSION == "1.6.165"

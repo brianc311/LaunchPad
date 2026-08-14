@@ -48,6 +48,33 @@ _INVENTORY_TOPICS: tuple[str, ...] = (
 
 _DS8884_PROFILE = "ibm_ds8884"
 
+
+def is_hpe_inventory_profile(profile: str) -> bool:
+    key = (profile or "").strip().lower()
+    if not key:
+        return False
+    return key in HPE_SHELL_PROFILES or "3par" in key or "primera" in key
+
+
+def is_storage_inventory_profile(profile: str) -> bool:
+    key = (profile or "").strip().lower()
+    if not key:
+        return False
+    if key in SVC_PROFILES or is_svc_fc_profile(key):
+        return True
+    if is_hpe_inventory_profile(key):
+        return True
+    if key == _DS8884_PROFILE or key.startswith("ibm_ds"):
+        return True
+    return False
+
+
+def is_storage_inventory_eligible(card: dict) -> bool:
+    """SSH FlashSystem / 3PAR / DS8884 cards — monitoring is not required."""
+    if str(card.get("card_type") or "").lower() != "ssh":
+        return False
+    return is_storage_inventory_profile(str(card.get("device_profile") or ""))
+
 _HPE_RCOPY_NOT_CONFIGURED_RE = re.compile(
     r"not\s+configured|no\s+remote\s+copy|disabled|none\s+found",
     re.IGNORECASE,
@@ -85,7 +112,7 @@ def inventory_commands_for_profile(profile: str) -> dict[str, list[str]]:
             "smtp": ["lsemailserver -delim :"],
             "data_protection": ["lsrcrelationship -delim :"],
         }
-    if key in HPE_SHELL_PROFILES:
+    if is_hpe_inventory_profile(key):
         return {
             "identity": ["showsys"],
             "call_home": [],
@@ -501,6 +528,9 @@ __all__ = [
     "inventory_commands_for_profile",
     "wrap_inventory_commands_for_card",
     "inventory_totals",
+    "is_hpe_inventory_profile",
+    "is_storage_inventory_eligible",
+    "is_storage_inventory_profile",
     "is_system_connectivity_eligible",
     "parse_ds_networkport_dns",
     "parse_ds_showsp_call_home",

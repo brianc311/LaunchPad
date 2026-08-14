@@ -250,6 +250,54 @@ def test_scan_storage_inventory_prefers_card_serial_over_cluster_id(monkeypatch)
     assert row["serial"] == "78E31NF"
 
 
+def test_scan_storage_inventory_includes_unmonitored_flashsystem_and_3par(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    server._cards[1] = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[2] = HealthCard(
+        card_id=2,
+        name="Tempe",
+        host="10.0.0.2",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="hpe_3par_8400",
+    )
+    server._cards[3] = HealthCard(
+        card_id=3,
+        name="SVR-WEB",
+        host="45.76.232.99",
+        port=22,
+        username="root",
+        key_path="/tmp/key",
+        device_profile="vultr_vps",
+    )
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+
+    def _fake_scan(card):
+        return {
+            "site": card.name,
+            "host": card.name,
+            "ip": str(card.host or ""),
+            "profile": card.device_profile,
+            "issues": "",
+        }
+
+    monkeypatch.setattr(server, "_scan_storage_inventory_card", _fake_scan)
+    result = server.scan_storage_inventory_live()
+    sites = {row["site"] for row in result["rows"]}
+    assert sites == {"Hartford", "Tempe"}
+    assert result["total_devices"] == 2
+
+
 def test_export_storage_inventory_uses_cache_without_unlock(monkeypatch):
     server = HealthServer()
     monkeypatch.setattr(server, "is_unlocked", lambda: False)
