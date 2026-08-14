@@ -186,14 +186,16 @@ from launchpad.health_alert_art import resolve_health_alert_art
 from launchpad.health_alert_state import (
     HEALTH_ALERT_SETTING,
     acknowledge,
-    collect_critical_candidates,
     dump_state,
     empty_state,
+    fingerprints_for_card,
     list_popup_alerts,
     load_state,
     pause_card,
+    prepare_health_issue_limit,
     prune_acknowledgements,
     set_alarm,
+    visible_health_issues,
 )
 from launchpad.health_excel_export import (
     HealthExcelSections,
@@ -1980,12 +1982,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
+    const issuesForDashboard = (card) =>
+      Array.isArray(card.visible_health_issues)
+        ? card.visible_health_issues
+        : (card.health_issues || []);
+
     function renderIssues(cards) {
       if (!issuesListEl) return;
       const allIssues = [];
       cards.forEach((card) => {
         if (!isMonitorOn(card.id)) return;
-        (card.health_issues || []).forEach((issue) => allIssues.push(issue));
+        issuesForDashboard(card).forEach((issue) => allIssues.push(issue));
       });
       if (!allIssues.length) {
         issuesListEl.innerHTML = '<p class="issues-ok">No issues detected across monitored systems.</p>';
@@ -2118,7 +2125,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function cardActiveIssuesHtml(card) {
       if (!isMonitorOn(card.id)) return "";
-      const issues = Array.isArray(card.health_issues) ? card.health_issues.slice() : [];
+      const issues = issuesForDashboard(card).slice();
       const rank = { critical: 0, warn: 1 };
       issues.sort(
         (a, b) =>
@@ -6132,13 +6139,10 @@ class HealthServer:
     def _active_health_alert_fingerprints(
         cards: list[dict[str, Any]], monitor_states: dict[str, bool]
     ) -> set[str]:
+        del monitor_states
         active: set[str] = set()
         for card in cards:
-            card_id = card.get("id")
-            if not monitor_states.get(str(card_id), False):
-                continue
-            for candidate in collect_critical_candidates(card, monitor_on=True):
-                active.add(candidate["fingerprint"])
+            active |= fingerprints_for_card(card)
         return active
 
     def _health_alert_cards_payload(
@@ -8385,7 +8389,31 @@ class HealthServer:
                         "category": card.category,
                     }
                 )
-        return results
+        return self._decorate_cards_with_issue_limit(results)
+
+    def _decorate_cards_with_issue_limit(
+        self, results: list[dict[str, Any]], *, now: float | None = None
+    ) -> list[dict[str, Any]]:
+        if now is None:
+            now = time.time()
+        state = self._load_health_alert_state()
+        prepared = prepare_health_issue_limit(state, results, now=now)
+        if dump_state(prepared) != dump_state(state):
+            try:
+                self._save_health_alert_state(prepared)
+            except RuntimeError:
+                pass
+        annotated: list[dict[str, Any]] = []
+        for payload in results:
+            item = dict(payload)
+            item["visible_health_issues"] = visible_health_issues(
+                item.get("health_issues") or [],
+                item.get("id"),
+                prepared,
+                now=now,
+            )
+            annotated.append(item)
+        return annotated
 
     def export_health_excel_bytes(
         self,
