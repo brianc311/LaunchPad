@@ -357,6 +357,34 @@ def row_has_issues(row: dict) -> bool:
     return bool(str(row.get("issues") or "").strip())
 
 
+BLANK_SITE_LABEL = "(no site)"
+_SITE_UNKNOWN_FIELDS: tuple[str, ...] = ("phone_home", "data_protection", "smtp")
+
+
+def group_inventory_rows_by_site(rows: list[dict] | None) -> list[tuple[str, list[dict]]]:
+    buckets: dict[str, list[dict]] = {}
+    for row in rows or []:
+        label = str(row.get("site") or "").strip() or BLANK_SITE_LABEL
+        buckets.setdefault(label, []).append(row)
+    return [(name, buckets[name]) for name in sorted(buckets, key=lambda item: item.lower())]
+
+
+def _row_has_unknown(row: dict) -> bool:
+    for field in _SITE_UNKNOWN_FIELDS:
+        if str(row.get(field) or "").strip().lower() == "unknown":
+            return True
+    return False
+
+
+def site_status(rows: list[dict] | None) -> str:
+    items = list(rows or [])
+    if any(row_has_issues(row) for row in items):
+        return "red"
+    if any(_row_has_unknown(row) for row in items):
+        return "orange"
+    return "green"
+
+
 def inventory_totals(rows: list[dict]) -> dict:
     total = len(rows or [])
     with_issues = sum(1 for row in rows or [] if row_has_issues(row))
@@ -516,6 +544,7 @@ def export_storage_inventory_xlsx(
 
 
 __all__ = [
+    "BLANK_SITE_LABEL",
     "INVENTORY_COLUMNS",
     "build_inventory_row",
     "build_issues_notes",
@@ -523,6 +552,7 @@ __all__ = [
     "format_phone_home_cell",
     "format_smtp_cell",
     "format_yes_no_cell",
+    "group_inventory_rows_by_site",
     "health_issue_messages",
     "hpe_call_home_na_row",
     "inventory_commands_for_profile",
@@ -543,4 +573,5 @@ __all__ = [
     "parse_svc_lssystem_identity",
     "parse_svc_ntp_from_lssystem",
     "row_has_issues",
+    "site_status",
 ]

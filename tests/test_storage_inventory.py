@@ -3,10 +3,12 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from launchpad.storage_inventory import (
+    BLANK_SITE_LABEL,
     build_issues_notes,
     export_storage_inventory_xlsx,
     format_phone_home_cell,
     format_smtp_cell,
+    group_inventory_rows_by_site,
     inventory_commands_for_profile,
     inventory_totals,
     is_storage_inventory_eligible,
@@ -15,6 +17,7 @@ from launchpad.storage_inventory import (
     parse_svc_lsrcrelationship,
     parse_svc_lssystem_identity,
     row_has_issues,
+    site_status,
 )
 
 
@@ -168,3 +171,33 @@ def test_export_xlsx_sheets_meta_and_red_issue_row():
     assert found
     summary = wb["Issues Summary"]
     assert summary.max_row == 2  # header + one issue
+
+
+def test_group_inventory_rows_by_site_sorts_and_blank_label():
+    rows = [
+        {"site": "zeta", "host": "z"},
+        {"site": "", "host": "orphan"},
+        {"site": "Alpha", "host": "a"},
+        {"site": "  ", "host": "also-orphan"},
+    ]
+    grouped = group_inventory_rows_by_site(rows)
+    assert [name for name, _ in grouped] == [BLANK_SITE_LABEL, "Alpha", "zeta"]
+    assert BLANK_SITE_LABEL == "(no site)"
+    blank_hosts = [row["host"] for row in dict(grouped)[BLANK_SITE_LABEL]]
+    assert blank_hosts == ["orphan", "also-orphan"]
+    assert group_inventory_rows_by_site([]) == []
+    assert group_inventory_rows_by_site(None) == []
+
+
+def test_site_status_red_orange_green_and_na_ignored():
+    assert site_status([{"issues": "SMTP not configured", "phone_home": "unknown"}]) == "red"
+    assert site_status([
+        {"issues": "", "phone_home": "unknown", "data_protection": "Yes", "smtp": "10.0.0.1"},
+    ]) == "orange"
+    assert site_status([
+        {"issues": "", "phone_home": "n/a", "data_protection": "Yes", "smtp": "10.0.0.1"},
+    ]) == "green"
+    assert site_status([
+        {"issues": "", "phone_home": "Yes — IBM", "data_protection": "Unknown", "smtp": "n/a"},
+    ]) == "orange"
+    assert site_status([]) == "green"

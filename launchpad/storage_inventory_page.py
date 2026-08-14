@@ -76,6 +76,36 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     .status { color: var(--muted); font-size: 0.9rem; margin-top: 8px; }
     .errors { color: var(--danger); font-size: 0.88rem; margin-top: 8px; white-space: pre-wrap; }
     .footer { color: var(--muted); font-size: 0.82rem; margin-top: 20px; }
+    #si-sites { display: flex; flex-direction: column; gap: 10px; }
+    .site-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      border-left: 6px solid var(--border);
+      background: var(--card);
+    }
+    .site-card.site-red { border-left-color: #e85d5d; background: #2a1618; }
+    .site-card.site-orange { border-left-color: #e8a23c; background: #221c10; }
+    .site-card.site-green { border-left-color: #3cb371; background: #14241a; }
+    .site-card > summary.site-head {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      padding: 12px 16px;
+      font-weight: 600;
+    }
+    .site-card > summary.site-head::-webkit-details-marker { display: none; }
+    .site-meta { color: var(--muted); font-weight: 500; font-size: 0.9rem; }
+    .site-body { padding: 0 12px 12px; }
+    .site-issues {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 12px;
+    }
+    .site-issues > summary { cursor: pointer; color: var(--accent2); font-weight: 600; }
     select {
       background: #0f141d; color: var(--text); border: 1px solid var(--border);
       border-radius: 10px; height: 34px; padding: 0 10px; font: inherit;
@@ -108,36 +138,8 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
 
     <div class="section">
       <h2>Inventory</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Site</th><th>Host</th><th>IP Address</th><th>Model</th>
-              <th>Serial Number (SN)</th><th>Location</th><th>Phone Home</th>
-              <th>Data Protection</th><th>SMTP IP(s)</th><th>Issues / Notes</th>
-            </tr>
-          </thead>
-          <tbody id="si-inventory-body">
-            <tr><td colspan="10" class="empty">No data yet — click Refresh live.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="section">
-      <h2>Issues Summary</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Site</th><th>Host</th><th>IP Address</th><th>Model</th>
-              <th>Serial Number (SN)</th><th>Issues / Notes</th>
-            </tr>
-          </thead>
-          <tbody id="si-issues-body">
-            <tr><td colspan="6" class="empty">No issue rows.</td></tr>
-          </tbody>
-        </table>
+      <div id="si-sites">
+        <p class="empty">No data yet — click Refresh live.</p>
       </div>
     </div>
 
@@ -151,10 +153,8 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     const errorsEl = document.getElementById("si-errors");
     const totalDevicesEl = document.getElementById("si-total-devices");
     const devicesWithIssuesEl = document.getElementById("si-devices-with-issues");
-    const inventoryBodyEl = document.getElementById("si-inventory-body");
-    const issuesBodyEl = document.getElementById("si-issues-body");
-    const INVENTORY_COLSPAN = 10;
-    const ISSUES_COLSPAN = 6;
+    const sitesEl = document.getElementById("si-sites");
+    const BLANK_SITE_LABEL = "(no site)";
     let allRows = [];
     let knownSites = [];
     let hasCache = false;
@@ -169,6 +169,105 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
 
     function rowHasIssues(row) {
       return Boolean(String(row.issues || "").trim());
+    }
+
+    function siteLabel(row) {
+      const text = String(row.site || "").trim();
+      return text || BLANK_SITE_LABEL;
+    }
+
+    function rowHasUnknown(row) {
+      const fields = [row.phone_home, row.data_protection, row.smtp];
+      return fields.some((value) => String(value || "").trim().toLowerCase() === "unknown");
+    }
+
+    function siteStatus(rows) {
+      if (rows.some(rowHasIssues)) {
+        return "red";
+      }
+      if (rows.some(rowHasUnknown)) {
+        return "orange";
+      }
+      return "green";
+    }
+
+    function groupRowsBySite(rows) {
+      const buckets = {};
+      rows.forEach((row) => {
+        const label = siteLabel(row);
+        if (!buckets[label]) {
+          buckets[label] = [];
+        }
+        buckets[label].push(row);
+      });
+      return Object.keys(buckets).sort((a, b) => a.localeCompare(b)).map((name) => [name, buckets[name]]);
+    }
+
+    function renderDeviceRows(rows) {
+      return rows.map((row) => (
+        "<tr>"
+        + "<td>" + escapeHtml(row.host || "") + "</td>"
+        + "<td>" + escapeHtml(row.ip || "") + "</td>"
+        + "<td>" + escapeHtml(row.model || "") + "</td>"
+        + "<td>" + escapeHtml(row.serial || "") + "</td>"
+        + "<td>" + escapeHtml(row.location || "") + "</td>"
+        + "<td>" + escapeHtml(row.phone_home || "") + "</td>"
+        + "<td>" + escapeHtml(row.data_protection || "") + "</td>"
+        + "<td>" + escapeHtml(row.smtp || "") + "</td>"
+        + "</tr>"
+      )).join("");
+    }
+
+    function renderIssuesBlock(rows) {
+      const issueRows = rows.filter(rowHasIssues);
+      if (!issueRows.length) {
+        return "";
+      }
+      const body = issueRows.map((row) => (
+        "<tr>"
+        + "<td>" + escapeHtml(row.host || "") + "</td>"
+        + "<td>" + escapeHtml(row.ip || "") + "</td>"
+        + "<td>" + escapeHtml(row.issues || "") + "</td>"
+        + "</tr>"
+      )).join("");
+      return (
+        '<details class="site-issues">'
+        + "<summary>Issues / Notes (" + issueRows.length + ")</summary>"
+        + '<div class="table-wrap"><table>'
+        + "<thead><tr><th>Host</th><th>IP Address</th><th>Issues / Notes</th></tr></thead>"
+        + "<tbody>" + body + "</tbody>"
+        + "</table></div>"
+        + "</details>"
+      );
+    }
+
+    function renderSites(rows) {
+      if (!rows.length) {
+        sitesEl.innerHTML = '<p class="empty">No inventory rows found.</p>';
+        return;
+      }
+      sitesEl.innerHTML = groupRowsBySite(rows).map(([name, siteRows]) => {
+        const status = siteStatus(siteRows);
+        const issueCount = siteRows.filter(rowHasIssues).length;
+        let meta = siteRows.length + " device" + (siteRows.length === 1 ? "" : "s");
+        if (issueCount) {
+          meta += " · " + issueCount + " with issues";
+        }
+        return (
+          '<details class="site-card site-' + status + '">'
+          + '<summary class="site-head"><span>' + escapeHtml(name) + "</span>"
+          + '<span class="site-meta">' + escapeHtml(meta) + "</span></summary>"
+          + '<div class="site-body"><div class="table-wrap"><table>'
+          + "<thead><tr>"
+          + "<th>Host</th><th>IP Address</th><th>Model</th><th>Serial Number (SN)</th>"
+          + "<th>Location</th><th>Phone Home</th><th>Data Protection</th><th>SMTP IP(s)</th>"
+          + "</tr></thead>"
+          + "<tbody>" + renderDeviceRows(siteRows) + "</tbody>"
+          + "</table></div>"
+          + renderIssuesBlock(siteRows)
+          + "</div></details>"
+        );
+      }).join("");
     }
 
     function filteredRows() {
@@ -191,50 +290,6 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       }
     }
 
-    function renderInventory(rows) {
-      if (!rows.length) {
-        inventoryBodyEl.innerHTML =
-          '<tr><td colspan="' + INVENTORY_COLSPAN + '" class="empty">No inventory rows found.</td></tr>';
-        return;
-      }
-      inventoryBodyEl.innerHTML = rows.map((row) => {
-        const issueClass = rowHasIssues(row) ? ' class="row-issue"' : "";
-        return (
-          "<tr" + issueClass + ">"
-          + "<td>" + escapeHtml(row.site || "") + "</td>"
-          + "<td>" + escapeHtml(row.host || "") + "</td>"
-          + "<td>" + escapeHtml(row.ip || "") + "</td>"
-          + "<td>" + escapeHtml(row.model || "") + "</td>"
-          + "<td>" + escapeHtml(row.serial || "") + "</td>"
-          + "<td>" + escapeHtml(row.location || "") + "</td>"
-          + "<td>" + escapeHtml(row.phone_home || "") + "</td>"
-          + "<td>" + escapeHtml(row.data_protection || "") + "</td>"
-          + "<td>" + escapeHtml(row.smtp || "") + "</td>"
-          + "<td>" + escapeHtml(row.issues || "") + "</td>"
-          + "</tr>"
-        );
-      }).join("");
-    }
-
-    function renderIssuesSummary(rows) {
-      const issueRows = rows.filter((row) => rowHasIssues(row));
-      if (!issueRows.length) {
-        issuesBodyEl.innerHTML =
-          '<tr><td colspan="' + ISSUES_COLSPAN + '" class="empty">No issue rows.</td></tr>';
-        return;
-      }
-      issuesBodyEl.innerHTML = issueRows.map((row) => (
-        '<tr class="row-issue">'
-        + "<td>" + escapeHtml(row.site || "") + "</td>"
-        + "<td>" + escapeHtml(row.host || "") + "</td>"
-        + "<td>" + escapeHtml(row.ip || "") + "</td>"
-        + "<td>" + escapeHtml(row.model || "") + "</td>"
-        + "<td>" + escapeHtml(row.serial || "") + "</td>"
-        + "<td>" + escapeHtml(row.issues || "") + "</td>"
-        + "</tr>"
-      )).join("");
-    }
-
     function updateSummary(rows) {
       const total = rows.length;
       const withIssues = rows.filter((row) => rowHasIssues(row)).length;
@@ -254,8 +309,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
 
     function renderAll() {
       const rows = filteredRows();
-      renderInventory(rows);
-      renderIssuesSummary(rows);
+      renderSites(rows);
       updateSummary(rows);
     }
 
