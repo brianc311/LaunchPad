@@ -32,6 +32,7 @@ INVENTORY_COLUMNS: tuple[str, ...] = (
     "location",
     "phone_home",
     "data_protection",
+    "volume_protection",
     "smtp",
     "issues",
     "card_id",
@@ -173,6 +174,32 @@ def parse_svc_lssystem_identity(output: str) -> tuple[str, str]:
         elif token == "id" and val:
             serial = val
     return model, serial
+
+
+_VOLUME_PROTECTION_YES = frozenset({"enabled", "on", "yes", "true"})
+_VOLUME_PROTECTION_NO = frozenset({"disabled", "off", "no", "false"})
+
+
+def parse_svc_lssystem_volume_protection(output: str) -> tuple[str, str, str]:
+    text = str(output or "")
+    found = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or ":" not in stripped:
+            continue
+        key, _, value = stripped.partition(":")
+        if key.strip().lower() != "volume_protection":
+            continue
+        found = value.strip()
+        break
+    if not found:
+        return "unknown", "", "volume protection not reported"
+    token = found.lower()
+    if token in _VOLUME_PROTECTION_YES:
+        return "yes", "configured", found
+    if token in _VOLUME_PROTECTION_NO:
+        return "no", "empty", found
+    return "unknown", "", "volume protection not reported"
 
 
 def parse_svc_lsemailserver(output: str) -> tuple[str, str, str]:
@@ -335,12 +362,15 @@ def build_issues_notes(
     ntp_configured: str,
     health_issues: list,
     extra_errors: list[str],
+    volume_protection_configured: str = "n/a",
 ) -> str:
     notes: list[str] = []
     if str(phone_configured or "").strip().lower() == "no":
         notes.append("Phone Home not configured")
     if str(data_protection_configured or "").strip().lower() == "no":
         notes.append("Data Protection not configured")
+    if str(volume_protection_configured or "").strip().lower() == "no":
+        notes.append("Volume Protection not configured")
     if str(smtp_configured or "").strip().lower() == "no":
         notes.append("SMTP not configured")
     if str(dns_configured or "").strip().lower() == "no":
@@ -367,6 +397,7 @@ def split_inventory_issue_fields(
     card_id: int | str | None = None,
     alert_state: dict | None = None,
     now: float = 0.0,
+    volume_protection_configured: str = "n/a",
 ) -> dict[str, str]:
     items = list(health_issues or [])
     extras = list(extra_errors or [])
@@ -378,6 +409,7 @@ def split_inventory_issue_fields(
         ntp_configured=ntp_configured,
         health_issues=items,
         extra_errors=extras,
+        volume_protection_configured=volume_protection_configured,
     )
     config_notes = build_issues_notes(
         phone_configured=phone_configured,
@@ -387,6 +419,7 @@ def split_inventory_issue_fields(
         ntp_configured=ntp_configured,
         health_issues=[],
         extra_errors=extras,
+        volume_protection_configured=volume_protection_configured,
     )
     recent_health: list = []
     older_health: list = []
@@ -414,7 +447,7 @@ def row_has_issues(row: dict) -> bool:
 
 
 BLANK_SITE_LABEL = "(no site)"
-_SITE_UNKNOWN_FIELDS: tuple[str, ...] = ("phone_home", "data_protection", "smtp")
+_SITE_UNKNOWN_FIELDS: tuple[str, ...] = ("phone_home", "data_protection", "smtp", "volume_protection")
 
 
 def group_inventory_rows_by_site(rows: list[dict] | None) -> list[tuple[str, list[dict]]]:
@@ -427,7 +460,10 @@ def group_inventory_rows_by_site(rows: list[dict] | None) -> list[tuple[str, lis
 
 def _row_has_unknown(row: dict) -> bool:
     for field in _SITE_UNKNOWN_FIELDS:
-        if str(row.get(field) or "").strip().lower() == "unknown":
+        raw = str(row.get(field) or "").strip().lower()
+        if field == "volume_protection" and not raw:
+            return True
+        if raw == "unknown":
             return True
     return False
 
@@ -467,12 +503,14 @@ def build_inventory_row(
     extra_errors: list[str] | None = None,
     alert_state: dict | None = None,
     now: float = 0.0,
+    volume_protection: tuple[str, str, str] = ("n/a", "", ""),
 ) -> dict:
     phone_cfg, _phone_status, phone_details = phone
     dp_cfg, _dp_status, dp_details = data_protection
     smtp_cfg, _smtp_status, smtp_details = smtp
     dns_cfg, _dns_status, _dns_details = dns
     ntp_cfg, _ntp_status, _ntp_details = ntp
+    vp_cfg, _vp_status, _vp_details = volume_protection
     split = split_inventory_issue_fields(
         phone_configured=phone_cfg,
         data_protection_configured=dp_cfg,
@@ -484,6 +522,7 @@ def build_inventory_row(
         card_id=card_id,
         alert_state=alert_state,
         now=now,
+        volume_protection_configured=vp_cfg,
     )
     row: dict[str, Any] = {
         "site": site,
@@ -500,6 +539,9 @@ def build_inventory_row(
         "data_protection": format_yes_no_cell(
             configured=dp_cfg,
             details=dp_details,
+        ),
+        "volume_protection": format_yes_no_cell(
+            configured=vp_cfg,
         ),
         "smtp": format_smtp_cell(configured=smtp_cfg, details=smtp_details),
         "issues": split["issues"],
@@ -522,6 +564,7 @@ _INVENTORY_HEADERS: tuple[str, ...] = (
     "Location",
     "Phone Home",
     "Data Protection",
+    "Volume Protection",
     "SMTP IP(s)",
     "Issues / Notes",
 )
@@ -535,6 +578,7 @@ _INVENTORY_FIELDS: tuple[str, ...] = (
     "location",
     "phone_home",
     "data_protection",
+    "volume_protection",
     "smtp",
     "issues",
 )
@@ -677,6 +721,7 @@ __all__ = [
     "parse_svc_lsemailserver",
     "parse_svc_lsrcrelationship",
     "parse_svc_lssystem_identity",
+    "parse_svc_lssystem_volume_protection",
     "parse_svc_ntp_from_lssystem",
     "row_has_issues",
     "site_status",
