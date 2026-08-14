@@ -1,13 +1,27 @@
+from datetime import datetime
+
 from launchpad.health_alert_state import (
     CONNECTIVITY_SENTINEL,
+    DEFAULT_ACTIVE_ISSUES_SINCE,
     acknowledge,
+    cards_have_health_signal,
     collect_critical_candidates,
     empty_state,
+    ensure_first_seen,
+    grandfather_fingerprints,
     issue_fingerprint,
+    issue_is_visible,
     list_popup_alerts,
+    load_state,
+    open_issue_fingerprints_for_baseline,
+    prepare_health_issue_limit,
+    parse_active_issues_since,
     pause_card,
     prune_acknowledgements,
+    set_active_issues_since,
     set_alarm,
+    set_limit_new_issues,
+    visible_health_issues,
 )
 
 
@@ -196,3 +210,322 @@ def test_pause_and_alarm_mute():
     )
     state = set_alarm(empty_state(), 3, True)
     assert list_popup_alerts([card], {3: True}, state, now=5000.0) == []
+
+
+def _ts(year: int, month: int, day: int) -> float:
+    return datetime(year, month, day, 12, 0, 0).timestamp()
+
+
+def _drive_issue(message: str = "Drive 0 is offline") -> dict:
+    return {
+        "severity": "critical",
+        "category": "drive",
+        "message": message,
+        "server": "A",
+    }
+
+
+def test_normalize_165_json_keeps_mute_and_defaults_limit():
+    raw = '{"acknowledged": ["old"], "alarm_muted": {"7": true}, "paused_until": {}}'
+    state = load_state(raw)
+    assert state["alarm_muted"]["7"] is True
+    assert state["acknowledged"] == ["old"]
+    assert state["limit_new_issues"] is True
+    assert state["active_issues_since"] == DEFAULT_ACTIVE_ISSUES_SINCE
+    assert state["first_seen"] == {}
+    assert state["grandfathered"] == []
+    assert state["baseline_applied"] is False
+    assert state["pending_grandfather"] is False
+
+
+def test_parse_active_issues_since_iso_and_us():
+    assert parse_active_issues_since("2026-08-14") == "2026-08-14"
+    assert parse_active_issues_since("8/14/2026") == "2026-08-14"
+    assert parse_active_issues_since("08/14/26") == "2026-08-14"
+    assert parse_active_issues_since("") is None
+    assert parse_active_issues_since("not-a-date") is None
+    assert parse_active_issues_since("2026-13-40") is None
+
+
+def test_grandfathered_hidden_when_limit_on():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    state = grandfather_fingerprints(state, {fp})
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 20))
+    assert issue_is_visible(state, fp, now=_ts(2026, 8, 20)) is False
+    issues = visible_health_issues([_drive_issue()], 1, state, now=_ts(2026, 8, 20))
+    assert issues == []
+
+
+def test_limit_off_shows_grandfathered():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = set_limit_new_issues(empty_state(), False)
+    state = grandfather_fingerprints(state, {fp})
+    assert issue_is_visible(state, fp, now=_ts(2026, 8, 20)) is True
+    issues = visible_health_issues([_drive_issue()], 1, state, now=_ts(2026, 8, 20))
+    assert len(issues) == 1
+
+
+def test_first_seen_before_cutoff_hidden_on_or_after_visible():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    before = empty_state()
+    before = set_active_issues_since(before, "2026-08-14")
+    before["first_seen"] = {fp: _ts(2026, 8, 13)}
+    assert issue_is_visible(before, fp, now=_ts(2026, 8, 20)) is False
+
+    after = empty_state()
+    after = set_active_issues_since(after, "2026-08-14")
+    after["first_seen"] = {fp: _ts(2026, 8, 14)}
+    assert issue_is_visible(after, fp, now=_ts(2026, 8, 20)) is True
+
+    later = empty_state()
+    later["first_seen"] = {fp: _ts(2026, 8, 15)}
+    assert issue_is_visible(later, fp, now=_ts(2026, 8, 20)) is True
+
+
+def test_moving_date_back_does_not_un_grandfather():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state["first_seen"] = {fp: _ts(2026, 8, 20)}
+    state = set_active_issues_since(state, "2026-08-01")
+    assert issue_is_visible(state, fp, now=_ts(2026, 8, 20)) is False
+
+
+def test_missing_first_seen_is_visible_when_not_grandfathered():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    assert issue_is_visible(state, fp, now=1000.0) is True
+
+
+def test_ensure_first_seen_does_not_overwrite():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 14))
+    first = state["first_seen"][fp]
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 20))
+    assert state["first_seen"][fp] == first
+
+
+def test_list_popup_alerts_hides_grandfathered_when_limit_on():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state["first_seen"] = {fp: _ts(2026, 8, 20)}
+    assert list_popup_alerts([card], {1: True}, state, now=_ts(2026, 8, 20)) == []
+    state = set_limit_new_issues(state, False)
+    assert len(list_popup_alerts([card], {1: True}, state, now=_ts(2026, 8, 20))) == 1
+
+
+def test_list_popup_alerts_hides_first_seen_before_cutoff():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    state = empty_state()
+    state["first_seen"] = {fp: _ts(2026, 8, 13)}
+    assert list_popup_alerts([card], {1: True}, state, now=_ts(2026, 8, 20)) == []
+
+
+def test_prepare_first_upgrade_grandfathers_open_issues_once():
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = prepare_health_issue_limit(empty_state(), [card], now=_ts(2026, 8, 14))
+    assert state["baseline_applied"] is True
+    assert fp in state["grandfathered"]
+    assert fp in state["first_seen"]
+
+    later = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue(), _drive_issue("Drive 9 is offline")],
+    }
+    fp_new = issue_fingerprint(1, "drive", "Drive 9 is offline")
+    state2 = prepare_health_issue_limit(state, [later], now=_ts(2026, 8, 15))
+    assert fp_new not in state2["grandfathered"]
+    assert fp_new in state2["first_seen"]
+    assert issue_is_visible(state2, fp_new, now=_ts(2026, 8, 15)) is True
+
+
+def test_prune_drops_inactive_first_seen_and_grandfathered_return_is_new():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state = ensure_first_seen(state, {fp}, now=_ts(2026, 8, 13))
+    state["baseline_applied"] = True
+    cleared = prune_acknowledgements(state, set())
+    assert fp not in cleared["grandfathered"]
+    assert fp not in cleared["first_seen"]
+
+    returned = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    after = prepare_health_issue_limit(cleared, [returned], now=_ts(2026, 8, 20))
+    # baseline already applied, so recurrence is not re-grandfathered
+    assert fp not in after["grandfathered"]
+    assert issue_is_visible(after, fp, now=_ts(2026, 8, 20)) is True
+    assert len(list_popup_alerts([returned], {1: True}, after, now=_ts(2026, 8, 20))) == 1
+
+
+def test_pending_grandfather_runs_on_next_prepare():
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = empty_state()
+    state["baseline_applied"] = True
+    state["pending_grandfather"] = True
+    card = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "health_issues": [_drive_issue()],
+    }
+    out = prepare_health_issue_limit(state, [card], now=_ts(2026, 8, 20))
+    assert fp in out["grandfathered"]
+    assert out["pending_grandfather"] is False
+
+
+def test_cards_have_health_signal():
+    unpolled = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
+    assert cards_have_health_signal([unpolled]) is False
+    assert cards_have_health_signal([]) is False
+
+    metrics_only = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [],
+    }
+    assert cards_have_health_signal([metrics_only]) is True
+
+    with_issues = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "health_issues": [_drive_issue()],
+    }
+    assert cards_have_health_signal([with_issues]) is True
+
+    command_results_only = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "command_results": [{"label": "lshost", "output": "ok"}],
+        "health_issues": [],
+    }
+    assert cards_have_health_signal([command_results_only]) is True
+
+    error_only = {
+        "id": 1,
+        "name": "A",
+        "error": "SSH timeout",
+        "metrics": None,
+        "health_issues": [],
+    }
+    assert cards_have_health_signal([error_only]) is True
+
+
+def test_open_issue_fingerprints_for_baseline_live_ok():
+    unpolled = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
+    fps, live_ok = open_issue_fingerprints_for_baseline([unpolled])
+    assert fps == set()
+    assert live_ok is False
+    fps, live_ok = open_issue_fingerprints_for_baseline([])
+    assert fps == set()
+    assert live_ok is False
+
+    leftover = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    fps, live_ok = open_issue_fingerprints_for_baseline([leftover])
+    assert live_ok is True
+    assert fp in fps
+
+    healthy = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [],
+    }
+    fps, live_ok = open_issue_fingerprints_for_baseline([healthy])
+    assert live_ok is True
+    assert fps == set()
+
+
+def test_prepare_empty_issues_does_not_apply_baseline():
+    state = empty_state()
+    assert state["baseline_applied"] is False
+    empty_card = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
+    out = prepare_health_issue_limit(state, [empty_card], now=_ts(2026, 8, 14))
+    assert out["baseline_applied"] is False
+    assert out["grandfathered"] == []
+
+    leftover = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    out2 = prepare_health_issue_limit(out, [leftover], now=_ts(2026, 8, 14))
+    assert out2["baseline_applied"] is True
+    assert fp in out2["grandfathered"]
+
+
+def test_prepare_healthy_polled_array_applies_empty_baseline():
+    state = empty_state()
+    healthy = {"id": 1, "name": "A", "error": None, "metrics": {"cpu": 1}, "health_issues": []}
+    out = prepare_health_issue_limit(state, [healthy], now=_ts(2026, 8, 14))
+    assert out["baseline_applied"] is True
+    assert out["grandfathered"] == []
+
+
+def test_prepare_command_results_only_applies_empty_baseline():
+    state = empty_state()
+    polled = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "command_results": [{"label": "lshost", "output": "ok"}],
+        "health_issues": [],
+    }
+    out = prepare_health_issue_limit(state, [polled], now=_ts(2026, 8, 14))
+    assert out["baseline_applied"] is True
+    assert out["grandfathered"] == []
+
+    leftover = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "command_results": [{"label": "lshost", "output": "ok"}],
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    out2 = prepare_health_issue_limit(out, [leftover], now=_ts(2026, 8, 15))
+    assert fp not in out2["grandfathered"]
+    assert issue_is_visible(out2, fp, now=_ts(2026, 8, 15)) is True

@@ -3,7 +3,13 @@ import json
 
 import pytest
 
-from launchpad.health_alert_state import HEALTH_ALERT_SETTING, issue_fingerprint
+from launchpad.health_alert_state import (
+    HEALTH_ALERT_SETTING,
+    dump_state,
+    empty_state,
+    grandfather_fingerprints,
+    issue_fingerprint,
+)
 from launchpad.health_server import HealthServer, _HealthHandler
 
 
@@ -400,6 +406,29 @@ def test_post_pause_invalid_minutes(monkeypatch):
     )
 
     assert sent["status"] == 400
+
+
+def test_decorate_cards_hides_grandfathered_from_visible_only():
+    settings, get_setting, set_setting = _settings_backend()
+    server = HealthServer()
+    server.set_settings_backend(get_setting, set_setting)
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    state = grandfather_fingerprints(empty_state(), {fp})
+    state["baseline_applied"] = True
+    state["first_seen"] = {fp: 1786708800.0}
+    set_setting(HEALTH_ALERT_SETTING, dump_state(state))
+    raw_issue = {
+        "severity": "critical",
+        "category": "drive",
+        "message": "Drive 0 is offline",
+        "server": "Site A",
+    }
+    cards = server._decorate_cards_with_issue_limit(
+        [{"id": 1, "name": "Site A", "health_issues": [raw_issue]}],
+        now=1786708800.0,
+    )
+    assert cards[0]["health_issues"] == [raw_issue]
+    assert cards[0]["visible_health_issues"] == []
 
 
 def test_post_alarm_route(monkeypatch):

@@ -4,8 +4,14 @@ from launchpad.health_alert_state import (
     HEALTH_ALERT_SETTING,
     dump_state,
     empty_state,
+    fingerprints_for_card,
+    grandfather_fingerprints,
     load_state,
+    parse_active_issues_since,
+    set_active_issues_since,
     set_alarm,
+    set_limit_new_issues,
+    set_pending_grandfather,
 )
 
 
@@ -27,3 +33,71 @@ def test_set_alarm_round_trip_in_setting_blob():
     state = set_alarm(loaded, 42, False)
     assert "42" not in state["alarm_muted"]
     assert HEALTH_ALERT_SETTING == "health_alert_state"
+
+
+def test_admin_branding_has_active_issues_since_controls():
+    source = Path("launchpad/ui/admin_view.py").read_text(encoding="utf-8")
+    assert "Limit to new issues" in source
+    assert "Off shows all Active Issues and popups, including older ones." in source
+    assert "Active issues since" in source
+    assert "Save date" in source
+    assert "_save_active_issues_since" in source
+    assert "_on_limit_new_issues_toggle" in source
+    assert "limit_new_issues_switch" in source or "limit_new_issues_var" in source
+
+
+def test_save_date_while_on_grandfathers_open_fingerprints():
+    card = {
+        "id": 4,
+        "name": "Array",
+        "error": None,
+        "health_issues": [
+            {
+                "severity": "warn",
+                "category": "node",
+                "message": "Node n1 is degraded",
+                "server": "Array",
+            }
+        ],
+    }
+    fps = fingerprints_for_card(card)
+    assert fps
+    state = set_limit_new_issues(empty_state(), True)
+    state = set_active_issues_since(state, "2026-08-14")
+    state = grandfather_fingerprints(state, fps)
+    blob = dump_state(state)
+    loaded = load_state(blob)
+    assert loaded["active_issues_since"] == "2026-08-14"
+    assert loaded["limit_new_issues"] is True
+    assert set(loaded["grandfathered"]) == fps
+
+
+def test_invalid_date_parse_does_not_change_previous():
+    assert parse_active_issues_since(" ") is None
+    state = set_active_issues_since(empty_state(), "2026-08-14")
+    assert parse_active_issues_since("abc") is None
+    assert state["active_issues_since"] == "2026-08-14"
+
+
+def test_pending_grandfather_flag_round_trip():
+    state = set_pending_grandfather(empty_state(), True)
+    loaded = load_state(dump_state(state))
+    assert loaded["pending_grandfather"] is True
+
+
+def test_collect_baseline_uses_cards_have_health_signal():
+    source = Path("launchpad/ui/admin_view.py").read_text(encoding="utf-8")
+    collect = source.split("def _collect_open_issue_fingerprints_for_baseline")[1]
+    collect = collect.split("def _save_active_issues_since")[0]
+    assert "cards_have_health_signal" in collect
+    assert "open_issue_fingerprints_for_baseline" in collect
+
+
+def test_save_date_reloads_state_after_collect():
+    source = Path("launchpad/ui/admin_view.py").read_text(encoding="utf-8")
+    save_fn = source.split("def _save_active_issues_since")[1].split("def _set_form_mode")[0]
+    collect_at = save_fn.find("_collect_open_issue_fingerprints_for_baseline")
+    apply_at = save_fn.find("set_active_issues_since(self._load_health_alert_state()")
+    assert collect_at != -1
+    assert apply_at != -1
+    assert collect_at < apply_at

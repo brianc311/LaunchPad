@@ -31,9 +31,16 @@ from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, D
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
 from launchpad.health_alert_state import (
     HEALTH_ALERT_SETTING,
+    cards_have_health_signal,
     dump_state,
+    grandfather_fingerprints,
     load_state,
+    open_issue_fingerprints_for_baseline,
+    parse_active_issues_since,
+    set_active_issues_since,
     set_alarm,
+    set_limit_new_issues,
+    set_pending_grandfather,
 )
 from launchpad.firmware_catalog import (
     eligible_firmware_profiles,
@@ -309,7 +316,58 @@ class AdminView(ctk.CTkFrame):
             hover_color=self.theme["accent_soft"],
             width=180,
             command=self._save_branding,
-        ).grid(row=6, column=0, columnspan=2, padx=20, pady=(8, 24), sticky="w")
+        ).grid(row=6, column=0, columnspan=2, padx=20, pady=(8, 8), sticky="w")
+
+        alert_state = self._load_health_alert_state()
+        limit_on = bool(alert_state.get("limit_new_issues"))
+
+        ctk.CTkLabel(
+            panel,
+            text="Health alerts",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=self.theme["text"],
+        ).grid(row=7, column=0, columnspan=2, padx=20, pady=(16, 4), sticky="w")
+
+        ctk.CTkLabel(panel, text="Limit to new issues", text_color=self.theme["muted"]).grid(
+            row=8, column=0, padx=20, pady=8, sticky="w"
+        )
+        self._limit_new_issues_updating = True
+        try:
+            self.limit_new_issues_var = ctk.BooleanVar(value=limit_on)
+            self.limit_new_issues_switch = ctk.CTkSwitch(
+                panel,
+                text="On (hide older issues)" if limit_on else "Off (show all)",
+                variable=self.limit_new_issues_var,
+                command=self._on_limit_new_issues_toggle,
+            )
+            self.limit_new_issues_switch.grid(row=8, column=1, padx=20, pady=8, sticky="w")
+        finally:
+            self._limit_new_issues_updating = False
+
+        ctk.CTkLabel(
+            panel,
+            text="Off shows all Active Issues and popups, including older ones.",
+            text_color=self.theme["muted"],
+            font=ctk.CTkFont(size=11),
+            wraplength=520,
+            justify="left",
+        ).grid(row=9, column=0, columnspan=2, padx=20, pady=(0, 8), sticky="w")
+
+        ctk.CTkLabel(panel, text="Active issues since", text_color=self.theme["muted"]).grid(
+            row=10, column=0, padx=20, pady=8, sticky="w"
+        )
+        date_row = ctk.CTkFrame(panel, fg_color="transparent")
+        date_row.grid(row=10, column=1, padx=20, pady=(8, 24), sticky="w")
+        self.active_issues_since_entry = ctk.CTkEntry(date_row, width=160)
+        self.active_issues_since_entry.grid(row=0, column=0, padx=(0, 8))
+        self.active_issues_since_entry.insert(0, alert_state["active_issues_since"])
+        ctk.CTkButton(
+            date_row,
+            text="Save date",
+            fg_color=self.theme["accent"],
+            hover_color=self.theme["accent_soft"],
+            command=self._save_active_issues_since,
+        ).grid(row=0, column=1)
 
     def _logo_status_text(self) -> str:
         path = logo_path(self.db)
@@ -1759,6 +1817,63 @@ class AdminView(ctk.CTkFrame):
                 text=f"Critical alert popups {state} for this card.",
                 text_color=self.theme["accent"],
             )
+
+    def _on_limit_new_issues_toggle(self) -> None:
+        if getattr(self, "_limit_new_issues_updating", False):
+            return
+        enabled = bool(self.limit_new_issues_var.get())
+        state = set_limit_new_issues(self._load_health_alert_state(), enabled)
+        self._save_health_alert_state(state)
+        if hasattr(self, "limit_new_issues_switch"):
+            self.limit_new_issues_switch.configure(
+                text="On (hide older issues)" if enabled else "Off (show all)"
+            )
+
+    def _collect_open_issue_fingerprints_for_baseline(self) -> tuple[set[str], bool]:
+        try:
+            # Lazy import: health_server is large and unused until Save date needs live cards.
+            from launchpad.health_server import get_health_server
+
+            cards = get_health_server().list_cards(allow_sync=False)
+        except Exception:
+            return set(), False
+        if not cards_have_health_signal(cards):
+            return set(), False
+        return open_issue_fingerprints_for_baseline(cards)
+
+    def _save_active_issues_since(self) -> None:
+        raw = ""
+        if hasattr(self, "active_issues_since_entry"):
+            raw = self.active_issues_since_entry.get()
+        parsed = parse_active_issues_since(raw)
+        if parsed is None:
+            self.admin_status.configure(
+                text="Enter a valid date (YYYY-MM-DD).",
+                text_color=self.theme["muted"],
+            )
+            return
+        fps: set[str] = set()
+        live_ok = False
+        if self._load_health_alert_state().get("limit_new_issues"):
+            fps, live_ok = self._collect_open_issue_fingerprints_for_baseline()
+        state = set_active_issues_since(self._load_health_alert_state(), parsed)
+        if state.get("limit_new_issues"):
+            if live_ok:
+                state = grandfather_fingerprints(state, fps)
+                state = set_pending_grandfather(state, False)
+                extra = ""
+            else:
+                state = set_pending_grandfather(state, True)
+                extra = " Health Server has no live cards; open issues will be hidden on the next health poll."
+        else:
+            extra = ""
+        self._save_health_alert_state(state)
+        self.active_issues_since_entry.delete(0, "end")
+        self.active_issues_since_entry.insert(0, parsed)
+        self.admin_status.configure(
+            text=f"Active issues since saved as {parsed}.{extra}",
+            text_color=self.theme["accent"],
+        )
 
     def _set_form_mode(self, *, editing: bool, name: str = "") -> None:
         if not hasattr(self, "form_mode_label"):
