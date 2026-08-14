@@ -43,7 +43,16 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px;
     }
     .si-age-toggle { display: inline-flex; gap: 6px; }
-    .si-age-btn.is-on { background: var(--accent); color: #111; border-color: var(--accent); }
+    button.btn.secondary.si-age-btn.is-on {
+      background: var(--accent); color: #111; border-color: var(--accent);
+    }
+    .site-issues th:nth-child(1),
+    .site-issues td:nth-child(1),
+    .site-issues th:nth-child(2),
+    .site-issues td:nth-child(2) {
+      min-width: 8rem;
+      white-space: nowrap;
+    }
     #si-progress-wrap { margin-top: 12px; max-width: 420px; }
     #si-progress-wrap[hidden] { display: none; }
     .si-progress-track {
@@ -127,7 +136,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       <h1>Storage Inventory</h1>
       <p>Live fleet inventory (Phone Home, Data Protection, SMTP, Issues) for monitored FlashSystem, HPE, and DS8884 arrays. Unlock LaunchPad to Refresh live; cached results load automatically.</p>
       <div class="hero-actions">
-        <label>Site <select id="siteFilter"><option value="">None</option></select></label>
+        <label>Site <select id="siteFilter"><option value="">All Arrays</option></select></label>
         <div class="si-age-toggle" id="si-age-toggle" role="group" aria-label="Issue age">
           <button type="button" class="btn secondary si-age-btn is-on" id="si-age-recent" data-age="recent">Recent</button>
           <button type="button" class="btn secondary si-age-btn" id="si-age-older" data-age="older">Older</button>
@@ -185,6 +194,37 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
         .replace(/"/g, "&quot;");
     }
 
+    function isIpv4(ip) {
+      const parts = String(ip || "").trim().split(".");
+      if (parts.length !== 4) {
+        return false;
+      }
+      return parts.every((part) => {
+        if (!/^[0-9]{1,3}$/.test(part)) {
+          return false;
+        }
+        const n = Number(part);
+        return n >= 0 && n <= 255;
+      });
+    }
+
+    function ipLink(ip) {
+      const trimmed = String(ip == null ? "" : ip).trim();
+      if (!trimmed) {
+        return "";
+      }
+      if (!isIpv4(trimmed)) {
+        return escapeHtml(trimmed);
+      }
+      return '<a href="https://' + escapeHtml(trimmed) + '" target="_blank" rel="noopener">'
+        + escapeHtml(trimmed) + "</a>";
+    }
+
+    function volumeProtectionDisplay(row) {
+      const text = String(row.volume_protection || "").trim();
+      return text || "unknown";
+    }
+
     function notesFor(row) {
       if (ageMode === "older") {
         return String(row.issues_older || "");
@@ -208,7 +248,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     }
 
     function rowHasUnknown(row) {
-      const fields = [row.phone_home, row.data_protection, row.smtp];
+      const fields = [row.phone_home, row.data_protection, row.smtp, volumeProtectionDisplay(row)];
       return fields.some((value) => String(value || "").trim().toLowerCase() === "unknown");
     }
 
@@ -238,12 +278,13 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       return rows.map((row) => (
         "<tr>"
         + "<td>" + escapeHtml(row.host || "") + "</td>"
-        + "<td>" + escapeHtml(row.ip || "") + "</td>"
+        + "<td>" + ipLink(row.ip) + "</td>"
         + "<td>" + escapeHtml(row.model || "") + "</td>"
         + "<td>" + escapeHtml(row.serial || "") + "</td>"
         + "<td>" + escapeHtml(row.location || "") + "</td>"
         + "<td>" + escapeHtml(row.phone_home || "") + "</td>"
         + "<td>" + escapeHtml(row.data_protection || "") + "</td>"
+        + "<td>" + escapeHtml(volumeProtectionDisplay(row)) + "</td>"
         + "<td>" + escapeHtml(row.smtp || "") + "</td>"
         + "</tr>"
       )).join("");
@@ -257,7 +298,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       const body = issueRows.map((row) => (
         "<tr>"
         + "<td>" + escapeHtml(row.host || "") + "</td>"
-        + "<td>" + escapeHtml(row.ip || "") + "</td>"
+        + "<td>" + ipLink(row.ip) + "</td>"
         + "<td>" + escapeHtml(notesFor(row)) + "</td>"
         + "</tr>"
       )).join("");
@@ -291,7 +332,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
           + '<div class="site-body"><div class="table-wrap"><table>'
           + "<thead><tr>"
           + "<th>Host</th><th>IP Address</th><th>Model</th><th>Serial Number (SN)</th>"
-          + "<th>Location</th><th>Phone Home</th><th>Data Protection</th><th>SMTP IP(s)</th>"
+          + "<th>Location</th><th>Phone Home</th><th>Data Protection</th><th>Volume Protection</th><th>SMTP IP(s)</th>"
           + "</tr></thead>"
           + "<tbody>" + renderDeviceRows(siteRows) + "</tbody>"
           + "</table></div>"
@@ -313,7 +354,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       const fromRows = allRows.map((row) => String(row.site || "").trim()).filter(Boolean);
       const sites = Array.from(new Set(knownSites.concat(fromRows))).sort((a, b) => a.localeCompare(b));
       const current = siteFilterEl.value || "";
-      siteFilterEl.innerHTML = '<option value="">None</option>' + sites.map((site) => (
+      siteFilterEl.innerHTML = '<option value="">All Arrays</option>' + sites.map((site) => (
         '<option value="' + escapeHtml(site) + '">' + escapeHtml(site) + "</option>"
       )).join("");
       if (current && sites.includes(current)) {
