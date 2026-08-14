@@ -83,3 +83,21 @@ def test_pending_grandfather_flag_round_trip():
     state = set_pending_grandfather(empty_state(), True)
     loaded = load_state(dump_state(state))
     assert loaded["pending_grandfather"] is True
+
+
+def test_collect_baseline_uses_cards_have_health_signal():
+    source = Path("launchpad/ui/admin_view.py").read_text(encoding="utf-8")
+    collect = source.split("def _collect_open_issue_fingerprints_for_baseline")[1]
+    collect = collect.split("def _save_active_issues_since")[0]
+    assert "cards_have_health_signal" in collect
+    assert "open_issue_fingerprints_for_baseline" in collect
+
+
+def test_save_date_reloads_state_after_collect():
+    source = Path("launchpad/ui/admin_view.py").read_text(encoding="utf-8")
+    save_fn = source.split("def _save_active_issues_since")[1].split("def _set_form_mode")[0]
+    collect_at = save_fn.find("_collect_open_issue_fingerprints_for_baseline")
+    apply_at = save_fn.find("set_active_issues_since(self._load_health_alert_state()")
+    assert collect_at != -1
+    assert apply_at != -1
+    assert collect_at < apply_at

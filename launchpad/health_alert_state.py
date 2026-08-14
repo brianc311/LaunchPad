@@ -297,9 +297,10 @@ def prepare_health_issue_limit(
     for card in cards:
         fps |= fingerprints_for_card(card)
     if (not out["baseline_applied"]) or out["pending_grandfather"]:
-        out = grandfather_fingerprints(out, fps)
-        out["baseline_applied"] = True
-        out["pending_grandfather"] = False
+        if cards_have_health_signal(cards):
+            out = grandfather_fingerprints(out, fps)
+            out["baseline_applied"] = True
+            out["pending_grandfather"] = False
     out = ensure_first_seen(out, fps, now=now)
     return prune_acknowledgements(out, fps)
 
@@ -459,6 +460,24 @@ def fingerprints_for_card(card: dict[str, Any]) -> set[str]:
     for candidate in collect_critical_candidates(card, monitor_on=True):
         fps.add(str(candidate["fingerprint"]))
     return fps
+
+
+def cards_have_health_signal(cards: list[dict[str, Any]]) -> bool:
+    for card in cards:
+        if fingerprints_for_card(card) or _has_useful_health_data(card):
+            return True
+    return False
+
+
+def open_issue_fingerprints_for_baseline(
+    cards: list[dict[str, Any]],
+) -> tuple[set[str], bool]:
+    if not cards or not cards_have_health_signal(cards):
+        return set(), False
+    fps: set[str] = set()
+    for card in cards:
+        fps |= fingerprints_for_card(card)
+    return fps, True
 
 
 def list_popup_alerts(

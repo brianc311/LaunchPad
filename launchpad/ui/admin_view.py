@@ -31,10 +31,11 @@ from launchpad.config import CARD_TYPES, DEFAULT_APP_NAME, DEFAULT_GLOW_COLOR, D
 from launchpad.crypto import decrypt_text, encrypt_text, verify_password
 from launchpad.health_alert_state import (
     HEALTH_ALERT_SETTING,
+    cards_have_health_signal,
     dump_state,
-    fingerprints_for_card,
     grandfather_fingerprints,
     load_state,
+    open_issue_fingerprints_for_baseline,
     parse_active_issues_since,
     set_active_issues_since,
     set_alarm,
@@ -1836,12 +1837,9 @@ class AdminView(ctk.CTkFrame):
             cards = get_health_server().list_cards(allow_sync=False)
         except Exception:
             return set(), False
-        if not cards:
+        if not cards_have_health_signal(cards):
             return set(), False
-        fps: set[str] = set()
-        for card in cards:
-            fps |= fingerprints_for_card(card)
-        return fps, True
+        return open_issue_fingerprints_for_baseline(cards)
 
     def _save_active_issues_since(self) -> None:
         raw = ""
@@ -1854,9 +1852,12 @@ class AdminView(ctk.CTkFrame):
                 text_color=self.theme["muted"],
             )
             return
+        fps: set[str] = set()
+        live_ok = False
+        if self._load_health_alert_state().get("limit_new_issues"):
+            fps, live_ok = self._collect_open_issue_fingerprints_for_baseline()
         state = set_active_issues_since(self._load_health_alert_state(), parsed)
         if state.get("limit_new_issues"):
-            fps, live_ok = self._collect_open_issue_fingerprints_for_baseline()
             if live_ok:
                 state = grandfather_fingerprints(state, fps)
                 state = set_pending_grandfather(state, False)

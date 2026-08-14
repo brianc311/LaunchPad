@@ -4,6 +4,7 @@ from launchpad.health_alert_state import (
     CONNECTIVITY_SENTINEL,
     DEFAULT_ACTIVE_ISSUES_SINCE,
     acknowledge,
+    cards_have_health_signal,
     collect_critical_candidates,
     empty_state,
     ensure_first_seen,
@@ -12,6 +13,7 @@ from launchpad.health_alert_state import (
     issue_is_visible,
     list_popup_alerts,
     load_state,
+    open_issue_fingerprints_for_baseline,
     prepare_health_issue_limit,
     parse_active_issues_since,
     pause_card,
@@ -394,3 +396,89 @@ def test_pending_grandfather_runs_on_next_prepare():
     out = prepare_health_issue_limit(state, [card], now=_ts(2026, 8, 20))
     assert fp in out["grandfathered"]
     assert out["pending_grandfather"] is False
+
+
+def test_cards_have_health_signal():
+    unpolled = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
+    assert cards_have_health_signal([unpolled]) is False
+    assert cards_have_health_signal([]) is False
+
+    metrics_only = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [],
+    }
+    assert cards_have_health_signal([metrics_only]) is True
+
+    with_issues = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "health_issues": [_drive_issue()],
+    }
+    assert cards_have_health_signal([with_issues]) is True
+
+
+def test_open_issue_fingerprints_for_baseline_live_ok():
+    unpolled = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
+    fps, live_ok = open_issue_fingerprints_for_baseline([unpolled])
+    assert fps == set()
+    assert live_ok is False
+    fps, live_ok = open_issue_fingerprints_for_baseline([])
+    assert fps == set()
+    assert live_ok is False
+
+    leftover = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    fps, live_ok = open_issue_fingerprints_for_baseline([leftover])
+    assert live_ok is True
+    assert fp in fps
+
+    healthy = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [],
+    }
+    fps, live_ok = open_issue_fingerprints_for_baseline([healthy])
+    assert live_ok is True
+    assert fps == set()
+
+
+def test_prepare_empty_issues_does_not_apply_baseline():
+    state = empty_state()
+    assert state["baseline_applied"] is False
+    empty_card = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
+    out = prepare_health_issue_limit(state, [empty_card], now=_ts(2026, 8, 14))
+    assert out["baseline_applied"] is False
+    assert out["grandfathered"] == []
+
+    leftover = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": {"cpu": 1},
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    out2 = prepare_health_issue_limit(out, [leftover], now=_ts(2026, 8, 14))
+    assert out2["baseline_applied"] is True
+    assert fp in out2["grandfathered"]
+
+
+def test_prepare_healthy_polled_array_applies_empty_baseline():
+    state = empty_state()
+    healthy = {"id": 1, "name": "A", "error": None, "metrics": {"cpu": 1}, "health_issues": []}
+    out = prepare_health_issue_limit(state, [healthy], now=_ts(2026, 8, 14))
+    assert out["baseline_applied"] is True
+    assert out["grandfathered"] == []
