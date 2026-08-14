@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from io import BytesIO
+from threading import Lock
 from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 from launchpad.flashsystem_parse import _parse_colon_table
+from launchpad.health_alert_state import issue_fingerprint_for_issue, issue_is_visible
 from launchpad.storage_presets import HPE_SHELL_PROFILES, SVC_PROFILES, is_svc_fc_profile
 from launchpad.system_connectivity import (
     hpe_call_home_na_row,
@@ -353,6 +355,60 @@ def build_issues_notes(
     return "; ".join(notes)
 
 
+def split_inventory_issue_fields(
+    *,
+    phone_configured: str,
+    data_protection_configured: str,
+    smtp_configured: str,
+    dns_configured: str,
+    ntp_configured: str,
+    health_issues: list,
+    extra_errors: list[str],
+    card_id: int | str | None = None,
+    alert_state: dict | None = None,
+    now: float = 0.0,
+) -> dict[str, str]:
+    items = list(health_issues or [])
+    extras = list(extra_errors or [])
+    issues = build_issues_notes(
+        phone_configured=phone_configured,
+        data_protection_configured=data_protection_configured,
+        smtp_configured=smtp_configured,
+        dns_configured=dns_configured,
+        ntp_configured=ntp_configured,
+        health_issues=items,
+        extra_errors=extras,
+    )
+    config_notes = build_issues_notes(
+        phone_configured=phone_configured,
+        data_protection_configured=data_protection_configured,
+        smtp_configured=smtp_configured,
+        dns_configured=dns_configured,
+        ntp_configured=ntp_configured,
+        health_issues=[],
+        extra_errors=extras,
+    )
+    recent_health: list = []
+    older_health: list = []
+    for issue in items:
+        if not isinstance(issue, dict):
+            continue
+        visible = True
+        if alert_state is not None and card_id is not None:
+            fp = issue_fingerprint_for_issue(card_id, issue)
+            visible = issue_is_visible(alert_state, fp, now=now)
+        if visible:
+            recent_health.append(issue)
+        else:
+            older_health.append(issue)
+    recent_parts = [part for part in (config_notes, "; ".join(health_issue_messages(recent_health))) if part]
+    return {
+        "issues": issues,
+        "issues_recent": "; ".join(recent_parts),
+        "issues_older": "; ".join(health_issue_messages(older_health)),
+    }
+
+
 def row_has_issues(row: dict) -> bool:
     return bool(str(row.get("issues") or "").strip())
 
@@ -409,13 +465,15 @@ def build_inventory_row(
     ntp: tuple[str, str, str],
     health_issues: list | None = None,
     extra_errors: list[str] | None = None,
+    alert_state: dict | None = None,
+    now: float = 0.0,
 ) -> dict:
     phone_cfg, _phone_status, phone_details = phone
     dp_cfg, _dp_status, dp_details = data_protection
     smtp_cfg, _smtp_status, smtp_details = smtp
     dns_cfg, _dns_status, _dns_details = dns
     ntp_cfg, _ntp_status, _ntp_details = ntp
-    issues = build_issues_notes(
+    split = split_inventory_issue_fields(
         phone_configured=phone_cfg,
         data_protection_configured=dp_cfg,
         smtp_configured=smtp_cfg,
@@ -423,6 +481,9 @@ def build_inventory_row(
         ntp_configured=ntp_cfg,
         health_issues=health_issues or [],
         extra_errors=extra_errors or [],
+        card_id=card_id,
+        alert_state=alert_state,
+        now=now,
     )
     row: dict[str, Any] = {
         "site": site,
@@ -441,7 +502,9 @@ def build_inventory_row(
             details=dp_details,
         ),
         "smtp": format_smtp_cell(configured=smtp_cfg, details=smtp_details),
-        "issues": issues,
+        "issues": split["issues"],
+        "issues_recent": split["issues_recent"],
+        "issues_older": split["issues_older"],
         "profile": profile,
         "vendor": vendor,
     }
@@ -543,11 +606,54 @@ def export_storage_inventory_xlsx(
     return output.getvalue()
 
 
+def empty_storage_inventory_progress() -> dict[str, Any]:
+    return {"running": False, "done": 0, "total": 0, "current": ""}
+
+
+class StorageInventoryProgress:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._data = empty_storage_inventory_progress()
+
+    def begin(self, total: int) -> None:
+        with self._lock:
+            self._data = {
+                "running": True,
+                "done": 0,
+                "total": int(total),
+                "current": "",
+            }
+
+    def start_card(self, name: str) -> None:
+        with self._lock:
+            self._data["current"] = str(name or "")
+
+    def finish_card(self) -> None:
+        with self._lock:
+            self._data["done"] = int(self._data.get("done") or 0) + 1
+
+    def end(self) -> None:
+        with self._lock:
+            self._data["running"] = False
+            self._data["current"] = ""
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "running": bool(self._data["running"]),
+                "done": int(self._data.get("done") or 0),
+                "total": int(self._data.get("total") or 0),
+                "current": str(self._data.get("current") or ""),
+            }
+
+
 __all__ = [
     "BLANK_SITE_LABEL",
     "INVENTORY_COLUMNS",
+    "StorageInventoryProgress",
     "build_inventory_row",
     "build_issues_notes",
+    "empty_storage_inventory_progress",
     "export_storage_inventory_xlsx",
     "format_phone_home_cell",
     "format_smtp_cell",
@@ -574,4 +680,5 @@ __all__ = [
     "parse_svc_ntp_from_lssystem",
     "row_has_issues",
     "site_status",
+    "split_inventory_issue_fields",
 ]

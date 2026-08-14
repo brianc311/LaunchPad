@@ -2,7 +2,13 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-from launchpad.health_server import HealthCard, HealthServer
+from launchpad.health_alert_state import (
+    dump_state,
+    empty_state,
+    grandfather_fingerprints,
+    issue_fingerprint_for_issue,
+)
+from launchpad.health_server import HEALTH_ALERT_SETTING, HealthCard, HealthServer
 from launchpad.storage_inventory_page import STORAGE_INVENTORY_PATH
 
 
@@ -340,3 +346,93 @@ def test_export_storage_inventory_uses_cache_without_unlock(monkeypatch):
     assert "sheet" in content_type or "spreadsheet" in content_type or "octet" in content_type
     wb = load_workbook(BytesIO(body))
     assert wb.sheetnames == ["Inventory", "Issues Summary"]
+
+
+def test_storage_inventory_progress_snapshot_idle_and_after_scan(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    idle = server.storage_inventory_progress_snapshot()
+    assert idle == {"running": False, "done": 0, "total": 0, "current": ""}
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[1] = card
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        server,
+        "_scan_storage_inventory_card",
+        lambda _card: {"site": "Hartford", "issues": "", "issues_recent": "", "issues_older": ""},
+    )
+    server.scan_storage_inventory_live()
+    done = server.storage_inventory_progress_snapshot()
+    assert done["running"] is False
+    assert done["done"] == 1
+    assert done["total"] == 1
+
+
+def test_scan_storage_inventory_grandfathered_health_is_older(monkeypatch):
+    issue = {
+        "severity": "warn",
+        "category": "capacity",
+        "message": "Running at 92.0% capacity",
+    }
+    state = grandfather_fingerprints(
+        empty_state(), [issue_fingerprint_for_issue(1, issue)]
+    )
+    server = HealthServer()
+    server.set_settings_backend(
+        lambda key, default: dump_state(state) if key == HEALTH_ALERT_SETTING else default,
+        lambda _key, _value: None,
+    )
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="u",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[1] = card
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(server, "_storage_inventory_health_issues", lambda _card: [issue])
+
+    def _runner(_card):
+        def run(command):
+            if "lscloudcallhome" in command:
+                return "id:status\n0:enabled\n"
+            if "lsdnsserver" in command:
+                return "id:name:IP_address\n0:dns1:10.1.1.1\n"
+            if "lsemailserver" in command:
+                return "id:name:IP_address:port\n0:smtp1:172.29.62.98:25\n"
+            if "lsrcrelationship" in command:
+                return "id:name:master_cluster_id\n0:rel1:1\n"
+            if "lssystem" in command:
+                return (
+                    "id:78E37V9\nname:v7kcon-g3v1\n"
+                    "product_name:IBM FlashSystem 7200\n"
+                    "cluster_ntp_IP_address:10.3.3.3\n"
+                )
+            return ""
+
+        return run
+
+    monkeypatch.setattr(server, "_lun_run_command", _runner)
+    result = server.scan_storage_inventory_live()
+    row = result["rows"][0]
+    assert "Running at 92.0% capacity" in row["issues"]
+    assert row["issues_recent"] == ""
+    assert "Running at 92.0% capacity" in row["issues_older"]
+
+
+def test_storage_inventory_progress_route_exists():
+    from launchpad.health_server import _HealthHandler
+    import inspect
+    source = inspect.getsource(_HealthHandler)
+    assert "/api/storage-inventory/progress" in source
