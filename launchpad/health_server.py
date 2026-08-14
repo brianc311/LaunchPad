@@ -155,6 +155,7 @@ from launchpad.system_connectivity_page import (
     SYSTEM_CONNECTIVITY_PATH,
 )
 from launchpad.storage_inventory import (
+    StorageInventoryProgress,
     build_inventory_row,
     export_storage_inventory_xlsx,
     inventory_commands_for_profile,
@@ -3252,6 +3253,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(cached)
             return
+        if path == "/api/storage-inventory/progress":
+            self._send_json(server.storage_inventory_progress_snapshot())
+            return
         if path == "/api/storage-inventory/live":
             query = parse_qs(parsed.query)
             raw_card_id = (query.get("card_id") or [""])[0].strip()
@@ -4530,6 +4534,7 @@ class HealthServer:
         self._host_volume_health_cache: dict[str, Any] | None = None
         self._system_connectivity_cache: dict[str, Any] | None = None
         self._storage_inventory_cache: dict[str, Any] | None = None
+        self._storage_inventory_progress = StorageInventoryProgress()
         self._fc_consistgrp_status_cache: dict[str, Any] | None = None
         self._fc_cg_summary_live_cache: dict[str, Any] | None = None
 
@@ -7611,6 +7616,12 @@ class HealthServer:
         vendor = system_connectivity_vendor(profile)
         commands = inventory_commands_for_profile(profile)
         health_issues = self._storage_inventory_health_issues(card)
+        alert_state = getattr(self, "_storage_inventory_alert_state", None)
+        if alert_state is None:
+            alert_state = self._load_health_alert_state()
+        now = getattr(self, "_storage_inventory_now", None)
+        if now is None:
+            now = time.time()
 
         if is_hpe_inventory_profile(profile):
             model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
@@ -7657,7 +7668,12 @@ class HealthServer:
             ntp=ntp,
             health_issues=health_issues,
             extra_errors=extra_errors,
+            alert_state=alert_state,
+            now=now,
         )
+
+    def storage_inventory_progress_snapshot(self) -> dict:
+        return self._storage_inventory_progress.snapshot()
 
     def scan_storage_inventory_live(self, *, card_id: int | None = None) -> dict[str, Any]:
         if not self.is_unlocked():
@@ -7673,6 +7689,7 @@ class HealthServer:
         cards = self.list_cards(allow_sync=False)
         rows: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        eligible: list[HealthCard] = []
         for card_dict in cards:
             current_id = card_dict.get("id")
             if current_id is None:
@@ -7684,35 +7701,49 @@ class HealthServer:
             card = self._cards.get(int(current_id))
             if card is None:
                 continue
-            try:
-                row = self._scan_storage_inventory_card(card)
-            except Exception as exc:
-                err = str(exc)
-                errors.append(
-                    {"card_id": card.card_id, "card_name": card.name, "error": err}
-                )
-                unknown = ("unknown", "", "")
-                row = build_inventory_row(
-                    site=card.name,
-                    host=card.name,
-                    ip=str(card.host or ""),
-                    model=DEVICE_PROFILES.get(
-                        str(card.device_profile or ""), str(card.device_profile or "")
-                    ),
-                    serial=str(card.serial_number or ""),
-                    location=card.name,
-                    vendor=system_connectivity_vendor(str(card.device_profile or "")),
-                    profile=str(card.device_profile or ""),
-                    card_id=card.card_id,
-                    phone=unknown,
-                    data_protection=unknown,
-                    smtp=unknown,
-                    dns=unknown,
-                    ntp=unknown,
-                    health_issues=self._storage_inventory_health_issues(card),
-                    extra_errors=[err],
-                )
-            rows.append(row)
+            eligible.append(card)
+        alert_state = self._load_health_alert_state()
+        now = time.time()
+        self._storage_inventory_alert_state = alert_state
+        self._storage_inventory_now = now
+        self._storage_inventory_progress.begin(len(eligible))
+        try:
+            for card in eligible:
+                self._storage_inventory_progress.start_card(str(card.name or ""))
+                try:
+                    row = self._scan_storage_inventory_card(card)
+                except Exception as exc:
+                    err = str(exc)
+                    errors.append(
+                        {"card_id": card.card_id, "card_name": card.name, "error": err}
+                    )
+                    unknown = ("unknown", "", "")
+                    row = build_inventory_row(
+                        site=card.name,
+                        host=card.name,
+                        ip=str(card.host or ""),
+                        model=DEVICE_PROFILES.get(
+                            str(card.device_profile or ""), str(card.device_profile or "")
+                        ),
+                        serial=str(card.serial_number or ""),
+                        location=card.name,
+                        vendor=system_connectivity_vendor(str(card.device_profile or "")),
+                        profile=str(card.device_profile or ""),
+                        card_id=card.card_id,
+                        phone=unknown,
+                        data_protection=unknown,
+                        smtp=unknown,
+                        dns=unknown,
+                        ntp=unknown,
+                        health_issues=self._storage_inventory_health_issues(card),
+                        extra_errors=[err],
+                        alert_state=alert_state,
+                        now=now,
+                    )
+                rows.append(row)
+                self._storage_inventory_progress.finish_card()
+        finally:
+            self._storage_inventory_progress.end()
 
         rows.sort(key=lambda row: str(row.get("site") or "").lower())
         totals = inventory_totals(rows)

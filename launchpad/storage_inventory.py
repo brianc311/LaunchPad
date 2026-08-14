@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from io import BytesIO
+from threading import Lock
 from typing import Any
 
 from openpyxl import Workbook
@@ -605,11 +606,54 @@ def export_storage_inventory_xlsx(
     return output.getvalue()
 
 
+def empty_storage_inventory_progress() -> dict[str, Any]:
+    return {"running": False, "done": 0, "total": 0, "current": ""}
+
+
+class StorageInventoryProgress:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._data = empty_storage_inventory_progress()
+
+    def begin(self, total: int) -> None:
+        with self._lock:
+            self._data = {
+                "running": True,
+                "done": 0,
+                "total": int(total),
+                "current": "",
+            }
+
+    def start_card(self, name: str) -> None:
+        with self._lock:
+            self._data["current"] = str(name or "")
+
+    def finish_card(self) -> None:
+        with self._lock:
+            self._data["done"] = int(self._data.get("done") or 0) + 1
+
+    def end(self) -> None:
+        with self._lock:
+            self._data["running"] = False
+            self._data["current"] = ""
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "running": bool(self._data["running"]),
+                "done": int(self._data.get("done") or 0),
+                "total": int(self._data.get("total") or 0),
+                "current": str(self._data.get("current") or ""),
+            }
+
+
 __all__ = [
     "BLANK_SITE_LABEL",
     "INVENTORY_COLUMNS",
+    "StorageInventoryProgress",
     "build_inventory_row",
     "build_issues_notes",
+    "empty_storage_inventory_progress",
     "export_storage_inventory_xlsx",
     "format_phone_home_cell",
     "format_smtp_cell",

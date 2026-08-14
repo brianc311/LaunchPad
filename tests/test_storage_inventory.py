@@ -11,8 +11,10 @@ from launchpad.health_alert_state import (
 )
 from launchpad.storage_inventory import (
     BLANK_SITE_LABEL,
+    StorageInventoryProgress,
     build_inventory_row,
     build_issues_notes,
+    empty_storage_inventory_progress,
     export_storage_inventory_xlsx,
     format_phone_home_cell,
     format_smtp_cell,
@@ -317,3 +319,28 @@ def test_build_inventory_row_includes_split_fields():
     assert "issues_recent" in row
     assert "issues_older" in row
     assert row["issues_recent"] == row["issues"]
+
+
+def test_storage_inventory_progress_counts_cards():
+    assert empty_storage_inventory_progress() == {
+        "running": False,
+        "done": 0,
+        "total": 0,
+        "current": "",
+    }
+    prog = StorageInventoryProgress()
+    prog.begin(2)
+    snap = prog.snapshot()
+    assert snap["running"] is True
+    assert snap["total"] == 2
+    assert snap["done"] == 0
+    prog.start_card("Anderson")
+    assert prog.snapshot()["current"] == "Anderson"
+    prog.finish_card()
+    prog.start_card("Windsor")
+    prog.finish_card()
+    assert prog.snapshot()["done"] == 2
+    prog.end()
+    done = prog.snapshot()
+    assert done["running"] is False
+    assert done["done"] == 2
