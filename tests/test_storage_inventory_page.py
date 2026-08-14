@@ -46,3 +46,22 @@ def test_storage_inventory_sites_and_issues_start_collapsed():
     script = STORAGE_INVENTORY_HTML.split("<script>", 1)[1]
     assert "<details open" not in script
     assert 'open="' not in script
+
+
+def test_storage_inventory_age_toggle_and_progress_markers():
+    html = STORAGE_INVENTORY_HTML
+    heading = html.split("<script>", 1)[0]
+    script = html.split("<script>", 1)[1]
+    assert "Recent" in heading
+    assert "Older" in heading
+    assert ">All<" in heading or "All</" in heading
+    assert 'id="si-age-recent"' in html
+    assert 'id="si-age-older"' in html
+    assert 'id="si-age-all"' in html
+    assert 'id="si-progress-wrap"' in html
+    assert 'id="si-progress-bar"' in html
+    assert "/api/storage-inventory/progress" in script
+    assert "issues_recent" in script
+    assert "issues_older" in script
+    assert 'ageMode = "recent"' in script or "ageMode = 'recent'" in script
+    assert '"<div class="' not in script

@@ -42,6 +42,15 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     .hero-actions {
       display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px;
     }
+    .si-age-toggle { display: inline-flex; gap: 6px; }
+    .si-age-btn.is-on { background: var(--accent); color: #111; border-color: var(--accent); }
+    #si-progress-wrap { margin-top: 12px; max-width: 420px; }
+    #si-progress-wrap[hidden] { display: none; }
+    .si-progress-track {
+      height: 8px; border-radius: 999px; background: #0f141d; border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #si-progress-bar { height: 100%; width: 0; background: var(--accent); }
     .btn, a.btn, button.btn {
       background: var(--accent); color: #111; border: none; border-radius: 10px;
       height: 34px; padding: 0 14px; font: inherit; font-weight: 600; cursor: pointer;
@@ -119,11 +128,19 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       <p>Live fleet inventory (Phone Home, Data Protection, SMTP, Issues) for monitored FlashSystem, HPE, and DS8884 arrays. Unlock LaunchPad to Refresh live; cached results load automatically.</p>
       <div class="hero-actions">
         <label>Site <select id="siteFilter"><option value="">None</option></select></label>
+        <div class="si-age-toggle" id="si-age-toggle" role="group" aria-label="Issue age">
+          <button type="button" class="btn secondary si-age-btn is-on" id="si-age-recent" data-age="recent">Recent</button>
+          <button type="button" class="btn secondary si-age-btn" id="si-age-older" data-age="older">Older</button>
+          <button type="button" class="btn secondary si-age-btn" id="si-age-all" data-age="all">All</button>
+        </div>
         <button type="button" class="btn" id="si-refresh-btn">Refresh live</button>
         <button type="button" class="btn secondary" id="si-export-btn" disabled>Export Excel</button>
         <a class="btn secondary" href="/">Home</a>
         <a class="btn secondary" href="/system-connectivity">System Connectivity</a>
         <a class="btn secondary" href="/host-volume-health">Hosts &amp; Volumes</a>
+      </div>
+      <div id="si-progress-wrap" hidden>
+        <div class="si-progress-track"><div id="si-progress-bar"></div></div>
       </div>
       <div class="status" id="si-status">Loading cache…</div>
       <div class="errors" id="si-errors"></div>
@@ -158,6 +175,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
     let allRows = [];
     let knownSites = [];
     let hasCache = false;
+    let ageMode = "recent";
 
     function escapeHtml(value) {
       return String(value == null ? "" : value)
@@ -167,8 +185,21 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
         .replace(/"/g, "&quot;");
     }
 
+    function notesFor(row) {
+      if (ageMode === "older") {
+        return String(row.issues_older || "");
+      }
+      if (ageMode === "all") {
+        return String(row.issues || "");
+      }
+      if (row.issues_recent != null && row.issues_recent !== undefined) {
+        return String(row.issues_recent || "");
+      }
+      return String(row.issues || "");
+    }
+
     function rowHasIssues(row) {
-      return Boolean(String(row.issues || "").trim());
+      return Boolean(notesFor(row).trim());
     }
 
     function siteLabel(row) {
@@ -227,7 +258,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
         "<tr>"
         + "<td>" + escapeHtml(row.host || "") + "</td>"
         + "<td>" + escapeHtml(row.ip || "") + "</td>"
-        + "<td>" + escapeHtml(row.issues || "") + "</td>"
+        + "<td>" + escapeHtml(notesFor(row)) + "</td>"
         + "</tr>"
       )).join("");
       return (
@@ -355,14 +386,73 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       }
     }
 
+    const progressWrap = document.getElementById("si-progress-wrap");
+    const progressBar = document.getElementById("si-progress-bar");
+    document.getElementById("si-age-toggle").addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-age]");
+      if (!btn) {
+        return;
+      }
+      ageMode = btn.getAttribute("data-age") || "recent";
+      document.querySelectorAll(".si-age-btn").forEach((el) => {
+        if (el.getAttribute("data-age") === ageMode) {
+          el.classList.add("is-on");
+        } else {
+          el.classList.remove("is-on");
+        }
+      });
+      renderAll();
+    });
+
+    let progressTimer = null;
+
+    function hideProgress() {
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      progressWrap.hidden = true;
+      progressBar.style.width = "0%";
+    }
+
+    function applyProgress(data) {
+      const total = Number(data && data.total) || 0;
+      const done = Number(data && data.done) || 0;
+      const current = String((data && data.current) || "").trim();
+      progressWrap.hidden = false;
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+      progressBar.style.width = pct + "%";
+      let label = "Scanning live…";
+      if (total > 0) {
+        label = done + " / " + total + " arrays";
+        if (current) {
+          label += " · " + current;
+        }
+      }
+      statusEl.textContent = label;
+    }
+
+    async function pollProgress() {
+      try {
+        const res = await fetch("/api/storage-inventory/progress");
+        const data = await res.json().catch(() => ({}));
+        applyProgress(data);
+      } catch (_err) {
+        /* ignore poll errors while live request is in flight */
+      }
+    }
+
     async function refreshLive() {
       refreshBtn.disabled = true;
-      statusEl.textContent = "Scanning live…";
       errorsEl.textContent = "";
+      applyProgress({done:0,total:0,current:""});
+      progressTimer = setInterval(pollProgress, 400);
+      pollProgress();
       try {
         const res = await fetch("/api/storage-inventory/live");
         const data = await res.json().catch(() => ({}));
         if (res.status === 403) {
+          hideProgress();
           statusEl.textContent = data.error || "Unlock LaunchPad to refresh live.";
           return;
         }
@@ -378,6 +468,7 @@ STORAGE_INVENTORY_HTML = """<!DOCTYPE html>
       } catch (err) {
         statusEl.textContent = String(err && err.message ? err.message : err);
       } finally {
+        hideProgress();
         refreshBtn.disabled = false;
       }
     }
