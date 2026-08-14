@@ -421,6 +421,25 @@ def test_cards_have_health_signal():
     }
     assert cards_have_health_signal([with_issues]) is True
 
+    command_results_only = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "command_results": [{"label": "lshost", "output": "ok"}],
+        "health_issues": [],
+    }
+    assert cards_have_health_signal([command_results_only]) is True
+
+    error_only = {
+        "id": 1,
+        "name": "A",
+        "error": "SSH timeout",
+        "metrics": None,
+        "health_issues": [],
+    }
+    assert cards_have_health_signal([error_only]) is True
+
 
 def test_open_issue_fingerprints_for_baseline_live_ok():
     unpolled = {"id": 1, "name": "A", "error": None, "metrics": None, "health_issues": []}
@@ -482,3 +501,31 @@ def test_prepare_healthy_polled_array_applies_empty_baseline():
     out = prepare_health_issue_limit(state, [healthy], now=_ts(2026, 8, 14))
     assert out["baseline_applied"] is True
     assert out["grandfathered"] == []
+
+
+def test_prepare_command_results_only_applies_empty_baseline():
+    state = empty_state()
+    polled = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "command_results": [{"label": "lshost", "output": "ok"}],
+        "health_issues": [],
+    }
+    out = prepare_health_issue_limit(state, [polled], now=_ts(2026, 8, 14))
+    assert out["baseline_applied"] is True
+    assert out["grandfathered"] == []
+
+    leftover = {
+        "id": 1,
+        "name": "A",
+        "error": None,
+        "metrics": None,
+        "command_results": [{"label": "lshost", "output": "ok"}],
+        "health_issues": [_drive_issue()],
+    }
+    fp = issue_fingerprint(1, "drive", "Drive 0 is offline")
+    out2 = prepare_health_issue_limit(out, [leftover], now=_ts(2026, 8, 15))
+    assert fp not in out2["grandfathered"]
+    assert issue_is_visible(out2, fp, now=_ts(2026, 8, 15)) is True

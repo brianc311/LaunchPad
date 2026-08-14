@@ -466,6 +466,8 @@ def cards_have_health_signal(cards: list[dict[str, Any]]) -> bool:
     for card in cards:
         if fingerprints_for_card(card) or _has_useful_health_data(card):
             return True
+        if card.get("command_results") or card.get("error"):
+            return True
     return False
 
 
