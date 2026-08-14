@@ -1,9 +1,17 @@
+from datetime import datetime
 from io import BytesIO
 
 from openpyxl import load_workbook
 
+from launchpad.health_alert_state import (
+    empty_state,
+    grandfather_fingerprints,
+    issue_fingerprint_for_issue,
+    set_limit_new_issues,
+)
 from launchpad.storage_inventory import (
     BLANK_SITE_LABEL,
+    build_inventory_row,
     build_issues_notes,
     export_storage_inventory_xlsx,
     format_phone_home_cell,
@@ -18,6 +26,7 @@ from launchpad.storage_inventory import (
     parse_svc_lssystem_identity,
     row_has_issues,
     site_status,
+    split_inventory_issue_fields,
 )
 
 
@@ -201,3 +210,110 @@ def test_site_status_red_orange_green_and_na_ignored():
         {"issues": "", "phone_home": "Yes — IBM", "data_protection": "Unknown", "smtp": "n/a"},
     ]) == "orange"
     assert site_status([]) == "green"
+
+
+def _health(message: str, category: str = "drive") -> dict:
+    return {"severity": "critical", "category": category, "message": message}
+
+
+def test_split_config_only_is_recent():
+    fields = split_inventory_issue_fields(
+        phone_configured="no",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[],
+        extra_errors=["scan failed"],
+        card_id=7,
+        alert_state=empty_state(),
+    )
+    assert "Phone Home not configured" in fields["issues"]
+    assert "scan failed" in fields["issues"]
+    assert fields["issues_recent"] == fields["issues"]
+    assert fields["issues_older"] == ""
+
+
+def test_split_leftover_health_is_older():
+    issue = _health("Drive 0 is offline")
+    state = empty_state()
+    fp = issue_fingerprint_for_issue(7, issue)
+    state = grandfather_fingerprints(state, [fp])
+    fields = split_inventory_issue_fields(
+        phone_configured="yes",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[issue],
+        extra_errors=[],
+        card_id=7,
+        alert_state=state,
+        now=datetime(2026, 8, 14, 12, 0, 0).timestamp(),
+    )
+    assert "Drive 0 is offline" in fields["issues"]
+    assert fields["issues_recent"] == ""
+    assert "Drive 0 is offline" in fields["issues_older"]
+
+
+def test_split_mixed_and_limit_off():
+    leftover = _health("old leftover")
+    fresh = _health("new alert", category="capacity")
+    state = empty_state()
+    state = grandfather_fingerprints(
+        state, [issue_fingerprint_for_issue(3, leftover)]
+    )
+    mixed = split_inventory_issue_fields(
+        phone_configured="no",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[leftover, fresh],
+        extra_errors=[],
+        card_id=3,
+        alert_state=state,
+    )
+    assert "Phone Home not configured" in mixed["issues_recent"]
+    assert "new alert" in mixed["issues_recent"]
+    assert "old leftover" not in mixed["issues_recent"]
+    assert "old leftover" in mixed["issues_older"]
+    off = set_limit_new_issues(state, False)
+    unlimited = split_inventory_issue_fields(
+        phone_configured="yes",
+        data_protection_configured="yes",
+        smtp_configured="yes",
+        dns_configured="yes",
+        ntp_configured="yes",
+        health_issues=[leftover],
+        extra_errors=[],
+        card_id=3,
+        alert_state=off,
+    )
+    assert "old leftover" in unlimited["issues_recent"]
+    assert unlimited["issues_older"] == ""
+
+
+def test_build_inventory_row_includes_split_fields():
+    unknown = ("yes", "", "")
+    row = build_inventory_row(
+        site="A",
+        host="h",
+        ip="10.0.0.1",
+        model="m",
+        serial="s",
+        location="A",
+        vendor="IBM",
+        profile="flashsystem_7200",
+        card_id=1,
+        phone=("no", "", ""),
+        data_protection=unknown,
+        smtp=unknown,
+        dns=unknown,
+        ntp=unknown,
+        health_issues=[],
+        extra_errors=[],
+    )
+    assert "issues_recent" in row
+    assert "issues_older" in row
+    assert row["issues_recent"] == row["issues"]
