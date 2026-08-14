@@ -167,6 +167,7 @@ from launchpad.storage_inventory import (
     parse_svc_lsemailserver,
     parse_svc_lsrcrelationship,
     parse_svc_lssystem_identity,
+    parse_svc_lssystem_volume_protection,
 )
 from launchpad.storage_inventory_page import (
     STORAGE_INVENTORY_HTML,
@@ -7468,7 +7469,7 @@ class HealthServer:
 
     def _scan_storage_inventory_svc_card(
         self, card: HealthCard, commands: dict[str, list[str]]
-    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str]]:
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str], tuple]:
         run = self._lun_run_command(card)
         lssystem_output: str | None = None
         extra_errors: list[str] = []
@@ -7492,6 +7493,12 @@ class HealthServer:
         except Exception as exc:
             model, serial = "", ""
             extra_errors.append(f"identity scan failed: {exc}")
+
+        try:
+            volume_protection = parse_svc_lssystem_volume_protection(_run_first("identity"))
+        except Exception as exc:
+            volume_protection = unknown
+            extra_errors.append(f"volume protection scan failed: {exc}")
 
         try:
             ntp = parse_svc_ntp_from_lssystem(_run_first("ntp"))
@@ -7526,11 +7533,11 @@ class HealthServer:
             data_protection = unknown
             extra_errors.append(f"data protection scan failed: {exc}")
 
-        return model, serial, phone, data_protection, smtp, dns, ntp, extra_errors
+        return model, serial, phone, data_protection, smtp, dns, ntp, extra_errors, volume_protection
 
     def _scan_storage_inventory_hpe_card(
         self, card: HealthCard, commands: dict[str, list[str]]
-    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str]]:
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str], tuple]:
         identity_cmds = list(commands.get("identity") or [])
         dp_cmds = list(commands.get("data_protection") or [])
         identity_cmd = identity_cmds[0] if identity_cmds else "showsys"
@@ -7550,6 +7557,7 @@ class HealthServer:
         smtp = ("n/a", "", "smtp not available for this profile")
         dp_cfg, dp_status, _dp_details = parse_hpe_showrcopy_protection(rcopy_out or "")
         data_protection = (dp_cfg, dp_status, "")
+        volume_protection = ("n/a", "", "volume protection not available for this profile")
         return (
             model,
             serial,
@@ -7559,6 +7567,7 @@ class HealthServer:
             net["dns"],
             net["ntp"],
             [],
+            volume_protection,
         )
 
     @staticmethod
@@ -7583,7 +7592,7 @@ class HealthServer:
 
     def _scan_storage_inventory_ds_card(
         self, card: HealthCard, commands: dict[str, list[str]]
-    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str]]:
+    ) -> tuple[str, str, tuple, tuple, tuple, tuple, tuple, list[str], tuple]:
         run = self._lun_run_command(card)
         extra_errors: list[str] = []
         unknown = ("unknown", "", "")
@@ -7609,7 +7618,8 @@ class HealthServer:
         smtp = ("n/a", "", "smtp not available for this profile")
         data_protection = ("n/a", "", "data protection not available for this profile")
         ntp = ("n/a", "", "ntp not available via DSCLI on this path (often HMC)")
-        return "", "", phone, data_protection, smtp, dns, ntp, extra_errors
+        volume_protection = ("n/a", "", "volume protection not available for this profile")
+        return "", "", phone, data_protection, smtp, dns, ntp, extra_errors, volume_protection
 
     def _scan_storage_inventory_card(self, card: HealthCard) -> dict[str, Any]:
         profile = str(card.device_profile or "")
@@ -7624,7 +7634,7 @@ class HealthServer:
             now = time.time()
 
         if is_hpe_inventory_profile(profile):
-            model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
+            model, serial, phone, dp, smtp, dns, ntp, extra_errors, volume_protection = (
                 self._scan_storage_inventory_hpe_card(card, commands)
             )
         elif profile.strip().lower() == "ibm_ds8884" or profile.strip().lower().startswith(
@@ -7637,11 +7647,11 @@ class HealthServer:
                 username=str(card.username or ""),
                 password=card.password or "",
             )
-            model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
+            model, serial, phone, dp, smtp, dns, ntp, extra_errors, volume_protection = (
                 self._scan_storage_inventory_ds_card(card, commands)
             )
         else:
-            model, serial, phone, dp, smtp, dns, ntp, extra_errors = (
+            model, serial, phone, dp, smtp, dns, ntp, extra_errors, volume_protection = (
                 self._scan_storage_inventory_svc_card(card, commands)
             )
 
@@ -7670,6 +7680,7 @@ class HealthServer:
             extra_errors=extra_errors,
             alert_state=alert_state,
             now=now,
+            volume_protection=volume_protection,
         )
 
     def storage_inventory_progress_snapshot(self) -> dict:
@@ -7718,6 +7729,15 @@ class HealthServer:
                         {"card_id": card.card_id, "card_name": card.name, "error": err}
                     )
                     unknown = ("unknown", "", "")
+                    profile = str(card.device_profile or "")
+                    if is_hpe_inventory_profile(profile) or profile.strip().lower() == "ibm_ds8884" or profile.strip().lower().startswith("ibm_ds"):
+                        volume_protection = (
+                            "n/a",
+                            "",
+                            "volume protection not available for this profile",
+                        )
+                    else:
+                        volume_protection = unknown
                     row = build_inventory_row(
                         site=card.name,
                         host=card.name,
@@ -7739,6 +7759,7 @@ class HealthServer:
                         extra_errors=[err],
                         alert_state=alert_state,
                         now=now,
+                        volume_protection=volume_protection,
                     )
                 rows.append(row)
                 self._storage_inventory_progress.finish_card()
