@@ -69,6 +69,14 @@ from launchpad.fc_cg_summary import (
     schedule_context_from_capacity,
 )
 from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
+from launchpad.esx_snap_policy_ops import (
+    POLICY_NAME,
+    build_esx_snap_array_steps,
+    collect_esx_snap_inventory,
+    default_vg_name,
+    preview_hash,
+    steps_payload,
+)
 from launchpad.fc_consistgrp_ops import (
     build_fc_consistgrp_steps,
     collect_fc_consistgrp_inventory,
@@ -2691,6 +2699,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == "/api/fc-consistgrp/cards":
             self._send_json({"cards": server.fc_consistgrp_cards()})
             return
+        if path == "/api/esx-snap-policy/cards":
+            self._send_json({"cards": server.esx_snap_policy_cards()})
+            return
         if path == "/api/fc-consistgrp/status/live":
             query = parse_qs(parsed.query)
             raw_card_id = (query.get("card_id") or [""])[0].strip()
@@ -4369,6 +4380,42 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 )
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path in {
+            "/api/esx-snap-policy/volumes",
+            "/api/esx-snap-policy/preview",
+            "/api/esx-snap-policy/run",
+        }:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"ok": False, "error": "JSON object required"}, status=400)
+                return
+            if path == "/api/esx-snap-policy/volumes":
+                try:
+                    card_id = int(payload.get("card_id"))
+                except (TypeError, ValueError):
+                    self._send_json(
+                        {"ok": False, "error": "card_id is required"},
+                        status=400,
+                    )
+                    return
+                result = server.esx_snap_policy_volumes(card_id)
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+            if path == "/api/esx-snap-policy/preview":
+                result = server.preview_esx_snap_policy(payload)
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+            result = server.run_esx_snap_policy(
+                payload, confirm=payload.get("confirm") is True
+            )
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
         if path == "/api/volume-find/card-host":
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -5825,6 +5872,235 @@ class HealthServer:
                 }
             )
         return cards
+
+    def _esx_snap_card_by_id(self, card_id: int) -> HealthCard | None:
+        with self._lock:
+            return self._cards.get(card_id)
+
+    def _esx_snap_eligible(self, card: HealthCard) -> bool:
+        return (
+            str(card.device_profile or "") in SVC_PROFILES
+            and str(card.host or "").strip() != ""
+        )
+
+    def esx_snap_policy_cards(self) -> list[dict[str, Any]]:
+        with self._lock:
+            stored = list(sorted(self._cards.values(), key=lambda card: card.card_id))
+        return [
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+                "device_profile": card.device_profile or "",
+                "default_vg_name": default_vg_name(card.name),
+            }
+            for card in stored
+            if self._esx_snap_eligible(card)
+        ]
+
+    def _esx_snap_inventory(self, card: HealthCard) -> dict[str, Any]:
+        return collect_esx_snap_inventory(self._snap_run_command(card))
+
+    def esx_snap_policy_volumes(self, card_id: int) -> dict[str, Any]:
+        card = self._esx_snap_card_by_id(card_id)
+        if card is None or not self._esx_snap_eligible(card):
+            return {
+                "ok": False,
+                "error": f"Unknown or ineligible Health Card id {card_id}",
+                "volumes": [],
+                "policies": [],
+                "volume_groups": [],
+            }
+        inventory = self._esx_snap_inventory(card)
+        if not inventory.get("ok"):
+            return {
+                "ok": False,
+                "error": inventory.get("error") or "Unable to collect inventory",
+                "volumes": [],
+                "policies": [],
+                "volume_groups": [],
+            }
+        return {
+            "ok": True,
+            "error": "",
+            "volumes": inventory["volumes"],
+            "policies": sorted(inventory["policies"]),
+            "volume_groups": sorted(inventory["volume_groups"]),
+        }
+
+    def preview_esx_snap_policy(self, payload: dict) -> dict[str, Any]:
+        start_time = str(payload.get("start_time") or "02:00")
+        raw_arrays = payload.get("arrays") or []
+        if not isinstance(raw_arrays, list) or not raw_arrays:
+            return {
+                "ok": False,
+                "arrays": [],
+                "preview_hash": "",
+                "warnings": ["ERROR: select at least one array"],
+            }
+        arrays_out: list[dict[str, Any]] = []
+        for item in raw_arrays:
+            if not isinstance(item, dict):
+                continue
+            try:
+                card_id = int(item.get("card_id"))
+            except (TypeError, ValueError):
+                arrays_out.append(
+                    {
+                        "card_id": item.get("card_id"),
+                        "name": "",
+                        "vg_name": str(item.get("vg_name") or ""),
+                        "runnable": False,
+                        "warnings": ["ERROR: card_id is required"],
+                        "steps": [],
+                    }
+                )
+                continue
+            card = self._esx_snap_card_by_id(card_id)
+            vg_name = str(item.get("vg_name") or "") or (
+                default_vg_name(card.name) if card is not None else ""
+            )
+            volume_names = [
+                str(name) for name in (item.get("volume_names") or []) if str(name).strip()
+            ]
+            if card is None or not self._esx_snap_eligible(card):
+                arrays_out.append(
+                    {
+                        "card_id": card_id,
+                        "name": "",
+                        "vg_name": vg_name,
+                        "runnable": False,
+                        "warnings": [f"ERROR: Unknown or ineligible Health Card id {card_id}"],
+                        "steps": [],
+                    }
+                )
+                continue
+            inventory = self._esx_snap_inventory(card)
+            if not inventory.get("ok"):
+                arrays_out.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name,
+                        "vg_name": vg_name,
+                        "runnable": False,
+                        "warnings": [f"ERROR: {inventory.get('error') or 'inventory failed'}"],
+                        "steps": [],
+                    }
+                )
+                continue
+            steps, warnings, runnable = build_esx_snap_array_steps(
+                vg_name=vg_name,
+                volume_names=volume_names,
+                start_time=start_time,
+                policies=set(inventory["policies"]),
+                volume_groups=set(inventory["volume_groups"]),
+                volumes=list(inventory["volumes"]),
+            )
+            arrays_out.append(
+                {
+                    "card_id": card_id,
+                    "name": card.name,
+                    "vg_name": vg_name,
+                    "runnable": runnable,
+                    "warnings": warnings,
+                    "steps": steps_payload(steps),
+                }
+            )
+        ok = any(row.get("runnable") for row in arrays_out)
+        return {
+            "ok": ok,
+            "arrays": arrays_out,
+            "preview_hash": preview_hash(start_time, list(raw_arrays)),
+        }
+
+    def run_esx_snap_policy(self, payload: dict, *, confirm: bool) -> dict[str, Any]:
+        if confirm is not True:
+            return {
+                "ok": False,
+                "arrays": [],
+                "warnings": ["confirm must be true before creating policy or volume group"],
+            }
+        start_time = str(payload.get("start_time") or "02:00")
+        raw_arrays = payload.get("arrays") or []
+        expected = preview_hash(start_time, list(raw_arrays) if isinstance(raw_arrays, list) else [])
+        given = str(payload.get("preview_hash") or "")
+        if not given or given != expected:
+            return {
+                "ok": False,
+                "arrays": [],
+                "warnings": ["Preview must be run again before creating policy or volume group."],
+            }
+        preview = self.preview_esx_snap_policy(payload)
+        results: list[dict[str, Any]] = []
+        for row in preview.get("arrays") or []:
+            if not row.get("runnable"):
+                results.append(
+                    {
+                        "card_id": row.get("card_id"),
+                        "name": row.get("name") or "",
+                        "ok": False,
+                        "warnings": row.get("warnings") or [],
+                        "log": [],
+                    }
+                )
+                continue
+            card_id = int(row["card_id"])
+            card = self._esx_snap_card_by_id(card_id)
+            live = self._esx_snap_inventory(card)
+            vg_name = str(row.get("vg_name") or "")
+            if not live.get("ok"):
+                results.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name if card else "",
+                        "ok": False,
+                        "warnings": [f"ERROR: {live.get('error')}"],
+                        "log": [],
+                    }
+                )
+                continue
+            if POLICY_NAME in set(live["policies"]) or vg_name in set(live["volume_groups"]):
+                results.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name if card else "",
+                        "ok": False,
+                        "warnings": [
+                            f"ERROR: {POLICY_NAME} or {vg_name} already exists; "
+                            "no commands were run. If a previous Run created the policy, "
+                            "delete ESX-snap on the array before retrying."
+                        ],
+                        "log": [],
+                    }
+                )
+                continue
+            steps = [
+                SnapStep(
+                    kind=step["kind"],
+                    purpose=step["purpose"],
+                    cmd=step["cmd"],
+                    skip=step.get("skip") or False,
+                    reason=step.get("reason") or "",
+                )
+                for step in row.get("steps") or []
+            ]
+            executed = run_snap_steps(steps, self._snap_run_command(card))
+            if not executed.get("ok"):
+                executed.setdefault("warnings", [])
+                executed["warnings"].append(
+                    "No automatic rollback. If ESX-snap was created, delete it on the array before retrying."
+                )
+            results.append(
+                {
+                    "card_id": card_id,
+                    "name": card.name if card else "",
+                    "ok": bool(executed.get("ok")),
+                    "warnings": executed.get("warnings") or [],
+                    "log": executed.get("log") or [],
+                }
+            )
+        overall_ok = any(row.get("ok") for row in results)
+        return {"ok": overall_ok, "arrays": results}
 
     def _fc_host_lun_maps(self, card: HealthCard) -> tuple[list[dict], str | None]:
         try:
