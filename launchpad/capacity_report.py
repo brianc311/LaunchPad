@@ -96,6 +96,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       margin-top: 16px;
     }
     .refresh-status { color: var(--muted); font-size: 0.9rem; }
+    #cap-progress-wrap { margin-top: 12px; max-width: 420px; }
+    #cap-progress-wrap[hidden] { display: none; }
+    .cap-progress-track {
+      height: 8px; border-radius: 999px; background: #0f141d; border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #cap-progress-bar { height: 100%; width: 0; background: var(--accent); }
     .print-meta { color: var(--muted); font-size: 0.88rem; margin-top: 10px; }
     button, a.btn {
       font: inherit;
@@ -550,6 +557,9 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <span id="refresh-status" class="refresh-status"></span>
       </div>
+      <div id="cap-progress-wrap" hidden>
+        <div class="cap-progress-track"><div id="cap-progress-bar"></div></div>
+      </div>
       <p id="print-meta" class="print-meta"></p>
     </section>
     <div id="fleet-alerts"></div>
@@ -563,6 +573,31 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     const sitesEl = document.getElementById("sites");
     const fleetAlertsEl = document.getElementById("fleet-alerts");
     const refreshStatusEl = document.getElementById("refresh-status");
+    const progressWrap = document.getElementById("cap-progress-wrap");
+    const progressBar = document.getElementById("cap-progress-bar");
+    let progressActive = false;
+
+    function hideProgress() {
+      progressActive = false;
+      if (progressWrap) progressWrap.hidden = true;
+      if (progressBar) progressBar.style.width = "0%";
+    }
+
+    function applyProgress(done, total, current) {
+      if (!progressActive) {
+        return;
+      }
+      if (progressWrap) progressWrap.hidden = false;
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+      if (progressBar) progressBar.style.width = pct + "%";
+      let label = done + " / " + total + " arrays";
+      const name = String(current || "").trim();
+      if (name) {
+        label += " · " + name;
+      }
+      if (refreshStatusEl) refreshStatusEl.textContent = label;
+    }
+
     const refreshAllBtn = document.getElementById("refresh-all-btn");
     const monitorAllToggle = document.getElementById("monitor-all-toggle");
     const printBtn = document.getElementById("print-btn");
@@ -600,6 +635,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       "All monitored storage sites — capacity stats stacked for review and PDF export.";
     let refreshAllRunning = false;
     let cardsCache = [];
+    let cardsLoadedOnce = false;
     let siteNameOverrides = {};
     let monitorServerState = {};
     let dellIncludeIds = new Set();
@@ -1464,12 +1500,11 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
           return;
         }
         const updated = [...all];
+        progressActive = true;
+        applyProgress(0, cards.length, cards[0] ? cards[0].name : "");
         for (let index = 0; index < cards.length; index += 1) {
           const card = cards[index];
-          if (refreshStatusEl) {
-            refreshStatusEl.textContent =
-              `Refreshing ${card.name} (${index + 1}/${cards.length})...`;
-          }
+          applyProgress(index, cards.length, card.name);
           try {
             const refreshed = await refreshCard(card.id);
             const cacheIndex = updated.findIndex((entry) => entry.id === card.id);
@@ -1483,11 +1518,13 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         }
         renderAll(updated);
         cardsCache = updated;
+        hideProgress();
         if (refreshStatusEl) refreshStatusEl.textContent = "Refresh complete.";
         updatePrintMeta(updated);
       } finally {
         refreshAllRunning = false;
         if (refreshAllBtn) refreshAllBtn.disabled = false;
+        hideProgress();
       }
     }
 
@@ -1507,10 +1544,18 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
     }
 
     async function loadCards() {
+      let showLoadBar = false;
       try {
         const exportBusy =
           (excelBtn && excelBtn.disabled) || (dellReportBtn && dellReportBtn.disabled);
-        if (refreshStatusEl && !refreshAllRunning && !exportBusy) {
+        showLoadBar =
+          !refreshAllRunning && !exportBusy && !cardsCache.length && !cardsLoadedOnce;
+        if (showLoadBar) {
+          progressActive = true;
+          if (progressWrap) progressWrap.hidden = false;
+          if (progressBar) progressBar.style.width = "0%";
+          if (refreshStatusEl) refreshStatusEl.textContent = "Loading servers…";
+        } else if (refreshStatusEl && !refreshAllRunning && !exportBusy) {
           refreshStatusEl.textContent = "Loading servers from LaunchPad...";
         }
         if (sitesEl && !cardsCache.length) {
@@ -1533,12 +1578,16 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         syncNoSshDellToggle();
         updateViewOptionsButton();
         updatePrintMeta(cardsCache);
+        if (showLoadBar) hideProgress();
       } catch (err) {
         sitesEl.innerHTML =
           `<div class="error">${escapeHtml(err.message || err)}. Keep LaunchPad running and unlocked, then use <strong>Capacity Report</strong> in the app.</div>`;
+        if (showLoadBar) hideProgress();
         if (refreshStatusEl) {
           refreshStatusEl.textContent = "Could not load servers";
         }
+      } finally {
+        cardsLoadedOnce = true;
       }
     }
 

@@ -3084,6 +3084,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 filename=f"Snapshot_Schedule_{group_label}_{stamp}.xlsx",
             )
             return
+        if path == "/api/volume-find/progress":
+            self._send_json(server.volume_find_progress_snapshot())
+            return
         if path == "/api/volume-find":
             query = parse_qs(parsed.query)
             q = (query.get("q") or [""])[0]
@@ -3098,6 +3101,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, status=403)
                 return
             self._send_json(payload)
+            return
+        if path == "/api/host-volume-health/progress":
+            self._send_json(server.host_volume_health_progress_snapshot())
             return
         if path == "/api/host-volume-health/live":
             query = parse_qs(parsed.query)
@@ -4536,6 +4542,8 @@ class HealthServer:
         self._system_connectivity_cache: dict[str, Any] | None = None
         self._storage_inventory_cache: dict[str, Any] | None = None
         self._storage_inventory_progress = StorageInventoryProgress()
+        self._host_volume_health_progress = StorageInventoryProgress()
+        self._volume_find_progress = StorageInventoryProgress()
         self._fc_consistgrp_status_cache: dict[str, Any] | None = None
         self._fc_cg_summary_live_cache: dict[str, Any] | None = None
 
@@ -6633,66 +6641,67 @@ class HealthServer:
         hosts: list[dict[str, Any]] = []
         volumes: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
-        for card_dict in cards:
-            current_id = card_dict.get("id")
-            if current_id is None:
-                continue
-            if card_id is not None and int(current_id) != int(card_id):
-                continue
-            monitor_on = bool(
-                monitor.get(current_id, monitor.get(str(current_id), False))
-            )
-            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
-                continue
-            card = self._cards.get(int(current_id))
-            if card is None:
-                continue
-            profile = str(card.device_profile or "")
-            vendor = vendor_for_profile(profile)
-            card_host = str(card.host or "")
-            try:
-                if vendor == "hpe":
-                    host_output, vv_output = run_ssh_auth_hpe_commands(
-                        card.host,
-                        card.port,
-                        card.username,
-                        ["showhost", "showvv"],
-                        password=card.password,
-                        key_path=card.key_path,
-                        key_passphrase=card.key_passphrase,
+        eligible_dicts = self._eligible_volume_find_card_dicts(
+            cards, monitor, card_id=card_id
+        )
+        eligible_cards: list[HealthCard] = []
+        for card_dict in eligible_dicts:
+            card = self._cards.get(int(card_dict["id"]))
+            if card is not None:
+                eligible_cards.append(card)
+        self._host_volume_health_progress.begin(len(eligible_cards))
+        try:
+            for card in eligible_cards:
+                self._host_volume_health_progress.start_card(str(card.name or ""))
+                profile = str(card.device_profile or "")
+                vendor = vendor_for_profile(profile)
+                card_host = str(card.host or "")
+                try:
+                    if vendor == "hpe":
+                        host_output, vv_output = run_ssh_auth_hpe_commands(
+                            card.host,
+                            card.port,
+                            card.username,
+                            ["showhost", "showvv"],
+                            password=card.password,
+                            key_path=card.key_path,
+                            key_passphrase=card.key_passphrase,
+                        )
+                        host_rows = parse_showhost_hosts(host_output or "")
+                        vol_rows = parse_showvv_volumes(vv_output or "")
+                    else:
+                        run = self._lun_run_command(card)
+                        host_rows = parse_fc_hosts(run("svcinfo lshost -delim :"))
+                        vol_rows = parse_lsvdisk_volumes(run("svcinfo lsvdisk -delim :"))
+                    hosts.extend(
+                        filter_problem_hosts(
+                            host_rows,
+                            card_name=card.name,
+                            host=card_host,
+                            vendor=vendor,
+                            card_id=card.card_id,
+                        )
                     )
-                    host_rows = parse_showhost_hosts(host_output or "")
-                    vol_rows = parse_showvv_volumes(vv_output or "")
-                else:
-                    run = self._lun_run_command(card)
-                    host_rows = parse_fc_hosts(run("svcinfo lshost -delim :"))
-                    vol_rows = parse_lsvdisk_volumes(run("svcinfo lsvdisk -delim :"))
-                hosts.extend(
-                    filter_problem_hosts(
-                        host_rows,
-                        card_name=card.name,
-                        host=card_host,
-                        vendor=vendor,
-                        card_id=card.card_id,
+                    volumes.extend(
+                        filter_problem_volumes(
+                            vol_rows,
+                            card_name=card.name,
+                            host=card_host,
+                            vendor=vendor,
+                            card_id=card.card_id,
+                        )
                     )
-                )
-                volumes.extend(
-                    filter_problem_volumes(
-                        vol_rows,
-                        card_name=card.name,
-                        host=card_host,
-                        vendor=vendor,
-                        card_id=card.card_id,
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "card_id": card.card_id,
+                            "card_name": card.name,
+                            "error": str(exc),
+                        }
                     )
-                )
-            except Exception as exc:
-                errors.append(
-                    {
-                        "card_id": card.card_id,
-                        "card_name": card.name,
-                        "error": str(exc),
-                    }
-                )
+                self._host_volume_health_progress.finish_card()
+        finally:
+            self._host_volume_health_progress.end()
         hosts.sort(
             key=lambda row: (
                 str(row.get("card_name") or "").lower(),
@@ -7683,6 +7692,34 @@ class HealthServer:
             volume_protection=volume_protection,
         )
 
+    def host_volume_health_progress_snapshot(self) -> dict:
+        return self._host_volume_health_progress.snapshot()
+
+    def volume_find_progress_snapshot(self) -> dict:
+        return self._volume_find_progress.snapshot()
+
+    def _eligible_volume_find_card_dicts(
+        self,
+        cards: list[dict[str, Any]],
+        monitor: dict,
+        *,
+        card_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        eligible: list[dict[str, Any]] = []
+        for card_dict in cards:
+            current_id = card_dict.get("id")
+            if current_id is None:
+                continue
+            if card_id is not None and int(current_id) != int(card_id):
+                continue
+            monitor_on = bool(
+                monitor.get(current_id, monitor.get(str(current_id), False))
+            )
+            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
+                continue
+            eligible.append(card_dict)
+        return eligible
+
     def storage_inventory_progress_snapshot(self) -> dict:
         return self._storage_inventory_progress.snapshot()
 
@@ -7846,28 +7883,131 @@ class HealthServer:
             if c.get("id") is not None
         }
         if type_key == "host":
-            if mode_key == "cache":
-                return {
-                    "matches": find_hosts_in_cards(
-                        cards, q, monitor_enabled=monitor, source="cache"
-                    ),
-                    "errors": [],
-                }
-            if not self.is_unlocked():
+            if mode_key == "live" and not self.is_unlocked():
                 raise RuntimeError("LaunchPad must be unlocked to search hosts live.")
-            matches: list[dict[str, Any]] = []
-            errors: list[dict[str, Any]] = []
-            for card_dict in cards:
-                card_id = card_dict.get("id")
-                if card_id is None:
-                    continue
-                monitor_on = bool(
-                    monitor.get(card_id, monitor.get(str(card_id), False))
+            eligible = self._eligible_volume_find_card_dicts(cards, monitor)
+            self._volume_find_progress.begin(len(eligible))
+            try:
+                if mode_key == "cache":
+                    matches: list[dict[str, Any]] = []
+                    for card_dict in eligible:
+                        self._volume_find_progress.start_card(
+                            str(card_dict.get("name") or "")
+                        )
+                        matches.extend(
+                            find_hosts_in_cards(
+                                [card_dict],
+                                q,
+                                monitor_enabled=monitor,
+                                source="cache",
+                            )
+                        )
+                        self._volume_find_progress.finish_card()
+                    matches.sort(
+                        key=lambda m: (
+                            str(m.get("card_name") or "").lower(),
+                            str(m.get("host_name") or "").lower(),
+                        )
+                    )
+                    return {"matches": matches, "errors": []}
+                matches = []
+                errors: list[dict[str, Any]] = []
+                for card_dict in eligible:
+                    self._volume_find_progress.start_card(
+                        str(card_dict.get("name") or "")
+                    )
+                    card = self._cards.get(int(card_dict["id"]))
+                    if card is None:
+                        self._volume_find_progress.finish_card()
+                        continue
+                    profile = str(card.device_profile or "")
+                    try:
+                        if vendor_for_profile(profile) == "hpe":
+                            outputs = run_ssh_auth_hpe_commands(
+                                card.host,
+                                card.port,
+                                card.username,
+                                ["showhost"],
+                                password=card.password,
+                                key_path=card.key_path,
+                                key_passphrase=card.key_passphrase,
+                            )
+                            output = outputs[0] if outputs else ""
+                            host_rows = parse_showhost_hosts(output)
+                        else:
+                            run = self._lun_run_command(card)
+                            output = run("svcinfo lshost -delim :")
+                            host_rows = parse_fc_hosts(output)
+                        for host_row in host_rows:
+                            host_name = host_row.get("host_name") or ""
+                            if not host_name_matches(host_name, q):
+                                continue
+                            matches.append(
+                                {
+                                    "card_id": card.card_id,
+                                    "card_name": card.name,
+                                    "profile": profile,
+                                    "vendor": vendor_for_profile(profile),
+                                    "host_name": host_name,
+                                    "wwpns": host_row.get("wwpns") or "",
+                                    "source": "live",
+                                    "host": str(card.host or ""),
+                                }
+                            )
+                    except Exception as exc:
+                        errors.append(
+                            {
+                                "card_id": card.card_id,
+                                "card_name": card.name,
+                                "error": str(exc),
+                            }
+                        )
+                    self._volume_find_progress.finish_card()
+                matches.sort(
+                    key=lambda m: (
+                        str(m.get("card_name") or "").lower(),
+                        str(m.get("host_name") or "").lower(),
+                    )
                 )
-                if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
-                    continue
-                card = self._cards.get(int(card_id))
+                return {"matches": matches, "errors": errors}
+            finally:
+                self._volume_find_progress.end()
+        if mode_key == "live" and not self.is_unlocked():
+            raise RuntimeError("LaunchPad must be unlocked to search volumes live.")
+        eligible = self._eligible_volume_find_card_dicts(cards, monitor)
+        self._volume_find_progress.begin(len(eligible))
+        try:
+            if mode_key == "cache":
+                matches = []
+                for card_dict in eligible:
+                    self._volume_find_progress.start_card(
+                        str(card_dict.get("name") or "")
+                    )
+                    matches.extend(
+                        find_volumes_in_cards(
+                            [card_dict],
+                            q,
+                            monitor_enabled=monitor,
+                            source="cache",
+                        )
+                    )
+                    self._volume_find_progress.finish_card()
+                matches.sort(
+                    key=lambda m: (
+                        str(m.get("card_name") or "").lower(),
+                        str(m.get("volume") or "").lower(),
+                    )
+                )
+                return {"matches": matches, "errors": []}
+            matches = []
+            errors = []
+            for card_dict in eligible:
+                self._volume_find_progress.start_card(
+                    str(card_dict.get("name") or "")
+                )
+                card = self._cards.get(int(card_dict["id"]))
                 if card is None:
+                    self._volume_find_progress.finish_card()
                     continue
                 profile = str(card.device_profile or "")
                 try:
@@ -7876,33 +8016,37 @@ class HealthServer:
                             card.host,
                             card.port,
                             card.username,
-                            ["showhost"],
+                            ["showvv"],
                             password=card.password,
                             key_path=card.key_path,
                             key_passphrase=card.key_passphrase,
                         )
                         output = outputs[0] if outputs else ""
-                        host_rows = parse_showhost_hosts(output)
+                        vols = parse_showvv_volumes(output)
                     else:
                         run = self._lun_run_command(card)
-                        output = run("svcinfo lshost -delim :")
-                        host_rows = parse_fc_hosts(output)
-                    for host_row in host_rows:
-                        host_name = host_row.get("host_name") or ""
-                        if not host_name_matches(host_name, q):
-                            continue
-                        matches.append(
+                        output = run("svcinfo lsvdisk -delim :")
+                        vols = [
                             {
-                                "card_id": card.card_id,
-                                "card_name": card.name,
-                                "profile": profile,
-                                "vendor": vendor_for_profile(profile),
-                                "host_name": host_name,
-                                "wwpns": host_row.get("wwpns") or "",
-                                "source": "live",
-                                "host": str(card.host or ""),
+                                "name": r["name"],
+                                "pool_or_cpg": r.get("pool") or "",
                             }
-                        )
+                            for r in parse_lsvdisk_volumes(output)
+                        ]
+                    for vol in vols:
+                        if volume_name_matches(vol["name"], q):
+                            matches.append(
+                                {
+                                    "card_id": card.card_id,
+                                    "card_name": card.name,
+                                    "profile": profile,
+                                    "vendor": vendor_for_profile(profile),
+                                    "volume": vol["name"],
+                                    "pool_or_cpg": vol.get("pool_or_cpg") or "",
+                                    "source": "live",
+                                    "host": str(card.host or ""),
+                                }
+                            )
                 except Exception as exc:
                     errors.append(
                         {
@@ -7911,89 +8055,16 @@ class HealthServer:
                             "error": str(exc),
                         }
                     )
+                self._volume_find_progress.finish_card()
             matches.sort(
                 key=lambda m: (
                     str(m.get("card_name") or "").lower(),
-                    str(m.get("host_name") or "").lower(),
+                    str(m.get("volume") or "").lower(),
                 )
             )
             return {"matches": matches, "errors": errors}
-        if mode_key == "cache":
-            return {
-                "matches": find_volumes_in_cards(
-                    cards, q, monitor_enabled=monitor, source="cache"
-                ),
-                "errors": [],
-            }
-        if not self.is_unlocked():
-            raise RuntimeError("LaunchPad must be unlocked to search volumes live.")
-        matches = []
-        errors = []
-        for card_dict in cards:
-            card_id = card_dict.get("id")
-            if card_id is None:
-                continue
-            monitor_on = bool(
-                monitor.get(card_id, monitor.get(str(card_id), False))
-            )
-            if not is_volume_find_eligible(card_dict, monitor_on=monitor_on):
-                continue
-            card = self._cards.get(int(card_id))
-            if card is None:
-                continue
-            profile = str(card.device_profile or "")
-            try:
-                if vendor_for_profile(profile) == "hpe":
-                    outputs = run_ssh_auth_hpe_commands(
-                        card.host,
-                        card.port,
-                        card.username,
-                        ["showvv"],
-                        password=card.password,
-                        key_path=card.key_path,
-                        key_passphrase=card.key_passphrase,
-                    )
-                    output = outputs[0] if outputs else ""
-                    vols = parse_showvv_volumes(output)
-                else:
-                    run = self._lun_run_command(card)
-                    output = run("svcinfo lsvdisk -delim :")
-                    vols = [
-                        {
-                            "name": r["name"],
-                            "pool_or_cpg": r.get("pool") or "",
-                        }
-                        for r in parse_lsvdisk_volumes(output)
-                    ]
-                for vol in vols:
-                    if volume_name_matches(vol["name"], q):
-                        matches.append(
-                            {
-                                "card_id": card.card_id,
-                                "card_name": card.name,
-                                "profile": profile,
-                                "vendor": vendor_for_profile(profile),
-                                "volume": vol["name"],
-                                "pool_or_cpg": vol.get("pool_or_cpg") or "",
-                                "source": "live",
-                                "host": str(card.host or ""),
-                            }
-                        )
-            except Exception as exc:
-                errors.append(
-                    {
-                        "card_id": card.card_id,
-                        "card_name": card.name,
-                        "error": str(exc),
-                    }
-                )
-        matches.sort(
-            key=lambda m: (
-                str(m.get("card_name") or "").lower(),
-                str(m.get("volume") or "").lower(),
-            )
-        )
-        return {"matches": matches, "errors": errors}
+        finally:
+            self._volume_find_progress.end()
 
     def sync_from_app(self) -> int:
         with self._lock:

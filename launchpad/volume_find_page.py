@@ -110,6 +110,13 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     button.btn.site-ip-edit, button.btn.site-ip-save, button.btn.site-ip-cancel {
       height: 28px; padding: 0 10px; font-size: 0.8rem; margin-left: 6px;
     }
+    #vf-progress-wrap { margin-top: 12px; max-width: 420px; }
+    #vf-progress-wrap[hidden] { display: none; }
+    .vf-progress-track {
+      height: 8px; border-radius: 999px; background: #0f141d; border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #vf-progress-bar { height: 100%; width: 0; background: var(--accent); }
   </style>
 </head>
 <body>
@@ -140,6 +147,9 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/system-connectivity">System Connectivity</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <span id="status" class="status" aria-live="polite"></span>
+      </div>
+      <div id="vf-progress-wrap" hidden>
+        <div class="vf-progress-track"><div id="vf-progress-bar"></div></div>
       </div>
     </section>
 
@@ -175,8 +185,12 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
     const errorsEl = document.getElementById("errors");
     const bodyEl = document.getElementById("results-body");
     const headRowEl = document.getElementById("results-head-row");
+    const progressWrap = document.getElementById("vf-progress-wrap");
+    const progressBar = document.getElementById("vf-progress-bar");
     let lastMatches = [];
     let lastFindType = "volume";
+    let progressTimer = null;
+    let progressActive = false;
 
     function getFindType() {
       return document.querySelector('input[name="find-type"]:checked')?.value || "volume";
@@ -365,6 +379,51 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       )).join("");
     }
 
+    function hideProgress() {
+      progressActive = false;
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      progressWrap.hidden = true;
+      progressBar.style.width = "0%";
+    }
+
+    function applyProgress(data) {
+      if (!progressActive) {
+        return;
+      }
+      const total = Number(data && data.total) || 0;
+      const done = Number(data && data.done) || 0;
+      const current = String((data && data.current) || "").trim();
+      progressWrap.hidden = false;
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+      progressBar.style.width = pct + "%";
+      if (total > 0) {
+        let label = done + " / " + total + " arrays";
+        if (current) {
+          label += " · " + current;
+        }
+        statusEl.textContent = label;
+      }
+    }
+
+    async function pollProgress() {
+      try {
+        const res = await fetch("/api/volume-find/progress");
+        if (!progressActive) {
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!progressActive) {
+          return;
+        }
+        applyProgress(data);
+      } catch (_err) {
+        /* ignore poll errors while search request is in flight */
+      }
+    }
+
     async function runSearch(mode) {
       const findType = getFindType();
       const q = (searchEl.value || "").trim();
@@ -380,11 +439,20 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
       setBusy(true);
       statusEl.textContent = mode === "live" ? "Searching live…" : "Searching cache…";
       renderErrors([]);
+      progressActive = true;
+      applyProgress({done:0,total:0,current:""});
+      progressTimer = setInterval(pollProgress, 400);
+      pollProgress();
       try {
         const url = "/api/volume-find?q=" + encodeURIComponent(q)
           + "&mode=" + mode + "&type=" + encodeURIComponent(findType);
         const res = await fetch(url);
         const data = await res.json().catch(() => ({}));
+        if (res.status === 403) {
+          hideProgress();
+          statusEl.textContent = data.error || "Unlock LaunchPad to search live.";
+          return;
+        }
         if (!res.ok) {
           const msg = data.error || ("Request failed (" + res.status + ")");
           statusEl.textContent = msg;
@@ -415,6 +483,7 @@ VOLUME_FIND_HTML = """<!DOCTYPE html>
         renderTableHead(findType);
         bodyEl.innerHTML = '<tr><td colspan="6" class="empty">No matches.</td></tr>';
       } finally {
+        hideProgress();
         setBusy(false);
       }
     }

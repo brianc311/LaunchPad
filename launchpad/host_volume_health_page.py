@@ -73,6 +73,13 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
       background: #0f141d; color: var(--text); border: 1px solid var(--border);
       border-radius: 10px; height: 34px; padding: 0 10px; font: inherit;
     }
+    #hv-progress-wrap { margin-top: 12px; max-width: 420px; }
+    #hv-progress-wrap[hidden] { display: none; }
+    .hv-progress-track {
+      height: 8px; border-radius: 999px; background: #0f141d; border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #hv-progress-bar { height: 100%; width: 0; background: var(--accent); }
   </style>
 </head>
 <body>
@@ -90,6 +97,9 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/system-connectivity">System Connectivity</a>
         <a class="btn secondary" href="/volume-find">Host / Volume Find</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
+      </div>
+      <div id="hv-progress-wrap" hidden>
+        <div class="hv-progress-track"><div id="hv-progress-bar"></div></div>
       </div>
       <div class="status" id="hv-status">Load cards, then Refresh live.</div>
       <div class="errors" id="hv-errors"></div>
@@ -138,6 +148,56 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
     const errorsEl = document.getElementById("hv-errors");
     const hostsBodyEl = document.getElementById("hv-hosts-body");
     const volumesBodyEl = document.getElementById("hv-volumes-body");
+    const progressWrap = document.getElementById("hv-progress-wrap");
+    const progressBar = document.getElementById("hv-progress-bar");
+    let progressTimer = null;
+    let progressActive = false;
+
+    function hideProgress() {
+      progressActive = false;
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      progressWrap.hidden = true;
+      progressBar.style.width = "0%";
+    }
+
+    function applyProgress(data) {
+      if (!progressActive) {
+        return;
+      }
+      const total = Number(data && data.total) || 0;
+      const done = Number(data && data.done) || 0;
+      const current = String((data && data.current) || "").trim();
+      progressWrap.hidden = false;
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+      progressBar.style.width = pct + "%";
+      let label = "Scanning live…";
+      if (total > 0) {
+        label = done + " / " + total + " arrays";
+        if (current) {
+          label += " · " + current;
+        }
+      }
+      statusEl.textContent = label;
+    }
+
+    async function pollProgress() {
+      try {
+        const res = await fetch("/api/host-volume-health/progress");
+        if (!progressActive) {
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!progressActive) {
+          return;
+        }
+        applyProgress(data);
+      } catch (_err) {
+        /* ignore poll errors while live request is in flight */
+      }
+    }
 
     function escapeHtml(value) {
       return String(value == null ? "" : value)
@@ -208,14 +268,18 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
 
     async function refreshLive() {
       refreshBtn.disabled = true;
-      statusEl.textContent = "Scanning live…";
       errorsEl.textContent = "";
       const cardId = siteSelectEl.value || "";
       const url = "/api/host-volume-health/live" + (cardId ? ("?card_id=" + encodeURIComponent(cardId)) : "");
+      progressActive = true;
+      applyProgress({done:0,total:0,current:""});
+      progressTimer = setInterval(pollProgress, 400);
+      pollProgress();
       try {
         const res = await fetch(url);
         const data = await res.json().catch(() => ({}));
         if (res.status === 403) {
+          hideProgress();
           statusEl.textContent = data.error || "Unlock LaunchPad to refresh live.";
           return;
         }
@@ -237,6 +301,7 @@ HOST_VOLUME_HEALTH_HTML = """<!DOCTYPE html>
       } catch (err) {
         statusEl.textContent = String(err && err.message ? err.message : err);
       } finally {
+        hideProgress();
         refreshBtn.disabled = false;
       }
     }

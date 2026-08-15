@@ -202,3 +202,73 @@ def test_api_host_volume_health_routes_declared():
     post_src = inspect.getsource(_HealthHandler.do_POST)
     assert HOST_VOLUME_HEALTH_PATH in get_src or "/host-volume-health" in get_src
     assert "/api/host-volume-health/live" in get_src or "/api/host-volume-health/live" in post_src
+
+
+def test_host_volume_health_progress_idle_and_after_scan(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    idle = server.host_volume_health_progress_snapshot()
+    assert idle == {"running": False, "done": 0, "total": 0, "current": ""}
+    card = HealthCard(
+        card_id=1,
+        name="Hartford",
+        host="10.0.0.1",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_7200",
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        server,
+        "_lun_run_command",
+        lambda _card: (lambda command: "id:name:status\n0:h:online\n" if "lshost" in command else "id:name:mdisk_grp_name:status\n0:v:Pool0:online\n"),
+    )
+    server.scan_host_volume_health_live()
+    done = server.host_volume_health_progress_snapshot()
+    assert done["running"] is False
+    assert done["done"] == 1
+    assert done["total"] == 1
+
+
+def test_host_volume_health_progress_card_id_total_one(monkeypatch):
+    server = HealthServer()
+    _unlock(server)
+    for card_id, name in ((1, "SiteA"), (2, "SiteB")):
+        server._cards[card_id] = HealthCard(
+            card_id=card_id,
+            name=name,
+            host="10.0.0.1",
+            port=22,
+            username="user",
+            key_path="/tmp/key",
+            device_profile="flashsystem_7200",
+        )
+        server.set_monitor_enabled(card_id=card_id, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    monkeypatch.setattr(
+        server,
+        "_lun_run_command",
+        lambda card: (
+            lambda command: (
+                f"id:name:status\n0:{card.name}_host:offline\n"
+                if "lshost" in command
+                else ""
+            )
+        ),
+    )
+    server.scan_host_volume_health_live(card_id=2)
+    snap = server.host_volume_health_progress_snapshot()
+    assert snap["total"] == 1
+    assert snap["done"] == 1
+    assert snap["running"] is False
+
+
+def test_host_volume_health_progress_route_no_unlock():
+    source = inspect.getsource(_HealthHandler.do_GET)
+    assert "/api/host-volume-health/progress" in source
+    chunk = source.split('if path == "/api/host-volume-health/progress"')[1].split("if path ==")[0]
+    assert "is_unlocked" not in chunk
+    assert "host_volume_health_progress_snapshot" in chunk
