@@ -45,3 +45,44 @@ def test_refresh_stats_skips_monitor_off_before_ssh_status():
     fetch_status_at = body.index("Refreshing SSH card stats...")
     fetchable_return_at = body.index("if not fetchable:")
     assert fetchable_return_at < fetch_status_at
+
+
+def _assert_thread_before_register(body: str) -> None:
+    assert "threading.Thread" in body
+    thread_at = body.index("threading.Thread")
+    if "ensure_health_dashboard_registered" in body:
+        assert thread_at < body.index("ensure_health_dashboard_registered")
+    if "resolve_ssh_metrics_auth" in body:
+        assert thread_at < body.index("resolve_ssh_metrics_auth")
+    if "_health_ssh_cards" in body:
+        assert thread_at < body.index("_health_ssh_cards")
+
+
+def test_toggle_all_monitoring_flips_widgets_then_registers_off_thread():
+    body = _method("_toggle_all_monitoring")
+    states_at = body.index("self._monitor_states")
+    thread_at = body.index("threading.Thread")
+    assert states_at < thread_at
+    assert "set_monitor_enabled" in body
+    assert "_fetch_all_ssh_stats" not in body
+    _assert_thread_before_register(body)
+    assert "set_all_monitor_enabled" in body
+    assert "_fetch_ssh_stats_worker" in body
+    assert "_probe_card_ssh_status" in body
+    assert "_set_card_ssh_monitor_off" in body
+
+
+def test_set_checked_monitoring_does_not_register_on_click_stack():
+    body = _method("_set_checked_monitoring")
+    if "ensure_health_dashboard_registered" in body:
+        _assert_thread_before_register(body)
+    else:
+        assert "set_card_monitor_enabled" in body
+
+
+def test_on_card_monitor_toggle_does_not_register_on_click_stack():
+    body = _method("_on_card_monitor_toggle")
+    if "ensure_health_dashboard_registered" in body:
+        _assert_thread_before_register(body)
+    else:
+        assert "set_card_monitor_enabled" in body

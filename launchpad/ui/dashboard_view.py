@@ -1403,10 +1403,7 @@ class DashboardView(ctk.CTkFrame):
             self.monitor_all_switch.deselect()
 
     def _on_card_monitor_toggle(self, card: Card, enabled: bool) -> None:
-        from launchpad.ssh_launcher import _log
-
         try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
             set_card_monitor_enabled(card.id, enabled)
             self._monitor_states[card.id] = enabled
         except Exception as exc:
@@ -1446,27 +1443,43 @@ class DashboardView(ctk.CTkFrame):
 
     def _toggle_all_monitoring(self) -> None:
         enabled = bool(self.monitor_all_switch.get())
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-            set_all_monitor_enabled(enabled)
-            for card in self._ssh_cards:
-                self._monitor_states[card.id] = enabled
-                widget = self._find_card_widget(card.id)
-                if widget:
-                    widget.set_monitor_enabled(enabled)
-        except Exception as exc:
-            self.status_label.configure(text=f"Monitor toggle failed: {exc}")
-            self._sync_master_monitor_switch()
-            return
-
+        ssh_cards = list(self._ssh_cards)
+        for card in ssh_cards:
+            self._monitor_states[card.id] = enabled
+            widget = self._find_card_widget(card.id)
+            if widget:
+                widget.set_monitor_enabled(enabled)
         self._refresh_capacity_alerts()
         if enabled:
             self.status_label.configure(text="All monitoring on — refreshing stats for SSH cards...")
-            self._fetch_all_ssh_stats()
         else:
             self.status_label.configure(text="All monitoring off — no background SSH.")
-            for card in self._ssh_cards:
+            for card in ssh_cards:
                 self._set_card_ssh_monitor_off(card.id)
+
+        def start_ssh_stats(card: Card) -> None:
+            if card.id not in self._stats_in_flight:
+                threading.Thread(
+                    target=self._fetch_ssh_stats_worker,
+                    args=(card,),
+                    daemon=True,
+                ).start()
+
+        def worker() -> None:
+            try:
+                ensure_health_dashboard_registered(self.db, self.crypto_key)
+                set_all_monitor_enabled(enabled)
+            except Exception as exc:
+                self.after(0, lambda: self.status_label.configure(text=f"Monitor toggle failed: {exc}"))
+                self.after(0, self._sync_master_monitor_switch)
+                return
+            if not enabled:
+                return
+            for card in ssh_cards:
+                self.after(0, lambda c=card: self._probe_card_ssh_status(c.id))
+                start_ssh_stats(card)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ssh_stats_prereq(self, card: Card) -> str | None:
         return ssh_stats_prereq_message(card, self.crypto_key)
@@ -1738,7 +1751,6 @@ class DashboardView(ctk.CTkFrame):
             return
 
         try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
             for widget in ssh_widgets:
                 card = self._visible_cards[widget.card_id]
                 set_card_monitor_enabled(card.id, enabled)
