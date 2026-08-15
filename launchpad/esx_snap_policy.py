@@ -155,7 +155,7 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
         const vgVal = vgByCard[card.id] !== undefined ? vgByCard[card.id] : (card.default_vg_name || "");
         const panel = on ? (
           '<div class="actions">' +
-          '<label>Volume group <input id="vg-' + card.id + '" value="' + vgVal + '"></label>' +
+          '<label>Volume group <input id="vg-' + card.id + '" maxlength="63" value="' + vgVal + '"></label>' +
           '<button type="button" class="secondary load-vols" data-card-id="' + card.id + '">Load volumes</button>' +
           '<input class="vol-search" data-card-id="' + card.id + '" placeholder="Search volumes">' +
           '</div><div id="vols-' + card.id + '"><p class="hint">Load volumes for this array.</p></div>'
@@ -236,6 +236,8 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
     document.getElementById("run-btn").onclick = async () => {
       if (!window.__esxPreviewOk) return;
       if (!confirm("Create ESX-snap policy and volume groups on the listed arrays? This mutates the arrays.")) return;
+      runBtn.disabled = true;
+      window.__esxPreviewOk = false;
       const body = { start_time: startEl.value, arrays: arrayPayload(), confirm: true, preview_hash: window.__esxPreviewHash };
       const res = await fetch("/api/esx-snap-policy/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();

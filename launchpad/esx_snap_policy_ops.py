@@ -151,13 +151,44 @@ def collect_esx_snap_inventory(run_cmd: Callable[[str], str]) -> dict:
     vols_out = run_cmd("svcinfo lsvdisk -delim :")
     if not str(vols_out or "").strip():
         vols_out = run_cmd("svcinfo lsvdisk")
+    volume_groups = parse_named_objects(vg_out)
+    volumes = parse_lsvdisk_membership(vols_out)
+    _fill_volume_group_members(run_cmd, volume_groups, volumes)
     return {
         "ok": True,
         "error": "",
         "policies": parse_named_objects(policy_out),
-        "volume_groups": parse_named_objects(vg_out),
-        "volumes": parse_lsvdisk_membership(vols_out),
+        "volume_groups": volume_groups,
+        "volumes": volumes,
     }
+
+
+def _fill_volume_group_members(
+    run_cmd: Callable[[str], str],
+    volume_groups: set[str],
+    volumes: list[dict[str, str]],
+) -> None:
+    by_name = {str(row.get("name") or ""): row for row in volumes}
+    for vg_name in sorted(volume_groups):
+        try:
+            vg = cli_token(vg_name)
+        except ValueError:
+            continue
+        member_out = run_cmd(f"svcinfo lsvolumegroupmember -delim : {vg}")
+        if not str(member_out or "").strip():
+            member_out = run_cmd(f"svcinfo lsvolumegroupmember {vg}")
+        for record in _table_records(member_out):
+            name = _get(record, "name", "vdisk_name", "volume_name")
+            if not name:
+                continue
+            existing = by_name.get(name)
+            if existing is None:
+                row = {"name": name, "capacity": "", "volume_group": vg_name}
+                volumes.append(row)
+                by_name[name] = row
+                continue
+            if not volume_group_of(existing):
+                existing["volume_group"] = vg_name
 
 
 def build_esx_snap_array_steps(
@@ -177,6 +208,9 @@ def build_esx_snap_array_steps(
         vg = cli_token(str(vg_name or "").strip())
     except ValueError as exc:
         warnings.append(f"ERROR: {exc}")
+        return steps, warnings, False
+    if len(vg) > VG_MAX_LEN:
+        warnings.append("ERROR: volume group name exceeds 63 characters")
         return steps, warnings, False
     try:
         start = backup_start_token(start_time, now=now)

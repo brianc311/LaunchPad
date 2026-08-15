@@ -36,6 +36,18 @@ def test_invalidate_preview_and_confirm():
     assert "invalidatePreview" in html
     assert "confirm" in html
     assert "preview_hash" in html
+    assert 'maxlength="63"' in html
+
+
+def test_run_disables_button_before_fetch():
+    html = ESX_SNAP_POLICY_HTML
+    run_at = html.find('getElementById("run-btn").onclick')
+    fetch_at = html.find('fetch("/api/esx-snap-policy/run"')
+    assert run_at != -1
+    assert fetch_at != -1
+    disable_at = html.find("runBtn.disabled = true", run_at)
+    assert disable_at != -1
+    assert disable_at < fetch_at
 
 
 def test_volume_checks_survive_render():
