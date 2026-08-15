@@ -223,16 +223,15 @@ class DashboardView(ctk.CTkFrame):
         self._schedule_capacity_email_timer()
 
     def _register_health_cards_main_thread(self) -> None:
-        try:
-            count = ensure_health_dashboard_registered(self.db, self.crypto_key)
-            if count:
-                from launchpad.ssh_launcher import _log
+        def worker() -> None:
+            try:
+                count = ensure_health_dashboard_registered(self.db, self.crypto_key)
+                if count:
+                    _log(f"Health dashboard pre-registered {count} SSH card(s)")
+            except Exception as exc:
+                _log(f"Health dashboard pre-register failed: {exc}")
 
-                _log(f"Health dashboard pre-registered {count} SSH card(s)")
-        except Exception as exc:
-            from launchpad.ssh_launcher import _log
-
-            _log(f"Health dashboard pre-register failed: {exc}")
+        threading.Thread(target=worker, daemon=True).start()
 
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -1382,11 +1381,8 @@ class DashboardView(ctk.CTkFrame):
 
     def _load_monitor_states(self) -> None:
         try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
             self._monitor_states = get_monitor_states()
         except Exception as exc:
-            from launchpad.ssh_launcher import _log
-
             _log(f"Could not load monitor states: {exc}")
             self._monitor_states = {}
 

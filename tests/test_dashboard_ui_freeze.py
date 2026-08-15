@@ -22,3 +22,26 @@ def test_search_keyrelease_filters_in_place_not_refresh_cards():
     assert "_update_selection_status" in body
     assert "ensure_health_dashboard_registered" not in body
     assert "refresh_cards()" not in body
+
+
+def test_load_monitor_states_does_not_register_health_cards():
+    body = _method("_load_monitor_states")
+    assert "get_monitor_states" in body
+    assert "ensure_health_dashboard_registered" not in body
+
+
+def test_startup_health_register_runs_on_worker_thread():
+    body = _method("_register_health_cards_main_thread")
+    assert "ensure_health_dashboard_registered" in body
+    assert "threading.Thread" in body
+    assert "daemon=True" in body
+
+
+def test_refresh_stats_skips_monitor_off_before_ssh_status():
+    body = _method("_fetch_all_ssh_stats")
+    assert "_is_monitor_on" in body
+    assert "Refreshing SSH card stats..." in body
+    assert "No sites monitoring." in body
+    fetch_status_at = body.index("Refreshing SSH card stats...")
+    fetchable_return_at = body.index("if not fetchable:")
+    assert fetchable_return_at < fetch_status_at
