@@ -33,3 +33,12 @@ def test_invalidate_preview_and_confirm():
     assert "invalidatePreview" in html
     assert "confirm" in html
     assert "preview_hash" in html
+
+
+def test_volume_checks_survive_render():
+    html = ESX_SNAP_POLICY_HTML
+    assert "checkedByCard" in html
+    inner_at = html.find("box.innerHTML = volumesByCard")
+    assert inner_at != -1
+    restore_at = html.find(".checked =", inner_at)
+    assert restore_at != -1

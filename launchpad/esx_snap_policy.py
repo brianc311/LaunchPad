@@ -84,6 +84,7 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
     let cards = [];
     const volumesByCard = {};
     const vgByCard = {};
+    const checkedByCard = {};
     window.__esxPreviewOk = false;
     window.__esxPreviewHash = "";
 
@@ -139,6 +140,10 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
         if (vg) vgByCard[card.id] = vg.value;
         const vols = document.getElementById("vols-" + card.id);
         if (vols) volumesByCard[card.id] = vols.innerHTML;
+        const volBoxes = document.querySelectorAll(".vol-" + card.id);
+        if (volBoxes.length) {
+          checkedByCard[card.id] = [...volBoxes].filter((el) => el.checked).map((el) => el.dataset.name);
+        }
       });
       if (!cards.length) {
         arraysEl.innerHTML = '<p class="hint">No IBM FlashSystem / SVC SSH cards.</p>';
@@ -169,6 +174,10 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
         const box = document.getElementById("vols-" + card.id);
         if (box && volumesByCard[card.id]) {
           box.innerHTML = volumesByCard[card.id];
+          const names = new Set(checkedByCard[card.id] || []);
+          box.querySelectorAll(".vol-" + card.id).forEach((el) => {
+            if (names.has(el.dataset.name)) el.checked = true;
+          });
           bindVolumeBox(card.id);
         }
       });
@@ -180,13 +189,16 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
       box.innerHTML = '<p class="hint">Loading volumes…</p>';
       const res = await fetch("/api/esx-snap-policy/volumes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_id: cardId }) });
       const data = await res.json();
-      if (!data.ok) { box.innerHTML = '<p class="warning">' + (data.error || "Load failed") + '</p>'; volumesByCard[cardId] = box.innerHTML; return; }
+      const target = document.getElementById("vols-" + cardId);
+      if (!target) return;
+      if (!data.ok) { target.innerHTML = '<p class="warning">' + (data.error || "Load failed") + '</p>'; volumesByCard[cardId] = target.innerHTML; return; }
       const rows = (data.volumes || []).map((vol) => {
         const grouped = !!(vol.volume_group || "").trim();
         return '<tr data-name="' + vol.name + '"><td><input class="vol-' + cardId + '" type="checkbox" data-name="' + vol.name + '"' + (grouped ? " disabled" : "") + '></td><td>' + vol.name + '</td><td>' + (vol.capacity || "") + '</td><td>' + (vol.volume_group || "") + '</td></tr>';
       }).join("");
-      box.innerHTML = '<table><thead><tr><th></th><th>Name</th><th>Capacity</th><th>Volume group</th></tr></thead><tbody>' + rows + '</tbody></table>';
-      volumesByCard[cardId] = box.innerHTML;
+      target.innerHTML = '<table><thead><tr><th></th><th>Name</th><th>Capacity</th><th>Volume group</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      volumesByCard[cardId] = target.innerHTML;
+      checkedByCard[cardId] = [];
       bindVolumeBox(cardId);
     }
 
