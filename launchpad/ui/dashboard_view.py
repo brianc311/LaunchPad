@@ -316,6 +316,7 @@ class DashboardView(ctk.CTkFrame):
             ("Host Power", self._open_host_power, None),
             ("Consistency Groups", self._open_contingency_groups, None),
             ("FlashCopy CGs", self._open_fc_consistgrp, None),
+            ("ESX-snap Policy", self._open_esx_snap_policy, None),
             ("LUN Builder", self._open_lun_builder, None),
             ("Host / Volume Find", self._open_volume_find, None),
             ("Hosts & Volumes", self._open_host_volume_health, None),
@@ -2127,6 +2128,15 @@ class DashboardView(ctk.CTkFrame):
             fail_log="FlashCopy CGs failed",
             open_url=lambda server: server.open_fc_consistgrp(),
             summary="FlashCopy CGs opened — confirmed actions mutate arrays on the linked array.",
+        )
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_esx_snap_policy(self) -> None:
+        worker = self._open_sync_browser_report(
+            status="Opening ESX-snap Policy…",
+            fail_log="ESX-snap Policy failed",
+            open_url=lambda server: server.open_esx_snap_policy(),
+            summary="ESX-snap Policy opened — Preview then Run Create mutates the selected arrays.",
         )
         threading.Thread(target=worker, daemon=True).start()
 

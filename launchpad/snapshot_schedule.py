@@ -659,6 +659,7 @@ SNAPSHOT_SCHEDULE_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/capacity">Capacity Report</a>
         <a class="btn secondary" href="/fc-wwpn">FC WWPN</a>
         <a class="btn secondary" href="/fc-consistgrp">FlashCopy CGs</a>
+        <a class="btn secondary" href="/esx-snap-policy">ESX-snap Policy</a>
         <a class="btn secondary" href="/">Health Dashboard</a>
         <span id="status" class="status"></span>
       </div>
