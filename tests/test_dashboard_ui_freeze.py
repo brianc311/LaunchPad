@@ -86,3 +86,40 @@ def test_on_card_monitor_toggle_does_not_register_on_click_stack():
         _assert_thread_before_register(body)
     else:
         assert "set_card_monitor_enabled" in body
+
+
+HEADER_OPENERS = (
+    "_open_storage_inventory",
+    "_open_health_dashboard_all",
+    "_open_capacity_report_all",
+    "_open_fc_wwpn_report_all",
+    "_open_site_lookup_all",
+    "_open_ansible_pad",
+    "_open_host_power",
+    "_open_contingency_groups",
+    "_open_fc_consistgrp",
+    "_open_lun_builder",
+    "_open_volume_find",
+    "_open_host_volume_health",
+    "_open_system_connectivity",
+)
+
+EXCEL_EXPORTERS = (
+    "_export_fc_wwpn_excel",
+    "_export_snapshot_schedule_excel",
+    "_export_capacity_excel",
+    "_export_dell_report_excel",
+)
+
+
+def test_header_openers_register_off_ui_thread():
+    for name in HEADER_OPENERS:
+        _assert_thread_before_register(_method(name))
+
+
+def test_excel_exporters_register_off_ui_thread():
+    for name in EXCEL_EXPORTERS:
+        body = _method(name)
+        assert "asksaveasfilename" in body
+        _assert_thread_before_register(body)
+        assert body.index("asksaveasfilename") < body.index("threading.Thread")
