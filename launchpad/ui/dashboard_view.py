@@ -42,7 +42,7 @@ from launchpad.health_server import get_health_server
 from launchpad.launchers import launch_card
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.monitor import (
-    HealthDashboardEntry,
+    build_health_dashboard_entries,
     ensure_health_dashboard_registered,
     get_monitor_states,
     open_capacity_report_for_cards,
@@ -1403,10 +1403,7 @@ class DashboardView(ctk.CTkFrame):
             self.monitor_all_switch.deselect()
 
     def _on_card_monitor_toggle(self, card: Card, enabled: bool) -> None:
-        from launchpad.ssh_launcher import _log
-
         try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
             set_card_monitor_enabled(card.id, enabled)
             self._monitor_states[card.id] = enabled
         except Exception as exc:
@@ -1446,27 +1443,43 @@ class DashboardView(ctk.CTkFrame):
 
     def _toggle_all_monitoring(self) -> None:
         enabled = bool(self.monitor_all_switch.get())
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-            set_all_monitor_enabled(enabled)
-            for card in self._ssh_cards:
-                self._monitor_states[card.id] = enabled
-                widget = self._find_card_widget(card.id)
-                if widget:
-                    widget.set_monitor_enabled(enabled)
-        except Exception as exc:
-            self.status_label.configure(text=f"Monitor toggle failed: {exc}")
-            self._sync_master_monitor_switch()
-            return
-
+        ssh_cards = list(self._ssh_cards)
+        for card in ssh_cards:
+            self._monitor_states[card.id] = enabled
+            widget = self._find_card_widget(card.id)
+            if widget:
+                widget.set_monitor_enabled(enabled)
         self._refresh_capacity_alerts()
         if enabled:
             self.status_label.configure(text="All monitoring on — refreshing stats for SSH cards...")
-            self._fetch_all_ssh_stats()
         else:
             self.status_label.configure(text="All monitoring off — no background SSH.")
-            for card in self._ssh_cards:
+            for card in ssh_cards:
                 self._set_card_ssh_monitor_off(card.id)
+
+        def start_ssh_stats(card: Card) -> None:
+            if card.id not in self._stats_in_flight:
+                threading.Thread(
+                    target=self._fetch_ssh_stats_worker,
+                    args=(card,),
+                    daemon=True,
+                ).start()
+
+        def worker() -> None:
+            try:
+                ensure_health_dashboard_registered(self.db, self.crypto_key)
+                set_all_monitor_enabled(enabled)
+            except Exception as exc:
+                self.after(0, lambda msg=str(exc): self.status_label.configure(text=f"Monitor toggle failed: {msg}"))
+                self.after(0, self._sync_master_monitor_switch)
+                return
+            if not enabled:
+                return
+            for card in ssh_cards:
+                self.after(0, lambda c=card: self._probe_card_ssh_status(c.id))
+                start_ssh_stats(card)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ssh_stats_prereq(self, card: Card) -> str | None:
         return ssh_stats_prereq_message(card, self.crypto_key)
@@ -1738,7 +1751,6 @@ class DashboardView(ctk.CTkFrame):
             return
 
         try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
             for widget in ssh_widgets:
                 card = self._visible_cards[widget.card_id]
                 set_card_monitor_enabled(card.id, enabled)
@@ -1964,533 +1976,203 @@ class DashboardView(ctk.CTkFrame):
             if card.card_type == "ssh" and not ssh_stats_prereq_message(card, self.crypto_key)
         ]
 
-    def _open_health_dashboard_all(self) -> None:
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
-
-        entries: list[HealthDashboardEntry] = []
-        for card in cards:
-            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
-            entries.append(
-                HealthDashboardEntry(
-                    card_id=card.id,
-                    name=card.name,
-                    host=card.host,
-                    port=card.port,
-                    username=card.username,
-                    auth=auth,
-                    device_profile=card.device_profile,
-                    custom_commands=card.custom_commands,
-                    serial_number=getattr(card, "serial_number", "") or "",
-                    sudo_password=(
-                        resolve_sudo_password(card, self.crypto_key)
-                        if card.device_profile == "hadoop_linux"
-                        else ""
-                    ),
-                )
-            )
-
-        self.status_label.configure(
-            text=f"Opening health dashboard for {len(entries)} SSH server(s)..."
-        )
+    def _open_sync_browser_report(
+        self,
+        *,
+        status: str,
+        fail_log: str,
+        open_url,
+        summary: str,
+    ):
+        self.status_label.configure(text=status)
         self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Health dashboard register failed: {exc}")
 
         def worker() -> None:
             try:
-                url, results = open_health_dashboard_for_cards(entries)
-                summary = (
-                    f"Health dashboard opened — {len(results)} site(s) loaded (monitoring off). "
-                    "Turn on Monitor per site, or All monitoring on, to connect."
-                )
+                server = get_health_server()
+                server.sync_from_app()
+                url = open_url(server)
                 _log(f"{summary} ({url})")
                 self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-                self.after(0, self._refresh_capacity_alerts)
             except Exception as exc:
-                _log(f"Health dashboard failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Health dashboard failed: {exc}"),
-                )
+                _log(f"{fail_log}: {exc}")
+                self.after(0, lambda msg=str(exc): self._set_status(f"{fail_log}: {msg}"))
 
+        return worker
+
+    def _open_entries_browser_report(
+        self,
+        *,
+        status: str,
+        fail_log: str,
+        opener,
+        summary_for,
+        after_success=None,
+    ):
+        self.status_label.configure(text=status)
+        self.update_idletasks()
+
+        def worker() -> None:
+            try:
+                entries = build_health_dashboard_entries(self.db, self.crypto_key)
+                if not entries:
+                    self.after(
+                        0,
+                        lambda: self.status_label.configure(
+                            text="No SSH cards with credentials found. Add SSH Password or a key in Admin first."
+                        ),
+                    )
+                    return
+                result = opener(entries)
+                if isinstance(result, tuple):
+                    url, extra = result
+                    summary = summary_for(entries, extra)
+                else:
+                    url = result
+                    summary = summary_for(entries)
+                _log(f"{summary} ({url})")
+                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
+                if after_success is not None:
+                    self.after(0, after_success)
+            except Exception as exc:
+                _log(f"{fail_log}: {exc}")
+                self.after(0, lambda msg=str(exc): self._set_status(f"{fail_log}: {msg}"))
+
+        return worker
+
+    def _open_health_dashboard_all(self) -> None:
+        worker = self._open_entries_browser_report(
+            status="Opening health dashboard...",
+            fail_log="Health dashboard failed",
+            opener=open_health_dashboard_for_cards,
+            summary_for=lambda entries, results: (
+                f"Health dashboard opened — {len(results)} site(s) loaded (monitoring off). "
+                "Turn on Monitor per site, or All monitoring on, to connect."
+            ),
+            after_success=self._refresh_capacity_alerts,
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_capacity_report_all(self) -> None:
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
-
-        entries: list[HealthDashboardEntry] = []
-        for card in cards:
-            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
-            entries.append(
-                HealthDashboardEntry(
-                    card_id=card.id,
-                    name=card.name,
-                    host=card.host,
-                    port=card.port,
-                    username=card.username,
-                    auth=auth,
-                    device_profile=card.device_profile,
-                    custom_commands=card.custom_commands,
-                    serial_number=getattr(card, "serial_number", "") or "",
-                    sudo_password=(
-                        resolve_sudo_password(card, self.crypto_key)
-                        if card.device_profile == "hadoop_linux"
-                        else ""
-                    ),
-                )
-            )
-
-        self.status_label.configure(
-            text=f"Opening capacity report for {len(entries)} site(s)..."
+        worker = self._open_entries_browser_report(
+            status="Opening capacity report...",
+            fail_log="Capacity report failed",
+            opener=open_capacity_report_for_cards,
+            summary_for=lambda entries: (
+                f"Capacity report opened — {len(entries)} site(s) loaded (monitoring off). "
+                "Turn on monitoring on the page, then Refresh On Sites."
+            ),
+            after_success=self._refresh_capacity_alerts,
         )
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Capacity report register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                url = open_capacity_report_for_cards(entries)
-                summary = (
-                    f"Capacity report opened — {len(entries)} site(s) loaded (monitoring off). "
-                    "Turn on monitoring on the page, then Refresh On Sites."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-                self.after(0, self._refresh_capacity_alerts)
-            except Exception as exc:
-                _log(f"Capacity report failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Capacity report failed: {exc}"),
-                )
-
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_fc_wwpn_report_all(self) -> None:
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
-
-        entries: list[HealthDashboardEntry] = []
-        for card in cards:
-            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
-            entries.append(
-                HealthDashboardEntry(
-                    card_id=card.id,
-                    name=card.name,
-                    host=card.host,
-                    port=card.port,
-                    username=card.username,
-                    auth=auth,
-                    device_profile=card.device_profile,
-                    custom_commands=card.custom_commands,
-                    serial_number=getattr(card, "serial_number", "") or "",
-                    category=card.category or "",
-                    sudo_password=(
-                        resolve_sudo_password(card, self.crypto_key)
-                        if card.device_profile == "hadoop_linux"
-                        else ""
-                    ),
-                )
-            )
-
-        self.status_label.configure(text=f"Opening FC WWPN report for {len(entries)} site(s)...")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"FC WWPN report register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                url = open_fc_wwpn_report_for_cards(entries)
-                summary = (
-                    f"FC WWPN report opened — {len(entries)} site(s). "
-                    "Turn on Monitor, refresh, then open Hosts & LUN Mappings."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"FC WWPN report failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"FC WWPN report failed: {exc}"),
-                )
-
+        worker = self._open_entries_browser_report(
+            status="Opening FC WWPN report...",
+            fail_log="FC WWPN report failed",
+            opener=open_fc_wwpn_report_for_cards,
+            summary_for=lambda entries: (
+                f"FC WWPN report opened — {len(entries)} site(s). "
+                "Turn on Monitor, refresh, then open Hosts & LUN Mappings."
+            ),
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_site_lookup_all(self) -> None:
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
-
-        entries: list[HealthDashboardEntry] = []
-        for card in cards:
-            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
-            entries.append(
-                HealthDashboardEntry(
-                    card_id=card.id,
-                    name=card.name,
-                    host=card.host,
-                    port=card.port,
-                    username=card.username,
-                    auth=auth,
-                    device_profile=card.device_profile,
-                    custom_commands=card.custom_commands,
-                    serial_number=getattr(card, "serial_number", "") or "",
-                    category=card.category or "",
-                    sudo_password=(
-                        resolve_sudo_password(card, self.crypto_key)
-                        if card.device_profile == "hadoop_linux"
-                        else ""
-                    ),
-                )
-            )
-
-        self.status_label.configure(text=f"Opening Site Lookup for {len(entries)} site(s)...")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Site Lookup register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                url = open_site_lookup_for_cards(entries)
-                summary = (
-                    f"Site Lookup opened — {len(entries)} site(s). "
-                    "Pick a site, then Live Refresh to load hosts, volumes, and pools."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Site Lookup failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Site Lookup failed: {exc}"),
-                )
-
+        worker = self._open_entries_browser_report(
+            status="Opening Site Lookup...",
+            fail_log="Site Lookup failed",
+            opener=open_site_lookup_for_cards,
+            summary_for=lambda entries: (
+                f"Site Lookup opened — {len(entries)} site(s). "
+                "Pick a site, then Live Refresh to load hosts, volumes, and pools."
+            ),
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_ansible_pad(self) -> None:
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
-
-        entries: list[HealthDashboardEntry] = []
-        for card in cards:
-            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
-            entries.append(
-                HealthDashboardEntry(
-                    card_id=card.id,
-                    name=card.name,
-                    host=card.host,
-                    port=card.port,
-                    username=card.username,
-                    auth=auth,
-                    device_profile=card.device_profile,
-                    custom_commands=card.custom_commands,
-                    serial_number=getattr(card, "serial_number", "") or "",
-                    category=card.category or "",
-                    sudo_password=(
-                        resolve_sudo_password(card, self.crypto_key)
-                        if card.device_profile == "hadoop_linux"
-                        else ""
-                    ),
-                )
-            )
-
-        self.status_label.configure(text="Opening Ansible Pad…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Ansible Pad register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                url = open_ansible_pad_for_cards(entries)
-                summary = (
-                    f"Ansible Pad opened — {len(entries)} site(s) are available for package export."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Ansible Pad failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Ansible Pad failed: {exc}"),
-                )
-
+        worker = self._open_entries_browser_report(
+            status="Opening Ansible Pad…",
+            fail_log="Ansible Pad failed",
+            opener=open_ansible_pad_for_cards,
+            summary_for=lambda entries: (
+                f"Ansible Pad opened — {len(entries)} site(s) are available for package export."
+            ),
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_host_power(self, card_id: int | None = None) -> None:
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
-
-        entries: list[HealthDashboardEntry] = []
-        for card in cards:
-            auth = resolve_ssh_metrics_auth(card, self.crypto_key)
-            entries.append(
-                HealthDashboardEntry(
-                    card_id=card.id,
-                    name=card.name,
-                    host=card.host,
-                    port=card.port,
-                    username=card.username,
-                    auth=auth,
-                    device_profile=card.device_profile,
-                    custom_commands=card.custom_commands,
-                    serial_number=getattr(card, "serial_number", "") or "",
-                    category=card.category or "",
-                    sudo_password=(
-                        resolve_sudo_password(card, self.crypto_key)
-                        if card.device_profile == "hadoop_linux"
-                        else ""
-                    ),
-                )
-            )
-
-        self.status_label.configure(text="Opening Host Power…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Host Power register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                url = open_host_power_for_cards(entries, card_id=card_id)
-                summary = (
-                    "Host Power opened — select a Hadoop host and confirm before powering it off."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Host Power failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Host Power failed: {exc}"),
-                )
-
+        worker = self._open_entries_browser_report(
+            status="Opening Host Power…",
+            fail_log="Host Power failed",
+            opener=lambda entries: open_host_power_for_cards(entries, card_id=card_id),
+            summary_for=lambda entries: (
+                "Host Power opened — select a Hadoop host and confirm before powering it off."
+            ),
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_contingency_groups(self) -> None:
-        self.status_label.configure(text="Opening Consistency Groups…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Consistency Groups register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_contingency_groups()
-                summary = "Consistency Groups opened — reference library only; it does not modify arrays."
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Consistency Groups failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Consistency Groups failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening Consistency Groups…",
+            fail_log="Consistency Groups failed",
+            open_url=lambda server: server.open_contingency_groups(),
+            summary="Consistency Groups opened — reference library only; it does not modify arrays.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_fc_consistgrp(self) -> None:
-        self.status_label.configure(text="Opening FlashCopy CGs…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"FlashCopy CGs register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_fc_consistgrp()
-                summary = (
-                    "FlashCopy CGs opened — confirmed actions mutate arrays on the linked array."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"FlashCopy CGs failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"FlashCopy CGs failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening FlashCopy CGs…",
+            fail_log="FlashCopy CGs failed",
+            open_url=lambda server: server.open_fc_consistgrp(),
+            summary="FlashCopy CGs opened — confirmed actions mutate arrays on the linked array.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_lun_builder(self) -> None:
-        self.status_label.configure(text="Opening LUN Builder…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"LUN Builder register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_lun_builder()
-                summary = "LUN Builder opened — planning and CRUD are available."
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"LUN Builder failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"LUN Builder failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening LUN Builder…",
+            fail_log="LUN Builder failed",
+            open_url=lambda server: server.open_lun_builder(),
+            summary="LUN Builder opened — planning and CRUD are available.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_volume_find(self) -> None:
-        self.status_label.configure(text="Opening Volume Find…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Volume Find register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_volume_find()
-                summary = "Volume Find opened — cache and live search are available."
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Volume Find failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Volume Find failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening Volume Find…",
+            fail_log="Volume Find failed",
+            open_url=lambda server: server.open_volume_find(),
+            summary="Volume Find opened — cache and live search are available.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_host_volume_health(self) -> None:
-        self.status_label.configure(text="Opening Hosts & Volumes Health…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Hosts & Volumes Health register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_host_volume_health()
-                summary = (
-                    "Hosts & Volumes Health opened — refresh live for offline/degraded rows."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Hosts & Volumes Health failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Hosts & Volumes Health failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening Hosts & Volumes Health…",
+            fail_log="Hosts & Volumes Health failed",
+            open_url=lambda server: server.open_host_volume_health(),
+            summary="Hosts & Volumes Health opened — refresh live for offline/degraded rows.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_system_connectivity(self) -> None:
-        self.status_label.configure(text="Opening System Connectivity…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"System Connectivity register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_system_connectivity()
-                summary = (
-                    "System Connectivity opened — refresh live for Call Home/DNS/SNMP/NTP."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"System Connectivity failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"System Connectivity failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening System Connectivity…",
+            fail_log="System Connectivity failed",
+            open_url=lambda server: server.open_system_connectivity(),
+            summary="System Connectivity opened — refresh live for Call Home/DNS/SNMP/NTP.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_storage_inventory(self) -> None:
-        self.status_label.configure(text="Opening Storage Inventory…")
-        self.update_idletasks()
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Storage Inventory register failed: {exc}")
-
-        def worker() -> None:
-            try:
-                server = get_health_server()
-                server.sync_from_app()
-                url = server.open_storage_inventory()
-                summary = (
-                    "Storage Inventory opened — refresh live for fleet device inventory."
-                )
-                _log(f"{summary} ({url})")
-                self.after(0, lambda u=url, s=summary: self._set_status(s, url=u))
-            except Exception as exc:
-                _log(f"Storage Inventory failed: {exc}")
-                self.after(
-                    0,
-                    lambda: self._set_status(f"Storage Inventory failed: {exc}"),
-                )
-
+        worker = self._open_sync_browser_report(
+            status="Opening Storage Inventory…",
+            fail_log="Storage Inventory failed",
+            open_url=lambda server: server.open_storage_inventory(),
+            summary="Storage Inventory opened — refresh live for fleet device inventory.",
+        )
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_export_excel_menu(self) -> None:
@@ -2514,14 +2196,6 @@ class DashboardView(ctk.CTkFrame):
 
         from launchpad.capacity_export import open_exported_workbook
         from launchpad.fc_wwpn_export import export_fc_wwpn_excel
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
 
         default_name = f"FC_WWPN_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         output_path = filedialog.asksaveasfilename(
@@ -2533,14 +2207,19 @@ class DashboardView(ctk.CTkFrame):
         if not output_path:
             return
 
+        ssh_count = sum(1 for card in self.db.list_cards() if card.card_type == "ssh")
+        if not ssh_count:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
         path = Path(output_path)
-        self.status_label.configure(text=f"Exporting FC WWPN Excel for {len(cards)} site(s)...")
+        self.status_label.configure(text=f"Exporting FC WWPN Excel for {ssh_count} site(s)...")
         self.update_idletasks()
 
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Health dashboard register failed before FC export: {exc}")
+        def start_export(target) -> None:
+            threading.Thread(target=target, daemon=True).start()
 
         def progress(name: str, index: int, total: int) -> None:
             self.after(
@@ -2552,6 +2231,7 @@ class DashboardView(ctk.CTkFrame):
 
         def worker() -> None:
             try:
+                ensure_health_dashboard_registered(self.db, self.crypto_key)
                 result = export_fc_wwpn_excel(
                     self.db,
                     self.crypto_key,
@@ -2591,28 +2271,22 @@ class DashboardView(ctk.CTkFrame):
                 _log(f"FC WWPN Excel export failed: {exc}")
                 self.after(
                     0,
-                    lambda: self.status_label.configure(text=f"FC Excel export failed: {exc}"),
+                    lambda msg=str(exc): self.status_label.configure(
+                        text=f"FC Excel export failed: {msg}"
+                    ),
                 )
                 self.after(
                     0,
-                    lambda: messagebox.showerror("Export failed", str(exc)),
+                    lambda msg=str(exc): messagebox.showerror("Export failed", msg),
                 )
 
-        threading.Thread(target=worker, daemon=True).start()
+        start_export(worker)
 
     def _export_snapshot_schedule_excel(self) -> None:
         from datetime import datetime
 
         from launchpad.capacity_export import open_exported_workbook
         from launchpad.snapshot_schedule_export import export_snapshot_schedule_excel
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
 
         default_name = f"Snapshot_Schedule_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         output_path = filedialog.asksaveasfilename(
@@ -2624,16 +2298,21 @@ class DashboardView(ctk.CTkFrame):
         if not output_path:
             return
 
+        ssh_count = sum(1 for card in self.db.list_cards() if card.card_type == "ssh")
+        if not ssh_count:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
         path = Path(output_path)
         self.status_label.configure(
-            text=f"Exporting Snapshot Schedule Excel for {len(cards)} site(s)..."
+            text=f"Exporting Snapshot Schedule Excel for {ssh_count} site(s)..."
         )
         self.update_idletasks()
 
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Health dashboard register failed before snapshot export: {exc}")
+        def start_export(target) -> None:
+            threading.Thread(target=target, daemon=True).start()
 
         def progress(name: str, index: int, total: int) -> None:
             self.after(
@@ -2645,6 +2324,7 @@ class DashboardView(ctk.CTkFrame):
 
         def worker() -> None:
             try:
+                ensure_health_dashboard_registered(self.db, self.crypto_key)
                 result = export_snapshot_schedule_excel(
                     self.db,
                     self.crypto_key,
@@ -2682,30 +2362,22 @@ class DashboardView(ctk.CTkFrame):
                 _log(f"Snapshot Schedule Excel export failed: {exc}")
                 self.after(
                     0,
-                    lambda: self.status_label.configure(
-                        text=f"Snapshot Excel export failed: {exc}"
+                    lambda msg=str(exc): self.status_label.configure(
+                        text=f"Snapshot Excel export failed: {msg}"
                     ),
                 )
                 self.after(
                     0,
-                    lambda: messagebox.showerror("Export failed", str(exc)),
+                    lambda msg=str(exc): messagebox.showerror("Export failed", msg),
                 )
 
-        threading.Thread(target=worker, daemon=True).start()
+        start_export(worker)
 
     def _export_capacity_excel(self) -> None:
         from datetime import datetime
         from pathlib import Path
 
         from launchpad.capacity_export import export_storage_capacity_excel, open_exported_workbook
-        from launchpad.ssh_launcher import _log
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
-            return
 
         default_name = f"Storage_Capacity_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         output_path = filedialog.asksaveasfilename(
@@ -2717,14 +2389,19 @@ class DashboardView(ctk.CTkFrame):
         if not output_path:
             return
 
+        ssh_count = sum(1 for card in self.db.list_cards() if card.card_type == "ssh")
+        if not ssh_count:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
         path = Path(output_path)
-        self.status_label.configure(text=f"Exporting capacity to Excel for {len(cards)} site(s)...")
+        self.status_label.configure(text=f"Exporting capacity to Excel for {ssh_count} site(s)...")
         self.update_idletasks()
 
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Health dashboard register failed before export: {exc}")
+        def start_export(target) -> None:
+            threading.Thread(target=target, daemon=True).start()
 
         def progress(name: str, index: int, total: int) -> None:
             self.after(
@@ -2736,6 +2413,7 @@ class DashboardView(ctk.CTkFrame):
 
         def worker() -> None:
             try:
+                ensure_health_dashboard_registered(self.db, self.crypto_key)
                 result = export_storage_capacity_excel(
                     self.db,
                     self.crypto_key,
@@ -2793,30 +2471,24 @@ class DashboardView(ctk.CTkFrame):
                 _log(f"Capacity Excel export failed: {exc}")
                 self.after(
                     0,
-                    lambda: self.status_label.configure(text=f"Excel export failed: {exc}"),
+                    lambda msg=str(exc): self.status_label.configure(
+                        text=f"Excel export failed: {msg}"
+                    ),
                 )
                 self.after(
                     0,
-                    lambda: messagebox.showerror("Export failed", str(exc)),
+                    lambda msg=str(exc): messagebox.showerror("Export failed", msg),
                 )
 
-        threading.Thread(target=worker, daemon=True).start()
+        start_export(worker)
 
     def _export_dell_report_excel(self) -> None:
         from datetime import datetime
 
         from launchpad.capacity_export import open_exported_workbook
-        from launchpad.ssh_launcher import _log
 
         if not is_dell_report_enabled(self.db):
             messagebox.showinfo("Dell Report", "Dell Report is disabled in Admin.")
-            return
-
-        cards = self._health_ssh_cards()
-        if not cards:
-            self.status_label.configure(
-                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
-            )
             return
 
         default_name = f"Dell_Capacity_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -2829,17 +2501,23 @@ class DashboardView(ctk.CTkFrame):
         if not output_path:
             return
 
+        ssh_count = sum(1 for card in self.db.list_cards() if card.card_type == "ssh")
+        if not ssh_count:
+            self.status_label.configure(
+                text="No SSH cards with credentials found. Add SSH Password or a key in Admin first.",
+            )
+            return
+
         path = Path(output_path)
-        self.status_label.configure(text=f"Exporting Dell Report for {len(cards)} site(s)...")
+        self.status_label.configure(text=f"Exporting Dell Report for {ssh_count} site(s)...")
         self.update_idletasks()
 
-        try:
-            ensure_health_dashboard_registered(self.db, self.crypto_key)
-        except Exception as exc:
-            _log(f"Health dashboard register failed before Dell export: {exc}")
+        def start_export(target) -> None:
+            threading.Thread(target=target, daemon=True).start()
 
         def worker() -> None:
             try:
+                ensure_health_dashboard_registered(self.db, self.crypto_key)
                 server = get_health_server()
                 body, filename = server.export_dell_report_excel_bytes(
                     include_monitor_off=False,
@@ -2877,14 +2555,16 @@ class DashboardView(ctk.CTkFrame):
                 _log(f"Dell Report Excel export failed: {exc}")
                 self.after(
                     0,
-                    lambda: self.status_label.configure(text=f"Dell Report export failed: {exc}"),
+                    lambda msg=str(exc): self.status_label.configure(
+                        text=f"Dell Report export failed: {msg}"
+                    ),
                 )
                 self.after(
                     0,
-                    lambda: messagebox.showerror("Export failed", str(exc)),
+                    lambda msg=str(exc): messagebox.showerror("Export failed", msg),
                 )
 
-        threading.Thread(target=worker, daemon=True).start()
+        start_export(worker)
 
     def _launch_card(self, card: Card) -> None:
         from pathlib import Path

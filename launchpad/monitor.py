@@ -1,3 +1,5 @@
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from launchpad.hadoop_linux_promote import ensure_hadoop_linux_cards
@@ -80,7 +82,43 @@ def build_health_dashboard_entries(db, crypto_key: bytes) -> list[HealthDashboar
     return entries
 
 
-def ensure_health_dashboard_registered(db, crypto_key: bytes) -> int:
+class RegisterSingleFlight:
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._in_progress = False
+        self._last_count = 0
+        self._last_error: BaseException | None = None
+
+    def run(self, fn: Callable[[], int]) -> int:
+        with self._cv:
+            if self._in_progress:
+                while self._in_progress:
+                    self._cv.wait()
+                if self._last_error is not None:
+                    raise self._last_error
+                return self._last_count
+            self._in_progress = True
+            self._last_error = None
+        try:
+            count = fn()
+        except BaseException as exc:
+            with self._cv:
+                self._last_error = exc
+                self._in_progress = False
+                self._cv.notify_all()
+            raise
+        with self._cv:
+            self._last_count = count
+            self._last_error = None
+            self._in_progress = False
+            self._cv.notify_all()
+        return count
+
+
+_REGISTER_FLIGHT = RegisterSingleFlight()
+
+
+def _register_health_dashboard(db, crypto_key: bytes) -> int:
     """Register all SSH cards with credentials so the browser page can list them."""
     # Promote Hadoop-named General SSH cards so Host Power / Power off work
     # after install without a manual Admin profile edit.
@@ -95,6 +133,11 @@ def ensure_health_dashboard_registered(db, crypto_key: bytes) -> int:
     for entry in entries:
         _register_entry(server, entry)
     return len(entries)
+
+
+def ensure_health_dashboard_registered(db, crypto_key: bytes) -> int:
+    """Register all SSH cards with credentials so the browser page can list them."""
+    return _REGISTER_FLIGHT.run(lambda: _register_health_dashboard(db, crypto_key))
 
 
 def _open_health_url(server) -> str:
