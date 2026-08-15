@@ -98,6 +98,7 @@ HEADER_OPENERS = (
     "_open_host_power",
     "_open_contingency_groups",
     "_open_fc_consistgrp",
+    "_open_esx_snap_policy",
     "_open_lun_builder",
     "_open_volume_find",
     "_open_host_volume_health",

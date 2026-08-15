@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from launchpad.esx_snap_policy import ESX_SNAP_POLICY_HTML, ESX_SNAP_POLICY_PATH
+from launchpad.snapshot_schedule import SNAPSHOT_SCHEDULE_HTML
 
 
 def test_path_and_title():
@@ -42,3 +45,18 @@ def test_volume_checks_survive_render():
     assert inner_at != -1
     restore_at = html.find(".checked =", inner_at)
     assert restore_at != -1
+
+
+def test_dashboard_tool_specs_includes_esx_snap_policy():
+    source = Path("launchpad/ui/dashboard_view.py").read_text(encoding="utf-8")
+    assert '"ESX-snap Policy"' in source or "'ESX-snap Policy'" in source
+    assert "_open_esx_snap_policy" in source
+
+
+def test_snapshot_schedule_links_here():
+    assert "/esx-snap-policy" in SNAPSHOT_SCHEDULE_HTML
+
+
+def test_health_dashboard_nav_includes_esx_snap_policy():
+    source = Path("launchpad/health_server.py").read_text(encoding="utf-8")
+    assert 'href="/esx-snap-policy"' in source

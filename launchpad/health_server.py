@@ -68,6 +68,7 @@ from launchpad.fc_cg_summary import (
     build_cg_summaries,
     schedule_context_from_capacity,
 )
+from launchpad.esx_snap_policy import ESX_SNAP_POLICY_HTML, ESX_SNAP_POLICY_PATH
 from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
 from launchpad.esx_snap_policy_ops import (
     POLICY_NAME,
@@ -1001,6 +1002,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/capacity" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Capacity Report</a>
         <a class="btn secondary" href="/fc-wwpn" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">FC WWPN</a>
         <a class="btn secondary" href="/snapshot-schedule" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Snapshot Schedule</a>
+        <a class="btn secondary" href="/esx-snap-policy" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">ESX-snap Policy</a>
         <a class="btn secondary" href="/lun-builder" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">LUN Builder</a>
         <a class="btn secondary" href="/fc-consistgrp" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">FlashCopy CGs</a>
         <a class="btn secondary" href="/host-volume-health" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Hosts & Volumes</a>
@@ -2650,6 +2652,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == FC_CONSISTGRP_PATH:
             self._send_html(_fill_page(FC_CONSISTGRP_HTML))
+            return
+        if path == ESX_SNAP_POLICY_PATH:
+            self._send_html(_fill_page(ESX_SNAP_POLICY_HTML))
             return
         if path == HOST_VOLUME_HEALTH_PATH:
             self._send_html(_fill_page(HOST_VOLUME_HEALTH_HTML))
@@ -8385,6 +8390,10 @@ class HealthServer:
         return f"http://127.0.0.1:{self._port}{FC_CONSISTGRP_PATH}"
 
     @property
+    def esx_snap_policy_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{ESX_SNAP_POLICY_PATH}"
+
+    @property
     def host_volume_health_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{HOST_VOLUME_HEALTH_PATH}"
 
@@ -9177,6 +9186,13 @@ class HealthServer:
         webbrowser.open(url)
         _log(f"Opened FlashCopy consistency groups in browser: {url}")
         return url
+
+    def open_esx_snap_policy(self) -> str:
+        """Open the ESX-snap policy page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.esx_snap_policy_url)
+        _log(f"Opened ESX-snap Policy in browser: {self.esx_snap_policy_url}")
+        return self.esx_snap_policy_url
 
     def open_host_volume_health(self) -> str:
         """Open the Hosts & Volumes Health page in the default browser."""
