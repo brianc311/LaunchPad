@@ -1,0 +1,35 @@
+from launchpad.esx_snap_policy import ESX_SNAP_POLICY_HTML, ESX_SNAP_POLICY_PATH
+
+
+def test_path_and_title():
+    assert ESX_SNAP_POLICY_PATH == "/esx-snap-policy"
+    assert "ESX-snap Policy" in ESX_SNAP_POLICY_HTML
+
+
+def test_preview_run_and_api_paths():
+    html = ESX_SNAP_POLICY_HTML
+    assert "Preview / Dry-run" in html
+    assert "Run Create" in html
+    assert "/api/esx-snap-policy/cards" in html
+    assert "/api/esx-snap-policy/volumes" in html
+    assert "/api/esx-snap-policy/preview" in html
+    assert "/api/esx-snap-policy/run" in html
+    assert 'id="run-btn"' in html
+    assert "disabled" in html
+
+
+def test_policy_copy_and_volume_picker():
+    html = ESX_SNAP_POLICY_HTML
+    assert "ESX-snap" in html
+    assert "02:00" in html
+    assert "Select all" in html
+    assert "Select none" in html
+    assert "Load volumes" in html
+    assert "operator-initiated" in html.lower() or "does not create snapshots immediately" in html.lower()
+
+
+def test_invalidate_preview_and_confirm():
+    html = ESX_SNAP_POLICY_HTML
+    assert "invalidatePreview" in html
+    assert "confirm" in html
+    assert "preview_hash" in html
