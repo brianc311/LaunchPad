@@ -1470,7 +1470,7 @@ class DashboardView(ctk.CTkFrame):
                 ensure_health_dashboard_registered(self.db, self.crypto_key)
                 set_all_monitor_enabled(enabled)
             except Exception as exc:
-                self.after(0, lambda: self.status_label.configure(text=f"Monitor toggle failed: {exc}"))
+                self.after(0, lambda msg=str(exc): self.status_label.configure(text=f"Monitor toggle failed: {msg}"))
                 self.after(0, self._sync_master_monitor_switch)
                 return
             if not enabled:
