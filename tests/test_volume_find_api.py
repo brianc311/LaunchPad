@@ -372,6 +372,34 @@ def test_find_volumes_default_type_unchanged(monkeypatch):
     assert "host_name" not in result["matches"][0]
 
 
+def test_volume_find_progress_host_cache_counts_cards(monkeypatch):
+    server = HealthServer()
+    card = HealthCard(
+        card_id=1,
+        name="Woodland Hills, CA",
+        host="10.244.66.227",
+        port=22,
+        username="user",
+        key_path="/tmp/key",
+        device_profile="flashsystem_9500",
+        command_results=[
+            {
+                "command": "svcinfo lshost -delim :",
+                "output": "id:name:port_count\n0:woo_esx_cluster:2\n",
+            }
+        ],
+    )
+    server._cards[1] = card
+    server.set_monitor_enabled(card_id=1, enabled=True)
+    monkeypatch.setattr(server, "sync_from_app", lambda: 0)
+    result = server.find_volumes("woo", mode="cache", find_type="host")
+    assert result["matches"]
+    done = server.volume_find_progress_snapshot()
+    assert done["running"] is False
+    assert done["done"] == 1
+    assert done["total"] == 1
+
+
 def test_volume_find_progress_idle_and_after_cache(monkeypatch):
     server = HealthServer()
     idle = server.volume_find_progress_snapshot()

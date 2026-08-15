@@ -635,6 +635,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
       "All monitored storage sites — capacity stats stacked for review and PDF export.";
     let refreshAllRunning = false;
     let cardsCache = [];
+    let cardsLoadedOnce = false;
     let siteNameOverrides = {};
     let monitorServerState = {};
     let dellIncludeIds = new Set();
@@ -1548,7 +1549,7 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         const exportBusy =
           (excelBtn && excelBtn.disabled) || (dellReportBtn && dellReportBtn.disabled);
         showLoadBar =
-          !refreshAllRunning && !exportBusy && !cardsCache.length;
+          !refreshAllRunning && !exportBusy && !cardsCache.length && !cardsLoadedOnce;
         if (showLoadBar) {
           progressActive = true;
           if (progressWrap) progressWrap.hidden = false;
@@ -1585,6 +1586,8 @@ CAPACITY_REPORT_HTML = """<!DOCTYPE html>
         if (refreshStatusEl) {
           refreshStatusEl.textContent = "Could not load servers";
         }
+      } finally {
+        cardsLoadedOnce = true;
       }
     }
 
