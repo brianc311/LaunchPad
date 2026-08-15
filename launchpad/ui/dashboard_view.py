@@ -385,7 +385,7 @@ class DashboardView(ctk.CTkFrame):
 
         self.search_entry = ctk.CTkEntry(bar, placeholder_text="Search cards...")
         self.search_entry.grid(row=0, column=1, sticky="ew")
-        self.search_entry.bind("<KeyRelease>", lambda _e: self.refresh_cards())
+        self.search_entry.bind("<KeyRelease>", lambda _e: self._filter_visible_cards())
 
         bulk = ctk.CTkFrame(bar, fg_color="transparent")
         bulk.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -615,6 +615,27 @@ class DashboardView(ctk.CTkFrame):
             self.status_label.configure(text=f"Copied URL to clipboard: {url}")
         except Exception as exc:
             self.status_label.configure(text=f"Could not copy URL: {exc}")
+
+    def _filter_visible_cards(self) -> None:
+        query = self.search_entry.get() if hasattr(self, "search_entry") else ""
+        cards = [
+            self._visible_cards[widget.card_id]
+            for widget in self.card_widgets
+            if widget.card_id in self._visible_cards
+        ]
+        filtered = filter_dashboard_cards(cards, query=query)
+        match_ids = {card.id for card in filtered}
+        index = 0
+        cols = self._card_columns
+        for widget in self.card_widgets:
+            if widget.card_id in match_ids:
+                row, col = divmod(index, cols)
+                widget.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+                index += 1
+            else:
+                widget.grid_remove()
+        self._rebuild_array_rail(filtered)
+        self._update_selection_status()
 
     def refresh_cards(self) -> None:
         if self._stats_timer:
