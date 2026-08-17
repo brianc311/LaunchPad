@@ -72,6 +72,7 @@ from launchpad.esx_snap_policy import ESX_SNAP_POLICY_HTML, ESX_SNAP_POLICY_PATH
 from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
 from launchpad.esx_snap_policy_ops import (
     POLICY_NAME,
+    apply_checked_volume_details,
     build_esx_snap_array_steps,
     collect_esx_snap_inventory,
     default_vg_name,
@@ -5935,12 +5936,14 @@ class HealthServer:
 
     def preview_esx_snap_policy(self, payload: dict) -> dict[str, Any]:
         start_time = str(payload.get("start_time") or "02:00")
+        policy_name = str(payload.get("policy_name") or "").strip() or POLICY_NAME
         raw_arrays = payload.get("arrays") or []
         if not isinstance(raw_arrays, list) or not raw_arrays:
             return {
                 "ok": False,
                 "arrays": [],
                 "preview_hash": "",
+                "policy_name": policy_name,
                 "warnings": ["ERROR: select at least one array"],
             }
         arrays_out: list[dict[str, Any]] = []
@@ -5993,13 +5996,18 @@ class HealthServer:
                     }
                 )
                 continue
+            volumes = list(inventory["volumes"])
+            apply_checked_volume_details(
+                self._snap_run_command(card), volumes, volume_names
+            )
             steps, warnings, runnable = build_esx_snap_array_steps(
                 vg_name=vg_name,
                 volume_names=volume_names,
                 start_time=start_time,
                 policies=set(inventory["policies"]),
                 volume_groups=set(inventory["volume_groups"]),
-                volumes=list(inventory["volumes"]),
+                volumes=volumes,
+                policy_name=policy_name,
             )
             arrays_out.append(
                 {
@@ -6015,24 +6023,32 @@ class HealthServer:
         return {
             "ok": ok,
             "arrays": arrays_out,
-            "preview_hash": preview_hash(start_time, list(raw_arrays)),
+            "policy_name": policy_name,
+            "preview_hash": preview_hash(start_time, list(raw_arrays), policy_name),
         }
 
     def run_esx_snap_policy(self, payload: dict, *, confirm: bool) -> dict[str, Any]:
+        policy_name = str(payload.get("policy_name") or "").strip() or POLICY_NAME
         if confirm is not True:
             return {
                 "ok": False,
                 "arrays": [],
+                "policy_name": policy_name,
                 "warnings": ["confirm must be true before creating policy or volume group"],
             }
         start_time = str(payload.get("start_time") or "02:00")
         raw_arrays = payload.get("arrays") or []
-        expected = preview_hash(start_time, list(raw_arrays) if isinstance(raw_arrays, list) else [])
+        expected = preview_hash(
+            start_time,
+            list(raw_arrays) if isinstance(raw_arrays, list) else [],
+            policy_name,
+        )
         given = str(payload.get("preview_hash") or "")
         if not given or given != expected:
             return {
                 "ok": False,
                 "arrays": [],
+                "policy_name": policy_name,
                 "warnings": ["Preview must be run again before creating policy or volume group."],
             }
         preview = self.preview_esx_snap_policy(payload)
@@ -6064,16 +6080,16 @@ class HealthServer:
                     }
                 )
                 continue
-            if POLICY_NAME in set(live["policies"]) or vg_name in set(live["volume_groups"]):
+            if policy_name in set(live["policies"]) or vg_name in set(live["volume_groups"]):
                 results.append(
                     {
                         "card_id": card_id,
                         "name": card.name if card else "",
                         "ok": False,
                         "warnings": [
-                            f"ERROR: {POLICY_NAME} or {vg_name} already exists; "
+                            f"ERROR: {policy_name} or {vg_name} already exists; "
                             "no commands were run. If a previous Run created the policy, "
-                            "delete ESX-snap on the array before retrying."
+                            f"delete {policy_name} on the array before retrying."
                         ],
                         "log": [],
                     }
@@ -6093,7 +6109,8 @@ class HealthServer:
             if not executed.get("ok"):
                 executed.setdefault("warnings", [])
                 executed["warnings"].append(
-                    "No automatic rollback. If ESX-snap was created, delete it on the array before retrying."
+                    f"No automatic rollback. If {policy_name} was created, "
+                    "delete it on the array before retrying."
                 )
             results.append(
                 {
@@ -6105,7 +6122,7 @@ class HealthServer:
                 }
             )
         overall_ok = any(row.get("ok") for row in results)
-        return {"ok": overall_ok, "arrays": results}
+        return {"ok": overall_ok, "arrays": results, "policy_name": policy_name}
 
     def _fc_host_lun_maps(self, card: HealthCard) -> tuple[list[dict], str | None]:
         try:

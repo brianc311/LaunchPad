@@ -43,7 +43,7 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
   <main class="wrap">
     <section class="hero">
       <h1>ESX-snap Policy</h1>
-      <p class="lede">Create IBM snapshot policy ESX-snap (daily, keep 7 days) and a per-site volume group. Preview / Dry-run first. Run Create mutates selected arrays. Creating objects is operator-initiated. The policy schedules snapshots; Run does not create snapshots immediately.</p>
+      <p class="lede">Create a snapshot policy (default esx_snap) (daily, keep 7 days) and a per-site volume group. Preview / Dry-run first. Run Create mutates selected arrays. Creating objects is operator-initiated. The policy schedules snapshots; Run does not create snapshots immediately.</p>
       <div class="actions">
         <a class="btn secondary" href="/">Health Dashboard</a>
         <a class="btn secondary" href="/snapshot-schedule">Snapshot Schedule</a>
@@ -52,7 +52,7 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
     </section>
     <section class="section">
       <h2>Policy</h2>
-      <p>Name <strong>ESX-snap</strong> · daily · keep 7 days · start
+      <p>Name <input id="policy-name" value="esx_snap" maxlength="63" aria-label="Policy name"> · daily · keep 7 days · start
         <input id="start-time" value="02:00" size="6" aria-label="Start time">
       </p>
       <div class="actions">
@@ -77,6 +77,7 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
     const arraysEl = document.getElementById("arrays");
     const statusEl = document.getElementById("status");
     const startEl = document.getElementById("start-time");
+    const policyEl = document.getElementById("policy-name");
     const runBtn = document.getElementById("run-btn");
     const modal = document.getElementById("modal");
     const modalBody = document.getElementById("modal-body");
@@ -187,8 +188,11 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
       invalidatePreview();
       const box = document.getElementById("vols-" + cardId);
       box.innerHTML = '<p class="hint">Loading volumes…</p>';
-      const res = await fetch("/api/esx-snap-policy/volumes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_id: cardId }) });
-      const data = await res.json();
+      let data;
+      try {
+        const res = await fetch("/api/esx-snap-policy/volumes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ card_id: cardId }) });
+        data = await res.json();
+      } catch (err) { const target = document.getElementById("vols-" + cardId); if (target) { target.innerHTML = '<p class="warning">' + (err.message || err) + '</p>'; volumesByCard[cardId] = target.innerHTML; } return; }
       const target = document.getElementById("vols-" + cardId);
       if (!target) return;
       if (!data.ok) { target.innerHTML = '<p class="warning">' + (data.error || "Load failed") + '</p>'; volumesByCard[cardId] = target.innerHTML; return; }
@@ -211,39 +215,44 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
       render(); invalidatePreview();
     };
     startEl.addEventListener("input", invalidatePreview);
+    policyEl.addEventListener("input", invalidatePreview);
     document.getElementById("modal-close").onclick = () => { modal.hidden = true; };
 
     document.getElementById("preview-btn").onclick = async () => {
       invalidatePreview();
       statusEl.textContent = "Preview…";
-      const body = { start_time: startEl.value, arrays: arrayPayload() };
-      const res = await fetch("/api/esx-snap-policy/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json();
-      const lines = [];
-      (data.arrays || []).forEach((row) => {
-        lines.push("# " + (row.name || row.card_id) + " vg=" + (row.vg_name || "") + " runnable=" + row.runnable);
-        (row.warnings || []).forEach((w) => lines.push(w));
-        (row.steps || []).forEach((s) => lines.push(s.cmd));
-        lines.push("");
-      });
-      showModal("Preview / Dry-run", lines.join("\\n") || JSON.stringify(data, null, 2));
-      window.__esxPreviewOk = !!data.ok;
-      window.__esxPreviewHash = data.preview_hash || "";
-      runBtn.disabled = !window.__esxPreviewOk;
-      statusEl.textContent = data.ok ? "Preview succeeded; Run Create is enabled." : "Preview found blocking errors.";
+      const body = { start_time: startEl.value, policy_name: policyEl.value, arrays: arrayPayload() };
+      try {
+        const res = await fetch("/api/esx-snap-policy/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await res.json();
+        const lines = [];
+        (data.arrays || []).forEach((row) => {
+          lines.push("# " + (row.name || row.card_id) + " vg=" + (row.vg_name || "") + " runnable=" + row.runnable);
+          (row.warnings || []).forEach((w) => lines.push(w));
+          (row.steps || []).forEach((s) => lines.push(s.cmd));
+          lines.push("");
+        });
+        showModal("Preview / Dry-run", lines.join("\\n") || JSON.stringify(data, null, 2));
+        window.__esxPreviewOk = !!data.ok;
+        window.__esxPreviewHash = data.preview_hash || "";
+        runBtn.disabled = !window.__esxPreviewOk;
+        statusEl.textContent = data.ok ? "Preview succeeded; Run Create is enabled." : "Preview found blocking errors.";
+      } catch (err) { statusEl.textContent = "Preview failed: " + (err.message || err); }
     };
 
     document.getElementById("run-btn").onclick = async () => {
       if (!window.__esxPreviewOk) return;
-      if (!confirm("Create ESX-snap policy and volume groups on the listed arrays? This mutates the arrays.")) return;
+      if (!confirm(`Create ${policyEl.value || "esx_snap"} policy and volume groups on the listed arrays? This mutates the arrays.`)) return;
       runBtn.disabled = true;
       window.__esxPreviewOk = false;
-      const body = { start_time: startEl.value, arrays: arrayPayload(), confirm: true, preview_hash: window.__esxPreviewHash };
-      const res = await fetch("/api/esx-snap-policy/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json();
-      showModal("Run Create", JSON.stringify(data, null, 2));
-      invalidatePreview();
-      statusEl.textContent = data.ok ? "Run finished." : "Run failed or blocked.";
+      const body = { start_time: startEl.value, policy_name: policyEl.value, arrays: arrayPayload(), confirm: true, preview_hash: window.__esxPreviewHash };
+      try {
+        const res = await fetch("/api/esx-snap-policy/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await res.json();
+        showModal("Run Create", JSON.stringify(data, null, 2));
+        invalidatePreview();
+        statusEl.textContent = data.ok ? "Run finished." : "Run failed or blocked.";
+      } catch (err) { statusEl.textContent = "Run failed: " + (err.message || err); }
     };
 
     loadCards();

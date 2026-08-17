@@ -10,9 +10,10 @@ from datetime import datetime
 
 from launchpad.contingency_snap_create import SnapStep, cli_token
 from launchpad.flashsystem_fc import _get, _table_records
+from launchpad.flashsystem_parse import _parse_key_values
 
-POLICY_NAME = "ESX-snap"
-VG_SUFFIX = "_ESX-snap"
+POLICY_NAME = "esx_snap"
+VG_SUFFIX = "_esx_snap"
 VG_MAX_LEN = 63
 FIRMWARE_MSG = "Snapshot policies need IBM Storage Virtualize 8.5.1 or later"
 
@@ -64,26 +65,66 @@ def parse_named_objects(output: str) -> set[str]:
     return names
 
 
+def _volume_from_record(record: dict[str, str]) -> dict[str, str] | None:
+    name = _get(record, "name", "vdisk_name", "volume_name")
+    if not name:
+        return None
+    return {
+        "name": name,
+        "capacity": _get(record, "capacity"),
+        "volume_group": _get(
+            record, "volume_group", "volume_group_name", "volumegroup"
+        ),
+    }
+
+
 def parse_lsvdisk_membership(output: str) -> list[dict[str, str]]:
     volumes: list[dict[str, str]] = []
     for record in _table_records(output):
-        name = _get(record, "name", "vdisk_name", "volume_name")
-        if not name:
-            continue
-        volumes.append(
-            {
-                "name": name,
-                "capacity": _get(record, "capacity"),
-                "volume_group": _get(
-                    record, "volume_group", "volume_group_name", "volumegroup"
-                ),
-            }
-        )
+        volume = _volume_from_record(record)
+        if volume:
+            volumes.append(volume)
+    if volumes:
+        return volumes
+    volume = _volume_from_record(_parse_key_values(output))
+    if volume:
+        volumes.append(volume)
     return volumes
 
 
 def volume_group_of(volume: dict) -> str:
     return str(volume.get("volume_group") or "").strip()
+
+
+def apply_checked_volume_details(
+    run_cmd: Callable[[str], str],
+    volumes: list[dict],
+    volume_names: list[str],
+) -> list[dict]:
+    by_name = {str(row.get("name") or ""): row for row in volumes}
+    for name in volume_names:
+        token_name = str(name or "").strip()
+        row = by_name.get(token_name)
+        if row is None or volume_group_of(row):
+            continue
+        try:
+            token = cli_token(token_name)
+        except ValueError:
+            continue
+        out = run_cmd(f"svcinfo lsvdisk -delim : {token}")
+        if not str(out or "").strip():
+            out = run_cmd(f"svcinfo lsvdisk {token}")
+        parsed = parse_lsvdisk_membership(out)
+        group = ""
+        for item in parsed:
+            if item.get("name") == token_name:
+                group = volume_group_of(item)
+                break
+        if not group and parsed:
+            group = volume_group_of(parsed[0])
+        if group:
+            row["volume_group"] = group
+    return volumes
 
 
 def _canonical_preview_payload(start_time: str, arrays: list[dict]) -> dict:
@@ -101,9 +142,12 @@ def _canonical_preview_payload(start_time: str, arrays: list[dict]) -> dict:
     return {"start_time": str(start_time or "").strip(), "arrays": canon}
 
 
-def preview_hash(start_time: str, arrays: list[dict]) -> str:
+def preview_hash(start_time: str, arrays: list[dict], policy_name: str = "") -> str:
     blob = json.dumps(
-        _canonical_preview_payload(start_time, arrays),
+        {
+            "policy_name": str(policy_name or "").strip() or POLICY_NAME,
+            **_canonical_preview_payload(start_time, arrays),
+        },
         separators=(",", ":"),
         sort_keys=True,
     )
@@ -153,7 +197,6 @@ def collect_esx_snap_inventory(run_cmd: Callable[[str], str]) -> dict:
         vols_out = run_cmd("svcinfo lsvdisk")
     volume_groups = parse_named_objects(vg_out)
     volumes = parse_lsvdisk_membership(vols_out)
-    _fill_volume_group_members(run_cmd, volume_groups, volumes)
     return {
         "ok": True,
         "error": "",
@@ -161,34 +204,6 @@ def collect_esx_snap_inventory(run_cmd: Callable[[str], str]) -> dict:
         "volume_groups": volume_groups,
         "volumes": volumes,
     }
-
-
-def _fill_volume_group_members(
-    run_cmd: Callable[[str], str],
-    volume_groups: set[str],
-    volumes: list[dict[str, str]],
-) -> None:
-    by_name = {str(row.get("name") or ""): row for row in volumes}
-    for vg_name in sorted(volume_groups):
-        try:
-            vg = cli_token(vg_name)
-        except ValueError:
-            continue
-        member_out = run_cmd(f"svcinfo lsvolumegroupmember -delim : {vg}")
-        if not str(member_out or "").strip():
-            member_out = run_cmd(f"svcinfo lsvolumegroupmember {vg}")
-        for record in _table_records(member_out):
-            name = _get(record, "name", "vdisk_name", "volume_name")
-            if not name:
-                continue
-            existing = by_name.get(name)
-            if existing is None:
-                row = {"name": name, "capacity": "", "volume_group": vg_name}
-                volumes.append(row)
-                by_name[name] = row
-                continue
-            if not volume_group_of(existing):
-                existing["volume_group"] = vg_name
 
 
 def build_esx_snap_array_steps(
@@ -199,15 +214,20 @@ def build_esx_snap_array_steps(
     policies: set[str],
     volume_groups: set[str],
     volumes: list[dict],
+    policy_name: str = "",
     now: datetime | None = None,
 ) -> tuple[list[SnapStep], list[str], bool]:
     warnings: list[str] = []
     steps: list[SnapStep] = []
+    raw = str(policy_name or "").strip() or POLICY_NAME
     try:
-        policy = cli_token(POLICY_NAME)
+        policy = cli_token(raw)
         vg = cli_token(str(vg_name or "").strip())
     except ValueError as exc:
         warnings.append(f"ERROR: {exc}")
+        return steps, warnings, False
+    if len(policy) > VG_MAX_LEN:
+        warnings.append("ERROR: snapshot policy name exceeds 63 characters")
         return steps, warnings, False
     if len(vg) > VG_MAX_LEN:
         warnings.append("ERROR: volume group name exceeds 63 characters")
@@ -217,8 +237,8 @@ def build_esx_snap_array_steps(
     except ValueError as exc:
         warnings.append(f"ERROR: {exc}")
         return steps, warnings, False
-    if POLICY_NAME in policies:
-        warnings.append(f"ERROR: snapshot policy {POLICY_NAME} already exists")
+    if policy in policies:
+        warnings.append(f"ERROR: snapshot policy {policy} already exists")
     if vg in volume_groups:
         warnings.append(f"ERROR: volume group {vg} already exists")
     chosen = [str(name).strip() for name in volume_names if str(name).strip()]
@@ -248,7 +268,7 @@ def build_esx_snap_array_steps(
     steps.append(
         SnapStep(
             kind="mksnapshotpolicy",
-            purpose="create ESX-snap policy (daily, retain 7 days)",
+            purpose="create snapshot policy (daily, retain 7 days)",
             cmd=(
                 "svctask mksnapshotpolicy -backupunit day -backupinterval 1 "
                 f"-backupstarttime {start} -retentiondays 7 -name {policy}"
@@ -258,7 +278,7 @@ def build_esx_snap_array_steps(
     steps.append(
         SnapStep(
             kind="mkvolumegroup",
-            purpose="create volume group with ESX-snap policy",
+            purpose="create volume group with snapshot policy",
             cmd=f"svctask mkvolumegroup -snapshotpolicy {policy} -name {vg}",
         )
     )
