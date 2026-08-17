@@ -78,11 +78,14 @@ def test_steps_daily_seven_day_policy_and_add_volume():
         "svctask mkvolumegroup -snapshotpolicy esx_snap -name Windsor_esx_snap"
     )
     assert cmds[2] == (
-        "svctask addvolumetovolumegroup -volumegroup Windsor_esx_snap WIN_ESX_DS01"
+        "svctask chvdisk -volumegroup Windsor_esx_snap WIN_ESX_DS01"
     )
     assert cmds[3] == (
-        "svctask addvolumetovolumegroup -volumegroup Windsor_esx_snap WIN_NFS"
+        "svctask chvdisk -volumegroup Windsor_esx_snap WIN_NFS"
     )
+    assert steps[2].kind == "chvdisk"
+    assert steps[3].kind == "chvdisk"
+    assert all("addvolumetovolumegroup" not in step.cmd for step in steps)
     assert POLICY_NAME == "esx_snap"
 
 

@@ -285,9 +285,9 @@ def build_esx_snap_array_steps(
     for token in safe_vols:
         steps.append(
             SnapStep(
-                kind="addvolumetovolumegroup",
+                kind="chvdisk",
                 purpose=f"add volume {token}",
-                cmd=f"svctask addvolumetovolumegroup -volumegroup {vg} {token}",
+                cmd=f"svctask chvdisk -volumegroup {vg} {token}",
             )
         )
     return steps, warnings, True
