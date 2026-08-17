@@ -277,6 +277,19 @@ def test_apply_checked_volume_details_only_looks_up_empty_membership():
     assert all("lsvolumegroupmember" not in c for c in calls)
 
 
+def test_apply_checked_volume_details_parses_lsvdisk_key_value_detail():
+    volumes = parse_lsvdisk_membership(VDISK_NO_VG_COL)
+
+    def run_cmd(command: str) -> str:
+        if "lsvdisk" in command and "WIN_ESX_DS02" in command:
+            return "id:0\nname:WIN_ESX_DS02\nvolume_group_name:Already_VG\n"
+        return ""
+
+    apply_checked_volume_details(run_cmd, volumes, ["WIN_ESX_DS02"])
+    by_name = {row["name"]: row for row in volumes}
+    assert by_name["WIN_ESX_DS02"]["volume_group"] == "Already_VG"
+
+
 def test_typed_policy_name_in_steps_and_too_long():
     volumes = parse_lsvdisk_membership(VDISK_SAMPLE)
     steps, _, runnable = build_esx_snap_array_steps(

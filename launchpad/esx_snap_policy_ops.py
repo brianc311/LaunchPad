@@ -10,6 +10,7 @@ from datetime import datetime
 
 from launchpad.contingency_snap_create import SnapStep, cli_token
 from launchpad.flashsystem_fc import _get, _table_records
+from launchpad.flashsystem_parse import _parse_key_values
 
 POLICY_NAME = "esx_snap"
 VG_SUFFIX = "_esx_snap"
@@ -64,21 +65,30 @@ def parse_named_objects(output: str) -> set[str]:
     return names
 
 
+def _volume_from_record(record: dict[str, str]) -> dict[str, str] | None:
+    name = _get(record, "name", "vdisk_name", "volume_name")
+    if not name:
+        return None
+    return {
+        "name": name,
+        "capacity": _get(record, "capacity"),
+        "volume_group": _get(
+            record, "volume_group", "volume_group_name", "volumegroup"
+        ),
+    }
+
+
 def parse_lsvdisk_membership(output: str) -> list[dict[str, str]]:
     volumes: list[dict[str, str]] = []
     for record in _table_records(output):
-        name = _get(record, "name", "vdisk_name", "volume_name")
-        if not name:
-            continue
-        volumes.append(
-            {
-                "name": name,
-                "capacity": _get(record, "capacity"),
-                "volume_group": _get(
-                    record, "volume_group", "volume_group_name", "volumegroup"
-                ),
-            }
-        )
+        volume = _volume_from_record(record)
+        if volume:
+            volumes.append(volume)
+    if volumes:
+        return volumes
+    volume = _volume_from_record(_parse_key_values(output))
+    if volume:
+        volumes.append(volume)
     return volumes
 
 
