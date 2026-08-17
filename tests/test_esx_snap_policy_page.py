@@ -39,6 +39,24 @@ def test_invalidate_preview_and_confirm():
     assert 'maxlength="63"' in html
 
 
+def test_policy_name_input_and_payload():
+    html = ESX_SNAP_POLICY_HTML
+    assert 'id="policy-name"' in html
+    assert 'value="esx_snap"' in html
+    assert "policy_name" in html
+    policy_at = html.find('id="policy-name"')
+    max_at = html.find('maxlength="63"', policy_at)
+    assert max_at != -1
+
+
+def test_load_and_preview_fetch_catch_errors():
+    html = ESX_SNAP_POLICY_HTML
+    load_at = html.find("async function loadVolumes")
+    preview_at = html.find('getElementById("preview-btn").onclick')
+    assert "catch" in html[load_at:load_at + 1200]
+    assert "catch" in html[preview_at:preview_at + 1500]
+
+
 def test_run_disables_button_before_fetch():
     html = ESX_SNAP_POLICY_HTML
     run_at = html.find('getElementById("run-btn").onclick')
