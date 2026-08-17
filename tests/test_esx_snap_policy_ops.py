@@ -2,6 +2,7 @@ from datetime import datetime
 
 from launchpad.esx_snap_policy_ops import (
     POLICY_NAME,
+    apply_checked_volume_details,
     backup_start_token,
     build_esx_snap_array_steps,
     collect_esx_snap_inventory,
@@ -30,13 +31,13 @@ VDISK_SAMPLE = """id:name:capacity:volume_group
 
 def test_sanitize_and_default_vg_name():
     assert sanitize_site_token("Windsor FS9200") == "Windsor_FS9200"
-    assert default_vg_name("Windsor") == "Windsor_ESX-snap"
-    assert default_vg_name("  ") == "Site_ESX-snap"
-    assert default_vg_name("Windsor FS9200") == "Windsor_FS9200_ESX-snap"
+    assert default_vg_name("Windsor") == "Windsor_esx_snap"
+    assert default_vg_name("  ") == "Site_esx_snap"
+    assert default_vg_name("Windsor FS9200") == "Windsor_FS9200_esx_snap"
     long_name = "A" * 80
     vg = default_vg_name(long_name)
     assert len(vg) <= 63
-    assert vg.endswith("_ESX-snap")
+    assert vg.endswith("_esx_snap")
 
 
 def test_backup_start_token_uses_local_date_and_hhmm():
@@ -58,7 +59,7 @@ def test_steps_daily_seven_day_policy_and_add_volume():
     now = datetime(2026, 8, 15, 9, 0, 0)
     volumes = parse_lsvdisk_membership(VDISK_SAMPLE)
     steps, warnings, runnable = build_esx_snap_array_steps(
-        vg_name="Windsor_ESX-snap",
+        vg_name="Windsor_esx_snap",
         volume_names=["WIN_ESX_DS01", "WIN_NFS"],
         start_time="02:00",
         policies=set(),
@@ -71,46 +72,56 @@ def test_steps_daily_seven_day_policy_and_add_volume():
     cmds = [step.cmd for step in steps]
     assert cmds[0] == (
         "svctask mksnapshotpolicy -backupunit day -backupinterval 1 "
-        "-backupstarttime 2608150200 -retentiondays 7 -name ESX-snap"
+        "-backupstarttime 2608150200 -retentiondays 7 -name esx_snap"
     )
     assert cmds[1] == (
-        "svctask mkvolumegroup -snapshotpolicy ESX-snap -name Windsor_ESX-snap"
+        "svctask mkvolumegroup -snapshotpolicy esx_snap -name Windsor_esx_snap"
     )
     assert cmds[2] == (
-        "svctask addvolumetovolumegroup -volumegroup Windsor_ESX-snap WIN_ESX_DS01"
+        "svctask addvolumetovolumegroup -volumegroup Windsor_esx_snap WIN_ESX_DS01"
     )
     assert cmds[3] == (
-        "svctask addvolumetovolumegroup -volumegroup Windsor_ESX-snap WIN_NFS"
+        "svctask addvolumetovolumegroup -volumegroup Windsor_esx_snap WIN_NFS"
     )
-    assert POLICY_NAME == "ESX-snap"
+    assert POLICY_NAME == "esx_snap"
 
 
 def test_existence_and_membership_block_array():
     volumes = parse_lsvdisk_membership(VDISK_SAMPLE)
     _, warnings, runnable = build_esx_snap_array_steps(
-        vg_name="Windsor_ESX-snap",
+        vg_name="Windsor_esx_snap",
+        volume_names=["WIN_ESX_DS01"],
+        start_time="02:00",
+        policies={"esx_snap"},
+        volume_groups=set(),
+        volumes=volumes,
+    )
+    assert runnable is False
+    assert any("esx_snap" in w for w in warnings)
+
+    _, warnings, runnable = build_esx_snap_array_steps(
+        vg_name="Windsor_esx_snap",
         volume_names=["WIN_ESX_DS01"],
         start_time="02:00",
         policies={"ESX-snap"},
         volume_groups=set(),
         volumes=volumes,
     )
-    assert runnable is False
-    assert any("ESX-snap" in w for w in warnings)
+    assert runnable is True
 
     _, warnings, runnable = build_esx_snap_array_steps(
-        vg_name="Windsor_ESX-snap",
+        vg_name="Windsor_esx_snap",
         volume_names=["WIN_ESX_DS01"],
         start_time="02:00",
         policies=set(),
-        volume_groups={"Windsor_ESX-snap"},
+        volume_groups={"Windsor_esx_snap"},
         volumes=volumes,
     )
     assert runnable is False
-    assert any("Windsor_ESX-snap" in w for w in warnings)
+    assert any("Windsor_esx_snap" in w for w in warnings)
 
     _, warnings, runnable = build_esx_snap_array_steps(
-        vg_name="Windsor_ESX-snap",
+        vg_name="Windsor_esx_snap",
         volume_names=["WIN_ESX_DS02"],
         start_time="02:00",
         policies=set(),
@@ -121,7 +132,7 @@ def test_existence_and_membership_block_array():
     assert any("volume group" in w.lower() or "Already_VG" in w for w in warnings)
 
     _, warnings, runnable = build_esx_snap_array_steps(
-        vg_name="Windsor_ESX-snap",
+        vg_name="Windsor_esx_snap",
         volume_names=[],
         start_time="02:00",
         policies=set(),
@@ -152,6 +163,7 @@ def test_preview_hash_stable_and_order_independent():
             {"card_id": 2, "vg_name": "B_ESX-snap", "volume_names": ["v2", "v1"]},
             {"card_id": 1, "vg_name": "A_ESX-snap", "volume_names": ["v0"]},
         ],
+        policy_name="esx_snap",
     )
     b = preview_hash(
         "02:00",
@@ -159,6 +171,7 @@ def test_preview_hash_stable_and_order_independent():
             {"card_id": 1, "vg_name": "A_ESX-snap", "volume_names": ["v0"]},
             {"card_id": 2, "vg_name": "B_ESX-snap", "volume_names": ["v1", "v2"]},
         ],
+        policy_name="esx_snap",
     )
     assert a == b
     c = preview_hash(
@@ -167,8 +180,18 @@ def test_preview_hash_stable_and_order_independent():
             {"card_id": 1, "vg_name": "A_ESX-snap", "volume_names": ["v0"]},
             {"card_id": 2, "vg_name": "B_ESX-snap", "volume_names": ["v1", "v2"]},
         ],
+        policy_name="esx_snap",
     )
     assert a != c
+    d = preview_hash(
+        "02:00",
+        [
+            {"card_id": 1, "vg_name": "A_ESX-snap", "volume_names": ["v0"]},
+            {"card_id": 2, "vg_name": "B_ESX-snap", "volume_names": ["v1", "v2"]},
+        ],
+        policy_name="other",
+    )
+    assert a != d
 
 
 def test_collect_inventory_parses_and_flags_missing_policy_cli():
@@ -176,10 +199,10 @@ def test_collect_inventory_parses_and_flags_missing_policy_cli():
 
     def run_cmd(command: str) -> str:
         calls.append(command)
+        if "lsvolumegroupmember" in command:
+            raise AssertionError(command)
         if "lssnapshotpolicy" in command:
             return POLICY_SAMPLE
-        if "lsvolumegroupmember" in command:
-            return "id:name\n"
         if "lsvolumegroup" in command:
             return VG_SAMPLE
         if "lsvdisk" in command:
@@ -212,38 +235,71 @@ VDISK_NO_VG_COL = """id:name:capacity
 2:WIN_NFS:500.00GB
 """
 
-VG_ALREADY = """id:name
-0:Already_VG
-"""
 
-VG_MEMBERS_DS02 = """id:name
-0:WIN_ESX_DS02
-"""
+def test_collect_inventory_does_not_call_lsvolumegroupmember():
+    calls: list[str] = []
 
-
-def test_collect_fills_volume_group_from_lsvolumegroupmember():
     def run_cmd(command: str) -> str:
+        calls.append(command)
+        if "lsvolumegroupmember" in command:
+            raise AssertionError(command)
         if "lssnapshotpolicy" in command:
             return POLICY_SAMPLE
-        if "lsvolumegroupmember" in command:
-            assert "Already_VG" in command
-            return VG_MEMBERS_DS02
         if "lsvolumegroup" in command:
-            return VG_ALREADY
+            return VG_SAMPLE
         if "lsvdisk" in command:
-            return VDISK_NO_VG_COL
+            return VDISK_SAMPLE
         raise AssertionError(command)
 
     result = collect_esx_snap_inventory(run_cmd)
+    assert result["ok"] is True
+    assert not any("lsvolumegroupmember" in c for c in calls)
     by_name = {row["name"]: row for row in result["volumes"]}
     assert by_name["WIN_ESX_DS02"]["volume_group"] == "Already_VG"
-    _, warnings, runnable = build_esx_snap_array_steps(
-        vg_name="Windsor_ESX-snap",
-        volume_names=["WIN_ESX_DS02"],
+
+
+def test_apply_checked_volume_details_only_looks_up_empty_membership():
+    volumes = parse_lsvdisk_membership(VDISK_NO_VG_COL)
+    calls: list[str] = []
+
+    def run_cmd(command: str) -> str:
+        calls.append(command)
+        if "lsvolumegroupmember" in command:
+            raise AssertionError(command)
+        if "lsvdisk" in command and "WIN_ESX_DS02" in command:
+            return "id:name:volume_group_name\n0:WIN_ESX_DS02:Already_VG\n"
+        return ""
+
+    apply_checked_volume_details(run_cmd, volumes, ["WIN_ESX_DS02"])
+    by_name = {row["name"]: row for row in volumes}
+    assert by_name["WIN_ESX_DS02"]["volume_group"] == "Already_VG"
+    assert all("WIN_ESX_DS01" not in c for c in calls)
+    assert all("lsvolumegroupmember" not in c for c in calls)
+
+
+def test_typed_policy_name_in_steps_and_too_long():
+    volumes = parse_lsvdisk_membership(VDISK_SAMPLE)
+    steps, _, runnable = build_esx_snap_array_steps(
+        vg_name="Windsor_esx_snap",
+        volume_names=["WIN_ESX_DS01"],
         start_time="02:00",
         policies=set(),
-        volume_groups=result["volume_groups"],
-        volumes=result["volumes"],
+        volume_groups=set(),
+        volumes=volumes,
+        policy_name="siteA_esx",
+        now=datetime(2026, 8, 15, 9, 0, 0),
+    )
+    assert runnable is True
+    assert "-name siteA_esx" in steps[0].cmd
+    assert "-snapshotpolicy siteA_esx" in steps[1].cmd
+    _, warnings, runnable = build_esx_snap_array_steps(
+        vg_name="Windsor_esx_snap",
+        volume_names=["WIN_ESX_DS01"],
+        start_time="02:00",
+        policies=set(),
+        volume_groups=set(),
+        volumes=volumes,
+        policy_name="P" * 64,
     )
     assert runnable is False
-    assert any("Already_VG" in w for w in warnings)
+    assert any("63" in w for w in warnings)
