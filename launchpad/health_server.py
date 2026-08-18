@@ -6303,10 +6303,21 @@ class HealthServer:
         }
         for row in preview.get("arrays") or []:
             if not row.get("runnable"):
-                results.append(
-                    {"card_id": row.get("card_id"), "name": row.get("name") or "",
-                     "ok": False, "warnings": row.get("warnings") or [], "log": []}
+                warnings = row.get("warnings") or []
+                already_matched = (
+                    kind == "cloud"
+                    and any("nothing to apply" in str(warning).lower() for warning in warnings)
                 )
+                if already_matched:
+                    results.append(
+                        {"card_id": row.get("card_id"), "name": row.get("name") or "",
+                         "ok": True, "warnings": ["already at requested cloud state"], "log": []}
+                    )
+                else:
+                    results.append(
+                        {"card_id": row.get("card_id"), "name": row.get("name") or "",
+                         "ok": False, "warnings": warnings, "log": []}
+                    )
                 continue
             card_id = int(row["card_id"])
             card = self._call_home_card_by_id(card_id)

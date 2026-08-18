@@ -191,3 +191,38 @@ def test_users_and_cloud_and_hash_isolation(monkeypatch):
     out = server.run_call_home_cloud(cloud, confirm=True)
     assert out["ok"] is True
     assert any("chcloudcallhome -enable no" in c for c in calls2)
+
+
+def test_cloud_already_matched_run_is_skip_success(monkeypatch):
+    server = _server()
+    calls = _bind(
+        monkeypatch,
+        [("lscloudcallhome", CLOUD), ("lsemailserver", EMPTY_SERVERS), ("lsemailuser", ""), ("lssystem", LSYS)],
+    )
+    payload = {
+        "arrays": [{"card_id": 1, "requested": "enable"}],
+        "confirm": True,
+        "preview_hash": preview_hash("cloud", {"arrays": [{"card_id": 1, "requested": "enable"}]}),
+    }
+    out = server.run_call_home_cloud(payload, confirm=True)
+    assert out["ok"] is True
+    row = out["arrays"][0]
+    assert row["ok"] is True
+    assert row["warnings"] == ["already at requested cloud state"]
+    assert row["log"] == []
+    assert not any(c.startswith("svctask") for c in calls)
+
+    bad = {
+        "arrays": [{"card_id": 1, "requested": "maybe"}],
+        "confirm": True,
+        "preview_hash": preview_hash("cloud", {"arrays": [{"card_id": 1, "requested": "maybe"}]}),
+    }
+    calls2 = _bind(
+        monkeypatch,
+        [("lscloudcallhome", CLOUD), ("lsemailserver", EMPTY_SERVERS), ("lsemailuser", ""), ("lssystem", LSYS)],
+    )
+    failed = server.run_call_home_cloud(bad, confirm=True)
+    assert failed["ok"] is False
+    assert failed["arrays"][0]["ok"] is False
+    assert "already at requested cloud state" not in failed["arrays"][0]["warnings"]
+    assert not any(c.startswith("svctask") for c in calls2)
