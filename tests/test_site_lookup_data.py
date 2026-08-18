@@ -260,6 +260,81 @@ def test_parse_lssnapshotpolicy_missing_fields_and_key_value():
     assert kv[0]["retention"] == "keep 7 days"
 
 
+def test_parse_lssnapshotpolicy_detailed_colon_pairs():
+    rows = parse_lssnapshotpolicy(
+        "id:0\nname:predefinedsspolicy0\nbackup_unit:hour\n"
+        "backup_interval:6\nretention_days:7\n"
+    )
+    assert rows == [
+        {
+            "name": "predefinedsspolicy0",
+            "schedule": "every 6 hour",
+            "retention": "keep 7 days",
+        }
+    ]
+
+
+def test_collect_fills_schedule_from_per_policy_detail():
+    calls: list[str] = []
+
+    def run(cmd: str) -> str:
+        calls.append(cmd)
+        if cmd == "svcinfo lssnapshotpolicy -delim :":
+            return "id:name\n0:predefinedsspolicy0\n1:esx_snap\n"
+        if cmd == "svcinfo lssnapshotpolicy -delim : 0":
+            return (
+                "id:0\nname:predefinedsspolicy0\nbackup_unit:hour\n"
+                "backup_interval:6\nretention_days:7\n"
+            )
+        if cmd == "svcinfo lssnapshotpolicy -delim : 1":
+            return (
+                "id:1\nname:esx_snap\nbackup_unit:day\n"
+                "backup_interval:1\nretention_days:7\n"
+            )
+        raise AssertionError(cmd)
+
+    policies, err = collect_lookup_snapshot_policies(run)
+    assert err == ""
+    assert calls[0] == "svcinfo lssnapshotpolicy -delim :"
+    assert "svcinfo lssnapshotpolicy -delim : 0" in calls
+    assert "svcinfo lssnapshotpolicy -delim : 1" in calls
+    assert policies == [
+        {
+            "name": "predefinedsspolicy0",
+            "schedule": "every 6 hour",
+            "retention": "keep 7 days",
+        },
+        {
+            "name": "esx_snap",
+            "schedule": "every 1 day",
+            "retention": "keep 7 days",
+        },
+    ]
+
+
+def test_collect_keeps_other_policies_when_one_detail_fails():
+    def run(cmd: str) -> str:
+        if cmd == "svcinfo lssnapshotpolicy -delim :":
+            return "id:name\n0:predefinedsspolicy0\n1:esx_snap\n"
+        if " 0" in cmd or cmd.endswith(" predefinedsspolicy0"):
+            raise RuntimeError("timeout")
+        if cmd == "svcinfo lssnapshotpolicy -delim : 1":
+            return (
+                "id:1\nname:esx_snap\nbackup_unit:day\n"
+                "backup_interval:1\nretention_days:7\n"
+            )
+        raise AssertionError(cmd)
+
+    policies, err = collect_lookup_snapshot_policies(run)
+    assert err == ""
+    assert policies[0] == {
+        "name": "predefinedsspolicy0",
+        "schedule": "—",
+        "retention": "—",
+    }
+    assert policies[1]["schedule"] == "every 1 day"
+
+
 def test_collect_lookup_snapshot_policies_success_firmware_and_error():
     policies, err = collect_lookup_snapshot_policies(lambda _cmd: POLICY_SAMPLE)
     assert err == ""

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from launchpad.contingency_snap_create import cli_token
 from launchpad.flashsystem_fc import (
     _get,
     _table_records,
@@ -62,28 +63,82 @@ def _looks_like_policy_table(records: list[dict[str, str]]) -> bool:
     )
 
 
+def _policy_from_record(record: dict[str, str]) -> dict[str, str] | None:
+    name = _get(record, "name")
+    if not name:
+        return None
+    interval = _get(record, "backup_interval", "backupinterval", "interval")
+    unit = _get(record, "backup_unit", "backupunit", "unit")
+    retention = _get(record, "retention_days", "retentiondays", "retention")
+    return {
+        "id": _get(record, "id"),
+        "name": name,
+        "schedule": _schedule_label(interval, unit),
+        "retention": _retention_label(retention),
+    }
+
+
+def _public_policy(row: dict[str, str]) -> dict[str, str]:
+    return {
+        "name": row["name"],
+        "schedule": row["schedule"],
+        "retention": row["retention"],
+    }
+
+
 def parse_lssnapshotpolicy(output: str) -> list[dict[str, str]]:
+    return [_public_policy(row) for row in _parse_policy_rows(output)]
+
+
+def _parse_policy_rows(output: str) -> list[dict[str, str]]:
     records = _table_records(output)
-    if not _looks_like_policy_table(records):
-        kv = _parse_key_values(output)
-        if kv:
-            records = [kv]
     rows: list[dict[str, str]] = []
-    for record in records:
-        name = _get(record, "name")
-        if not name:
+    if _looks_like_policy_table(records):
+        for record in records:
+            row = _policy_from_record(record)
+            if row:
+                rows.append(row)
+    if rows:
+        return rows
+    kv = _parse_key_values(output)
+    row = _policy_from_record(kv) if kv else None
+    return [row] if row else []
+
+
+def _policy_needs_detail(row: dict[str, str]) -> bool:
+    return row.get("schedule") == "—" or row.get("retention") == "—"
+
+
+def _fill_policy_from_detail(
+    run_cmd: Callable[[str], str],
+    row: dict[str, str],
+) -> dict[str, str]:
+    public = _public_policy(row)
+    for raw in (row.get("id"), row.get("name")):
+        token_src = str(raw or "").strip()
+        if not token_src:
             continue
-        interval = _get(record, "backup_interval", "backupinterval")
-        unit = _get(record, "backup_unit", "backupunit")
-        retention = _get(record, "retention_days", "retentiondays", "retention")
-        rows.append(
-            {
-                "name": name,
-                "schedule": _schedule_label(interval, unit),
-                "retention": _retention_label(retention),
+        try:
+            token = cli_token(token_src)
+        except ValueError:
+            continue
+        try:
+            detail = run_cmd(f"svcinfo lssnapshotpolicy -delim : {token}")
+            if not str(detail or "").strip():
+                detail = run_cmd(f"svcinfo lssnapshotpolicy {token}")
+        except Exception:
+            continue
+        parsed = parse_lssnapshotpolicy(str(detail or ""))
+        if not parsed:
+            continue
+        filled = parsed[0]
+        if filled.get("schedule") != "—" or filled.get("retention") != "—":
+            return {
+                "name": public["name"],
+                "schedule": filled["schedule"],
+                "retention": filled["retention"],
             }
-        )
-    return rows
+    return public
 
 
 def collect_lookup_snapshot_policies(
@@ -98,7 +153,14 @@ def collect_lookup_snapshot_policies(
     text = str(output or "")
     if "not a valid command" in text.lower():
         return [], SNAPSHOT_POLICY_FIRMWARE_MSG
-    return parse_lssnapshotpolicy(text), ""
+    rows = _parse_policy_rows(text)
+    out: list[dict[str, str]] = []
+    for row in rows:
+        if _policy_needs_detail(row):
+            out.append(_fill_policy_from_detail(run_cmd, row))
+        else:
+            out.append(_public_policy(row))
+    return out, ""
 
 
 def _command_blob(item: dict) -> str:
