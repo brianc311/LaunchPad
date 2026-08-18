@@ -65,24 +65,55 @@ def test_run_without_confirm_or_wrong_kind_hash_does_not_mutate(monkeypatch):
     assert not any(c.startswith("svctask") for c in calls)
 
 
-def test_existing_server_blocks_all_apply_commands(monkeypatch):
+def test_contact_apply_succeeds_with_existing_server(monkeypatch):
     server = _server()
     calls = _bind(monkeypatch, [("lscloudcallhome", CLOUD), ("lsemailserver", SERVERS), ("lsemailuser", USERS), ("lssystem", LSYS)])
     payload = {
         "contact": {"name": "SANArch", "reply": "a@b.com", "primary": "", "alternate": ""},
-        "smtp": {"ip": "10.0.0.1", "port": "25", "username": "u", "password": "s3cret"},
         "arrays": [{"card_id": 1, "location": {"company": "Wags", "street": "", "city": "", "state": "", "postal": "", "country": "", "comment": ""}}],
     }
     preview = server.preview_call_home_apply(payload)
-    assert preview["ok"] is False
-    assert preview["arrays"][0]["runnable"] is False
-    joined = str(preview)
-    assert "s3cret" not in joined
+    assert preview["ok"] is True
+    assert preview["arrays"][0]["runnable"] is True
     payload["preview_hash"] = preview_hash("apply", payload)
     result = server.run_call_home_apply(payload, confirm=True)
+    assert result["ok"] is True
+    mutate = [c for c in calls if c.startswith("svctask")]
+    assert mutate[0].startswith("svctask chemail")
+    assert any(c.startswith("svctask chemail") for c in mutate)
+    assert not any("mkemailserver" in c for c in mutate)
+    assert not any("chemailserver" in c for c in mutate)
+
+
+def test_smtp_two_servers_not_runnable_one_server_changes(monkeypatch):
+    server = _server()
+    two = (
+        "id:name:IP_address:port:username\n"
+        "0:emailserver0:172.29.62.98:25:avijaytc\n"
+        "1:emailserver1:172.29.62.99:25:avijaytc\n"
+    )
+    calls = _bind(monkeypatch, [("lscloudcallhome", CLOUD), ("lsemailserver", two), ("lsemailuser", USERS), ("lssystem", LSYS)])
+    payload = {
+        "arrays": [{"card_id": 1, "smtp": {"ip": "10.0.0.1", "port": "25", "username": "u", "password": "s3cret"}}]
+    }
+    preview = server.preview_call_home_smtp(payload)
+    assert preview["ok"] is False
+    assert preview["arrays"][0]["runnable"] is False
+    payload["preview_hash"] = preview_hash("smtp", payload)
+    result = server.run_call_home_smtp(payload, confirm=True)
     assert result["ok"] is False
-    assert not any(c.startswith("svctask chemail") for c in calls)
-    assert not any("mkemailserver" in c for c in calls)
+    assert not any(c.startswith("svctask") for c in calls)
+
+    calls2 = _bind(monkeypatch, [("lscloudcallhome", CLOUD), ("lsemailserver", SERVERS), ("lsemailuser", USERS), ("lssystem", LSYS)])
+    one = {
+        "arrays": [{"card_id": 1, "smtp": {"ip": "10.0.0.1", "port": "25", "username": "u", "password": "s3cret"}}]
+    }
+    one["preview_hash"] = preview_hash("smtp", one)
+    result2 = server.run_call_home_smtp(one, confirm=True)
+    assert result2["ok"] is True
+    mutate = [c for c in calls2 if c.startswith("svctask")]
+    assert mutate[0].startswith("svctask chemailserver")
+    assert not any("mkemailserver" in c for c in mutate)
 
 
 def test_apply_then_remove_order(monkeypatch):
@@ -90,18 +121,15 @@ def test_apply_then_remove_order(monkeypatch):
     calls = _bind(monkeypatch, [("lscloudcallhome", CLOUD), ("lsemailserver", EMPTY_SERVERS), ("lsemailuser", USERS), ("lssystem", LSYS)])
     payload = {
         "contact": {"name": "SANArch", "reply": "a@b.com", "primary": "", "alternate": ""},
-        "smtp": {"ip": "10.0.0.1", "port": "25", "username": "u", "password": "s3cret"},
         "arrays": [{"card_id": 1, "location": {"company": "Wags", "street": "", "city": "", "state": "", "postal": "", "country": "", "comment": ""}}],
     }
     payload["preview_hash"] = preview_hash("apply", payload)
     result = server.run_call_home_apply(payload, confirm=True)
     assert result["ok"] is True
     mutate = [c for c in calls if c.startswith("svctask")]
-    assert mutate[0].startswith("svctask chemail")
-    assert mutate[-1].startswith("svctask mkemailserver")
-    assert "s3cret" in mutate[-1]
-    log_cmd = result["arrays"][0]["log"][-1]["cmd"]
-    assert "s3cret" not in log_cmd
+    assert mutate
+    assert all(c.startswith("svctask chemail") for c in mutate)
+    assert not any("mkemailserver" in c for c in mutate)
     remove = {"arrays": [{"card_id": 1}]}
     remove["preview_hash"] = preview_hash("remove", remove)
     calls2 = _bind(
@@ -119,3 +147,47 @@ def test_apply_then_remove_order(monkeypatch):
     assert mutate2[0] == "svctask stopemail"
     assert any(c.startswith("svctask rmemailuser") for c in mutate2)
     assert mutate2[-1].startswith("svctask rmemailserver")
+
+
+def test_smtp_chemailserver_in_place(monkeypatch):
+    server = _server()
+    calls = _bind(monkeypatch, [("lscloudcallhome", CLOUD), ("lsemailserver", SERVERS), ("lsemailuser", USERS), ("lssystem", LSYS)])
+    payload = {
+        "arrays": [{"card_id": 1, "smtp": {"ip": "10.0.0.1", "port": "25", "username": "u", "password": "s3cret"}}]
+    }
+    payload["preview_hash"] = preview_hash("smtp", payload)
+    result = server.run_call_home_smtp(payload, confirm=True)
+    assert result["ok"] is True
+    mutate = [c for c in calls if c.startswith("svctask")]
+    assert mutate[0].startswith("svctask chemailserver")
+    assert "s3cret" in mutate[0]
+    assert "s3cret" not in result["arrays"][0]["log"][0]["cmd"]
+
+
+def test_users_and_cloud_and_hash_isolation(monkeypatch):
+    server = _server()
+    calls = _bind(monkeypatch, [("lscloudcallhome", CLOUD), ("lsemailserver", SERVERS), ("lsemailuser", USERS), ("lssystem", LSYS)])
+    users = {
+        "arrays": [{"card_id": 1, "remove_ids": ["0"], "add": [{"address": "ops@wags.com", "user_type": "local"}]}],
+        "confirm": True,
+        "preview_hash": preview_hash("apply", {"contact": {}, "arrays": [{"card_id": 1, "location": {}}]}),
+    }
+    bad = server.run_call_home_users(users, confirm=True)
+    assert bad["ok"] is False
+    assert not any("mkemailuser" in c for c in calls)
+    users["preview_hash"] = preview_hash("users", users)
+    good = server.run_call_home_users(users, confirm=True)
+    assert good["ok"] is True
+    mutate = [c for c in calls if c.startswith("svctask")]
+    assert mutate[0].startswith("svctask rmemailuser")
+    assert any("mkemailuser" in c for c in mutate)
+    assert mutate[-1] == "svctask startemail"
+    cloud = {
+        "arrays": [{"card_id": 1, "requested": "disable"}],
+        "confirm": True,
+        "preview_hash": preview_hash("cloud", {"arrays": [{"card_id": 1, "requested": "disable"}]}),
+    }
+    calls2 = _bind(monkeypatch, [("lscloudcallhome", "id:status\n0:active\n"), ("lsemailserver", EMPTY_SERVERS), ("lsemailuser", ""), ("lssystem", LSYS)])
+    out = server.run_call_home_cloud(cloud, confirm=True)
+    assert out["ok"] is True
+    assert any("chcloudcallhome -enable no" in c for c in calls2)
