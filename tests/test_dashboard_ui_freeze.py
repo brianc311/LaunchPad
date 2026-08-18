@@ -103,6 +103,7 @@ HEADER_OPENERS = (
     "_open_volume_find",
     "_open_host_volume_health",
     "_open_system_connectivity",
+    "_open_call_home_cli",
 )
 
 EXCEL_EXPORTERS = (

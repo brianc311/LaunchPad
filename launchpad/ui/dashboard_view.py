@@ -321,6 +321,7 @@ class DashboardView(ctk.CTkFrame):
             ("Host / Volume Find", self._open_volume_find, None),
             ("Hosts & Volumes", self._open_host_volume_health, None),
             ("System Connectivity", self._open_system_connectivity, None),
+            ("Call Home CLI", self._open_call_home_cli, None),
             ("Storage Inventory", self._open_storage_inventory, None),
             ("Export Excel ▾", self._open_export_excel_menu, 140),
             ("Refresh Stats", self._fetch_all_ssh_stats, None),
@@ -2173,6 +2174,15 @@ class DashboardView(ctk.CTkFrame):
             fail_log="System Connectivity failed",
             open_url=lambda server: server.open_system_connectivity(),
             summary="System Connectivity opened — refresh live for Call Home/DNS/SNMP/NTP.",
+        )
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_call_home_cli(self) -> None:
+        worker = self._open_sync_browser_report(
+            status="Opening Call Home CLI…",
+            fail_log="Call Home CLI failed",
+            open_url=lambda server: server.open_call_home_cli(),
+            summary="Call Home CLI opened — Preview then Run Apply or Run Remove SMTP mutates the selected arrays.",
         )
         threading.Thread(target=worker, daemon=True).start()
 

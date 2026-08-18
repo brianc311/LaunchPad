@@ -1,6 +1,7 @@
 import os
 from typing import Any
 
+from launchpad.call_home_cli_ops import mask_password_in_cmd
 from launchpad.flashsystem_parse import format_command_output_html
 from launchpad.flashsystem_health import format_command_detail_html
 from launchpad.hadoop_sudo import prepare_hadoop_sudo_command
@@ -84,7 +85,7 @@ def run_remote_ssh_command(
             sudo_password=sudo_password,
         )
     target = f"{username}@{host}" if username else host
-    _log(f"SSH command on {target}: {remote_command}")
+    _log(f"SSH command on {target}: {mask_password_in_cmd(remote_command)}")
 
     if use_password_auth:
         return run_ssh_command(

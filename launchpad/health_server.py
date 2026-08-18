@@ -69,6 +69,7 @@ from launchpad.fc_cg_summary import (
     schedule_context_from_capacity,
 )
 from launchpad.esx_snap_policy import ESX_SNAP_POLICY_HTML, ESX_SNAP_POLICY_PATH
+from launchpad.call_home_cli import CALL_HOME_CLI_HTML, CALL_HOME_CLI_PATH
 from launchpad.fc_consistgrp import FC_CONSISTGRP_HTML, FC_CONSISTGRP_PATH
 from launchpad.esx_snap_policy_ops import (
     POLICY_NAME,
@@ -78,6 +79,14 @@ from launchpad.esx_snap_policy_ops import (
     default_vg_name,
     preview_hash,
     steps_payload,
+)
+from launchpad.call_home_cli_ops import (
+    build_apply_array_steps,
+    build_remove_array_steps,
+    collect_call_home_state,
+    masked_steps_payload,
+    preview_hash as call_home_preview_hash,
+    run_call_home_steps,
 )
 from launchpad.fc_consistgrp_ops import (
     build_fc_consistgrp_steps,
@@ -1008,6 +1017,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <a class="btn secondary" href="/fc-consistgrp" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">FlashCopy CGs</a>
         <a class="btn secondary" href="/host-volume-health" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Hosts & Volumes</a>
         <a class="btn secondary" href="/system-connectivity" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">System Connectivity</a>
+        <a class="btn secondary" href="/call-home-cli" style="font:inherit;border-radius:10px;height:34px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:0 14px;font-weight:600;background:#0f141d;color:var(--text);border:1px solid var(--border);">Call Home CLI</a>
         <label class="toggle-row" for="monitor-all-toggle" title="Connect and monitor every site. Leave off to keep SSH sessions closed.">
           <input type="checkbox" id="monitor-all-toggle">
           All monitoring on
@@ -2657,6 +2667,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == ESX_SNAP_POLICY_PATH:
             self._send_html(_fill_page(ESX_SNAP_POLICY_HTML))
             return
+        if path == CALL_HOME_CLI_PATH:
+            self._send_html(_fill_page(CALL_HOME_CLI_HTML))
+            return
         if path == HOST_VOLUME_HEALTH_PATH:
             self._send_html(_fill_page(HOST_VOLUME_HEALTH_HTML))
             return
@@ -2707,6 +2720,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/esx-snap-policy/cards":
             self._send_json({"cards": server.esx_snap_policy_cards()})
+            return
+        if path == "/api/call-home/cards":
+            self._send_json({"cards": server.call_home_cards()})
             return
         if path == "/api/fc-consistgrp/status/live":
             query = parse_qs(parsed.query)
@@ -4422,6 +4438,46 @@ class _HealthHandler(BaseHTTPRequestHandler):
             )
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
+        if path in {
+            "/api/call-home/state",
+            "/api/call-home/preview-apply",
+            "/api/call-home/run-apply",
+            "/api/call-home/preview-remove",
+            "/api/call-home/run-remove",
+        }:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"ok": False, "error": "JSON object required"}, status=400)
+                return
+            if path == "/api/call-home/state":
+                try:
+                    card_id = int(payload.get("card_id"))
+                except (TypeError, ValueError):
+                    self._send_json({"ok": False, "error": "card_id is required"}, status=400)
+                    return
+                result = server.call_home_state(card_id)
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+            if path == "/api/call-home/preview-apply":
+                result = server.preview_call_home_apply(payload)
+            elif path == "/api/call-home/run-apply":
+                result = server.run_call_home_apply(
+                    payload, confirm=payload.get("confirm") is True
+                )
+            elif path == "/api/call-home/preview-remove":
+                result = server.preview_call_home_remove(payload)
+            else:
+                result = server.run_call_home_remove(
+                    payload, confirm=payload.get("confirm") is True
+                )
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
         if path == "/api/volume-find/card-host":
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
@@ -6123,6 +6179,327 @@ class HealthServer:
             )
         overall_ok = any(row.get("ok") for row in results)
         return {"ok": overall_ok, "arrays": results, "policy_name": policy_name}
+
+    def _call_home_eligible(self, card: HealthCard) -> bool:
+        return (
+            str(card.device_profile or "") in SVC_PROFILES
+            and str(card.host or "").strip() != ""
+        )
+
+    def _call_home_card_by_id(self, card_id: int) -> HealthCard | None:
+        with self._lock:
+            return self._cards.get(card_id)
+
+    def call_home_cards(self) -> list[dict[str, Any]]:
+        with self._lock:
+            stored = list(sorted(self._cards.values(), key=lambda card: card.card_id))
+        return [
+            {
+                "id": card.card_id,
+                "name": card.name,
+                "host": card.host,
+                "device_profile": card.device_profile or "",
+            }
+            for card in stored
+            if self._call_home_eligible(card)
+        ]
+
+    def call_home_state(self, card_id: int) -> dict[str, Any]:
+        card = self._call_home_card_by_id(card_id)
+        if card is None or not self._call_home_eligible(card):
+            return {"ok": False, "error": f"Unknown or ineligible Health Card id {card_id}"}
+        state = collect_call_home_state(self._snap_run_command(card))
+        state["card_id"] = card_id
+        state["name"] = card.name
+        state["host"] = card.host
+        return state
+
+    def _call_home_selected(self, raw_arrays: Any) -> list[dict]:
+        if not isinstance(raw_arrays, list):
+            return []
+        return [item for item in raw_arrays if isinstance(item, dict)]
+
+    def preview_call_home_apply(self, payload: dict) -> dict[str, Any]:
+        items = self._call_home_selected(payload.get("arrays"))
+        hashed = call_home_preview_hash("apply", payload)
+        if not items:
+            return {
+                "ok": False,
+                "arrays": [],
+                "preview_hash": hashed,
+                "warnings": ["ERROR: select at least one array"],
+            }
+        arrays_out: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                card_id = int(item.get("card_id"))
+            except (TypeError, ValueError):
+                arrays_out.append(
+                    {
+                        "card_id": item.get("card_id"),
+                        "name": "",
+                        "runnable": False,
+                        "warnings": ["ERROR: card_id is required"],
+                        "steps": [],
+                    }
+                )
+                continue
+            card = self._call_home_card_by_id(card_id)
+            if card is None or not self._call_home_eligible(card):
+                arrays_out.append(
+                    {
+                        "card_id": card_id,
+                        "name": "",
+                        "runnable": False,
+                        "warnings": [f"ERROR: Unknown or ineligible Health Card id {card_id}"],
+                        "steps": [],
+                    }
+                )
+                continue
+            state = collect_call_home_state(self._snap_run_command(card))
+            if not state.get("ok"):
+                arrays_out.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name,
+                        "runnable": False,
+                        "warnings": [f"ERROR: {state.get('error') or 'load failed'}"],
+                        "steps": [],
+                    }
+                )
+                continue
+            steps, warnings, runnable = build_apply_array_steps(
+                contact=payload.get("contact") or {},
+                location=item.get("location") or {},
+                smtp=payload.get("smtp") or {},
+                servers=list(state.get("servers") or []),
+            )
+            arrays_out.append(
+                {
+                    "card_id": card_id,
+                    "name": card.name,
+                    "runnable": runnable,
+                    "warnings": warnings,
+                    "steps": masked_steps_payload(steps),
+                }
+            )
+        ok = bool(arrays_out) and all(row.get("runnable") for row in arrays_out)
+        return {"ok": ok, "arrays": arrays_out, "preview_hash": hashed}
+
+    def run_call_home_apply(self, payload: dict, *, confirm: bool) -> dict[str, Any]:
+        hashed = call_home_preview_hash("apply", payload)
+        if confirm is not True:
+            return {
+                "ok": False,
+                "arrays": [],
+                "warnings": ["confirm must be true before writing Call Home fields"],
+            }
+        given = str(payload.get("preview_hash") or "")
+        if not given or given != hashed:
+            return {
+                "ok": False,
+                "arrays": [],
+                "warnings": ["Preview must be run again before applying Call Home fields."],
+            }
+        preview = self.preview_call_home_apply(payload)
+        results: list[dict[str, Any]] = []
+        by_id = {
+            int(item["card_id"]): item
+            for item in self._call_home_selected(payload.get("arrays"))
+            if item.get("card_id") is not None
+        }
+        for row in preview.get("arrays") or []:
+            if not row.get("runnable"):
+                results.append(
+                    {
+                        "card_id": row.get("card_id"),
+                        "name": row.get("name") or "",
+                        "ok": False,
+                        "warnings": row.get("warnings") or [],
+                        "log": [],
+                    }
+                )
+                continue
+            card_id = int(row["card_id"])
+            card = self._call_home_card_by_id(card_id)
+            state = collect_call_home_state(self._snap_run_command(card))
+            if not state.get("ok"):
+                results.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name if card else "",
+                        "ok": False,
+                        "warnings": [f"ERROR: {state.get('error')}"],
+                        "log": [],
+                    }
+                )
+                continue
+            item = by_id.get(card_id) or {}
+            steps, warnings, runnable = build_apply_array_steps(
+                contact=payload.get("contact") or {},
+                location=item.get("location") or {},
+                smtp=payload.get("smtp") or {},
+                servers=list(state.get("servers") or []),
+            )
+            if not runnable:
+                results.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name if card else "",
+                        "ok": False,
+                        "warnings": warnings,
+                        "log": [],
+                    }
+                )
+                continue
+            executed = run_call_home_steps(steps, self._snap_run_command(card))
+            results.append(
+                {
+                    "card_id": card_id,
+                    "name": card.name if card else "",
+                    "ok": bool(executed.get("ok")),
+                    "warnings": executed.get("warnings") or [],
+                    "log": executed.get("log") or [],
+                }
+            )
+        overall_ok = any(row.get("ok") for row in results)
+        return {"ok": overall_ok, "arrays": results}
+
+    def preview_call_home_remove(self, payload: dict) -> dict[str, Any]:
+        items = self._call_home_selected(payload.get("arrays"))
+        hashed = call_home_preview_hash("remove", payload)
+        if not items:
+            return {
+                "ok": False,
+                "arrays": [],
+                "preview_hash": hashed,
+                "warnings": ["ERROR: select at least one array"],
+            }
+        arrays_out: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                card_id = int(item.get("card_id"))
+            except (TypeError, ValueError):
+                arrays_out.append(
+                    {
+                        "card_id": item.get("card_id"),
+                        "name": "",
+                        "runnable": False,
+                        "warnings": ["ERROR: card_id is required"],
+                        "steps": [],
+                    }
+                )
+                continue
+            card = self._call_home_card_by_id(card_id)
+            if card is None or not self._call_home_eligible(card):
+                arrays_out.append(
+                    {
+                        "card_id": card_id,
+                        "name": "",
+                        "runnable": False,
+                        "warnings": [f"ERROR: Unknown or ineligible Health Card id {card_id}"],
+                        "steps": [],
+                    }
+                )
+                continue
+            state = collect_call_home_state(self._snap_run_command(card))
+            if not state.get("ok"):
+                arrays_out.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name,
+                        "runnable": False,
+                        "warnings": [f"ERROR: {state.get('error') or 'load failed'}"],
+                        "steps": [],
+                    }
+                )
+                continue
+            steps, warnings, runnable = build_remove_array_steps(
+                users=list(state.get("users") or []),
+                servers=list(state.get("servers") or []),
+            )
+            arrays_out.append(
+                {
+                    "card_id": card_id,
+                    "name": card.name,
+                    "runnable": runnable,
+                    "warnings": warnings,
+                    "steps": masked_steps_payload(steps),
+                }
+            )
+        ok = bool(arrays_out) and all(row.get("runnable") for row in arrays_out)
+        return {"ok": ok, "arrays": arrays_out, "preview_hash": hashed}
+
+    def run_call_home_remove(self, payload: dict, *, confirm: bool) -> dict[str, Any]:
+        hashed = call_home_preview_hash("remove", payload)
+        if confirm is not True:
+            return {
+                "ok": False,
+                "arrays": [],
+                "warnings": ["confirm must be true before removing SMTP"],
+            }
+        given = str(payload.get("preview_hash") or "")
+        if not given or given != hashed:
+            return {
+                "ok": False,
+                "arrays": [],
+                "warnings": ["Preview must be run again before removing SMTP."],
+            }
+        preview = self.preview_call_home_remove(payload)
+        results: list[dict[str, Any]] = []
+        for row in preview.get("arrays") or []:
+            if not row.get("runnable"):
+                results.append(
+                    {
+                        "card_id": row.get("card_id"),
+                        "name": row.get("name") or "",
+                        "ok": False,
+                        "warnings": row.get("warnings") or [],
+                        "log": [],
+                    }
+                )
+                continue
+            card_id = int(row["card_id"])
+            card = self._call_home_card_by_id(card_id)
+            state = collect_call_home_state(self._snap_run_command(card))
+            if not state.get("ok"):
+                results.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name if card else "",
+                        "ok": False,
+                        "warnings": [f"ERROR: {state.get('error')}"],
+                        "log": [],
+                    }
+                )
+                continue
+            steps, warnings, runnable = build_remove_array_steps(
+                users=list(state.get("users") or []),
+                servers=list(state.get("servers") or []),
+            )
+            if not runnable:
+                results.append(
+                    {
+                        "card_id": card_id,
+                        "name": card.name if card else "",
+                        "ok": False,
+                        "warnings": warnings,
+                        "log": [],
+                    }
+                )
+                continue
+            executed = run_call_home_steps(steps, self._snap_run_command(card))
+            results.append(
+                {
+                    "card_id": card_id,
+                    "name": card.name if card else "",
+                    "ok": bool(executed.get("ok")),
+                    "warnings": executed.get("warnings") or [],
+                    "log": executed.get("log") or [],
+                }
+            )
+        overall_ok = any(row.get("ok") for row in results)
+        return {"ok": overall_ok, "arrays": results}
 
     def _fc_host_lun_maps(self, card: HealthCard) -> tuple[list[dict], str | None]:
         try:
@@ -8411,6 +8788,10 @@ class HealthServer:
         return f"http://127.0.0.1:{self._port}{ESX_SNAP_POLICY_PATH}"
 
     @property
+    def call_home_cli_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{CALL_HOME_CLI_PATH}"
+
+    @property
     def host_volume_health_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{HOST_VOLUME_HEALTH_PATH}"
 
@@ -9210,6 +9591,13 @@ class HealthServer:
         webbrowser.open(self.esx_snap_policy_url)
         _log(f"Opened ESX-snap Policy in browser: {self.esx_snap_policy_url}")
         return self.esx_snap_policy_url
+
+    def open_call_home_cli(self) -> str:
+        """Open the Call Home CLI page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.call_home_cli_url)
+        _log(f"Opened Call Home CLI in browser: {self.call_home_cli_url}")
+        return self.call_home_cli_url
 
     def open_host_volume_health(self) -> str:
         """Open the Hosts & Volumes Health page in the default browser."""
