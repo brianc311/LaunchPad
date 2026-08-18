@@ -49,6 +49,19 @@ def test_policy_name_input_and_payload():
     assert max_at != -1
 
 
+def test_array_host_is_https_link_outside_checkbox_label():
+    html = ESX_SNAP_POLICY_HTML
+    assert "function arrayHostLink" in html
+    assert 'class="array-ip-link"' in html
+    assert 'target="_blank"' in html
+    assert 'rel="noopener"' in html
+    assert '"https://"' in html
+    label_close = html.find("</label>' + arrayHostLink")
+    assert label_close != -1
+    link_in_label = html.find("<span class=\"hint\">' + (card.host")
+    assert link_in_label == -1
+
+
 def test_load_and_preview_fetch_catch_errors():
     html = ESX_SNAP_POLICY_HTML
     load_at = html.find("async function loadVolumes")
