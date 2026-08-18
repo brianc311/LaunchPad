@@ -208,12 +208,20 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
       }
       statusEl.textContent = "Load current finished.";
     }
+    function runHadArrayErrors(data) {
+      return (data.arrays || []).some((row) => row.ok === false);
+    }
     function previewLines(data) {
       const lines = [];
       (data.arrays || []).forEach((row) => {
-        lines.push("# " + (row.name || row.card_id) + " runnable=" + row.runnable);
+        lines.push("# " + (row.name || row.card_id) + " runnable=" + row.runnable + " ok=" + row.ok);
         (row.warnings || []).forEach((w) => lines.push(w));
         (row.steps || []).forEach((s) => lines.push(s.cmd));
+        (row.log || []).forEach((entry) => {
+          lines.push((entry.cmd || "") + " ok=" + entry.ok);
+          if (entry.error) lines.push(entry.error);
+          else if (entry.output) lines.push(entry.output);
+        });
         lines.push("");
       });
       (data.warnings || []).forEach((w) => lines.push(w));
@@ -256,7 +264,7 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/call-home/run-apply", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
         const data = await res.json();
         showModal("Run Apply", previewLines(data));
-        statusEl.textContent = data.ok ? "Apply finished." : "Apply finished with errors.";
+        statusEl.textContent = (data.ok && !runHadArrayErrors(data)) ? "Apply finished." : "Apply finished with errors.";
       } catch (err) { statusEl.textContent = "Apply failed: " + (err.message || err); }
     };
     document.getElementById("run-remove-btn").onclick = async () => {
@@ -268,7 +276,7 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
         const res = await fetch("/api/call-home/run-remove", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
         const data = await res.json();
         showModal("Run Remove SMTP", previewLines(data));
-        statusEl.textContent = data.ok ? "Remove finished." : "Remove finished with errors.";
+        statusEl.textContent = (data.ok && !runHadArrayErrors(data)) ? "Remove finished." : "Remove finished with errors.";
       } catch (err) { statusEl.textContent = "Remove failed: " + (err.message || err); }
     };
     loadCards();

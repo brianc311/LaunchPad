@@ -65,5 +65,28 @@ def test_fetch_catch_and_separate_run_kinds():
     assert "cloud Call Home" in html or "Cloud Call Home" in html
 
 
+def test_run_modal_renders_array_logs():
+    html = CALL_HOME_CLI_HTML
+    preview_at = html.find("function previewLines")
+    assert preview_at != -1
+    chunk = html[preview_at : preview_at + 900]
+    assert "row.runnable" in chunk
+    assert "row.steps" in chunk
+    assert "row.ok" in chunk
+    assert "row.log" in chunk
+    assert "entry.cmd" in chunk
+    assert "entry.error" in chunk
+    assert "entry.output" in chunk
+    apply_at = html.find('getElementById("run-apply-btn").onclick')
+    remove_at = html.find('getElementById("run-remove-btn").onclick')
+    assert apply_at != -1 and remove_at != -1
+    apply_chunk = html[apply_at : apply_at + 1400]
+    remove_chunk = html[remove_at : remove_at + 1400]
+    assert "runHadArrayErrors" in apply_chunk
+    assert "runHadArrayErrors" in remove_chunk
+    assert "Apply finished with errors." in apply_chunk
+    assert "Remove finished with errors." in remove_chunk
+
+
 def test_health_dashboard_link():
     assert 'href="/call-home-cli"' in DASHBOARD_HTML
