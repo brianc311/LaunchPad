@@ -101,6 +101,14 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
       modal.hidden = false;
     }
 
+    function arrayHostLink(host) {
+      const raw = String(host || "").trim();
+      if (!raw) return "";
+      const lower = raw.toLowerCase();
+      const href = (lower.startsWith("https://") || lower.startsWith("http://")) ? raw : ("https://" + raw);
+      return ' <a class="array-ip-link" href="' + href + '" target="_blank" rel="noopener">' + raw + '</a>';
+    }
+
     async function loadCards() {
       const res = await fetch("/api/esx-snap-policy/cards");
       const data = await res.json();
@@ -161,7 +169,7 @@ ESX_SNAP_POLICY_HTML = """<!DOCTYPE html>
           '<input class="vol-search" data-card-id="' + card.id + '" placeholder="Search volumes">' +
           '</div><div id="vols-' + card.id + '"><p class="hint">Load volumes for this array.</p></div>'
         ) : "";
-        return '<div class="array"><label class="array-head"><input class="array-check" type="checkbox" data-card-id="' + card.id + '"' + (on ? " checked" : "") + '> <strong>' + card.name + '</strong> <span class="hint">' + (card.host || "") + '</span></label>' + panel + '</div>';
+        return '<div class="array"><div class="array-head"><label><input class="array-check" type="checkbox" data-card-id="' + card.id + '"' + (on ? " checked" : "") + '> <strong>' + card.name + '</strong></label>' + arrayHostLink(card.host) + '</div>' + panel + '</div>';
       }).join("");
       arraysEl.querySelectorAll(".array-check, .load-vols, .vol-search").forEach((el) => {
         el.addEventListener("change", () => { if (el.classList.contains("array-check")) { render(); } invalidatePreview(); });
