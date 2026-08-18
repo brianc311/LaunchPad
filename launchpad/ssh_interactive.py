@@ -13,7 +13,7 @@ from pathlib import Path
 import paramiko
 
 from launchpad.config import TEMP_DIR
-from launchpad.ssh_paramiko import authenticate_with_password
+from launchpad.ssh_paramiko import authenticate_with_password, enable_legacy_ssh_algorithms
 
 SECRET_FILE = TEMP_DIR / "ssh_askpass.secret"
 
@@ -57,7 +57,7 @@ def run_interactive_shell(
 
     try:
         sock = socket.create_connection((host, port), timeout=20)
-        transport = paramiko.Transport(sock)
+        transport = enable_legacy_ssh_algorithms(paramiko.Transport(sock))
         transport.banner_timeout = 20
         transport.auth_timeout = 20
         transport.start_client(timeout=20)
