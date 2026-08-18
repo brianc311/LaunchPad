@@ -223,6 +223,86 @@ def test_refresh_site_lookup_success(monkeypatch):
     assert payload["card"]["serial"] == "serial-1"
 
 
+POLICY_OUT = """id:name:backup_unit:backup_interval:retention_days
+0:esx_snap:day:1:7
+"""
+
+
+def test_refresh_site_lookup_includes_snapshot_policies(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card()
+    commands: list[str] = []
+
+    def fake_refresh(self, card_id, **kwargs):
+        card = self._cards[card_id]
+        card.command_results = [
+            {
+                "label": "FC - Hosts",
+                "command": "svcinfo lshost -delim :",
+                "output": "id:name:status:port_count\n1:h1:online:2\n",
+                "error": None,
+            }
+        ]
+        card.error = None
+        return card
+
+    def run_for_card(_card):
+        def run(command: str) -> str:
+            commands.append(command)
+            if "lssnapshotpolicy" in command:
+                return POLICY_OUT
+            return "id:name:status\n"
+        return run
+
+    monkeypatch.setattr(HealthServer, "refresh_card", fake_refresh)
+    monkeypatch.setattr(HealthServer, "_lun_run_command", staticmethod(run_for_card))
+    monkeypatch.setattr(server, "get_contingency_groups", lambda: [])
+
+    payload = server.refresh_site_lookup(1)
+    assert any("lssnapshotpolicy" in cmd for cmd in commands)
+    assert payload["policies"][0]["name"] == "esx_snap"
+    assert payload["policies"][0]["schedule"] == "every 1 day"
+    assert payload["policies"][0]["retention"] == "keep 7 days"
+    assert payload["stats"]["policies"] == 1
+    assert payload["policies_error"] == ""
+    assert payload["hosts"][0]["host_name"] == "h1"
+
+
+def test_refresh_site_lookup_policy_failure_keeps_hosts(monkeypatch):
+    server = HealthServer()
+    server._cards[1] = _card()
+
+    def fake_refresh(self, card_id, **kwargs):
+        card = self._cards[card_id]
+        card.command_results = [
+            {
+                "label": "FC - Hosts",
+                "command": "svcinfo lshost -delim :",
+                "output": "id:name:status:port_count\n1:h1:online:2\n",
+                "error": None,
+            }
+        ]
+        card.error = None
+        return card
+
+    def run_for_card(_card):
+        def run(command: str) -> str:
+            if "lssnapshotpolicy" in command:
+                raise RuntimeError("SSH down")
+            return "id:name:status\n"
+        return run
+
+    monkeypatch.setattr(HealthServer, "refresh_card", fake_refresh)
+    monkeypatch.setattr(HealthServer, "_lun_run_command", staticmethod(run_for_card))
+    monkeypatch.setattr(server, "get_contingency_groups", lambda: [])
+
+    payload = server.refresh_site_lookup(1)
+    assert payload["hosts"][0]["host_name"] == "h1"
+    assert payload["policies"] == []
+    assert payload["policies_error"]
+    assert payload.get("warning") in (None, "")
+
+
 def test_refresh_site_lookup_missing_card():
     server = HealthServer()
 
