@@ -26,6 +26,19 @@ def test_keyboard_answers_single_and_multi_field():
     ) == ["admin", "secret"]
 
 
+def test_keyboard_answers_single_username_prompt_uses_username():
+    assert keyboard_interactive_answers(
+        [("login:", True)],
+        password="secret",
+        username="admin",
+    ) == ["admin"]
+    assert keyboard_interactive_answers(
+        [("Password for user admin:", False)],
+        password="secret",
+        username="admin",
+    ) == ["secret"]
+
+
 def test_authenticate_uses_password_when_only_password_allowed():
     transport = MagicMock()
     transport.auth_none.side_effect = paramiko.BadAuthenticationType(

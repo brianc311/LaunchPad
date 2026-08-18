@@ -16,6 +16,42 @@ CONNECT_TIMEOUT = 15
 COMMAND_TIMEOUT = 40
 HPE_CLI_BUSY_TIMEOUT = 90
 
+# IBM XIV 114/Gen3 (and similar old OpenSSH) only offer ssh-rsa host keys and
+# SHA-1 DH groups. Paramiko 5 dropped both, which surfaces as:
+# "Incompatible ssh peer (no acceptable host key)".
+_LEGACY_HOST_KEYS = ("ssh-rsa",)
+_LEGACY_KEX = (
+    "diffie-hellman-group-exchange-sha1",
+    "diffie-hellman-group14-sha1",
+    "diffie-hellman-group1-sha1",
+)
+_PASSWORD_PROMPT_TOKENS = ("password", "passcode", "passphrase", "token", "otp")
+_USERNAME_PROMPT_TOKENS = ("user", "login", "account")
+
+
+def _extend_preferred(transport: paramiko.Transport, attr: str, extra: tuple[str, ...]) -> None:
+    current = tuple(getattr(transport, attr))
+    setattr(transport, attr, tuple(dict.fromkeys(current + extra)))
+
+
+def enable_legacy_ssh_algorithms(transport: paramiko.Transport) -> paramiko.Transport:
+    """Keep modern algorithms first; append those required by IBM XIV SSH."""
+    _extend_preferred(transport, "_preferred_keys", _LEGACY_HOST_KEYS)
+    _extend_preferred(transport, "_preferred_pubkeys", _LEGACY_HOST_KEYS)
+    _extend_preferred(transport, "_preferred_kex", _LEGACY_KEX)
+    return transport
+
+
+def legacy_ssh_transport_factory(sock, **kwargs) -> paramiko.Transport:
+    return enable_legacy_ssh_algorithms(paramiko.Transport(sock, **kwargs))
+
+
+def _is_username_prompt(label: str) -> bool:
+    text = str(label or "").strip().lower()
+    if any(token in text for token in _PASSWORD_PROMPT_TOKENS):
+        return False
+    return any(token in text for token in _USERNAME_PROMPT_TOKENS)
+
 
 def keyboard_interactive_answers(
     prompt_list: list,
@@ -25,18 +61,13 @@ def keyboard_interactive_answers(
 ) -> list[str]:
     """Answer keyboard-interactive prompts without logging secrets.
 
-    Matches Paramiko's password-fallback rules for 0/1 fields, and for multiple
-    fields fills username prompts with ``username`` and others with ``password``.
+    Username-style prompts (including a lone ``login:`` field) get ``username``.
+    Prompts that mention a password still get ``password`` even if they also
+    contain the word ``user``.
     """
-    fields = list(prompt_list or [])
-    if not fields:
-        return []
-    if len(fields) == 1:
-        return [password]
     answers: list[str] = []
-    for prompt, _echo in fields:
-        label = str(prompt or "").strip().lower()
-        if "user" in label or "login" in label or "account" in label:
+    for prompt, _echo in list(prompt_list or []):
+        if _is_username_prompt(prompt):
             answers.append(username)
         else:
             answers.append(password)
@@ -208,7 +239,7 @@ def password_ssh_client(
     transport: paramiko.Transport | None = None
     try:
         sock = socket.create_connection((host, port or 22), timeout=CONNECT_TIMEOUT)
-        transport = paramiko.Transport(sock)
+        transport = enable_legacy_ssh_algorithms(paramiko.Transport(sock))
         transport.banner_timeout = CONNECT_TIMEOUT
         transport.auth_timeout = CONNECT_TIMEOUT
         transport.start_client(timeout=CONNECT_TIMEOUT)
@@ -255,6 +286,7 @@ def key_ssh_client(
             timeout=CONNECT_TIMEOUT,
             banner_timeout=CONNECT_TIMEOUT,
             auth_timeout=CONNECT_TIMEOUT,
+            transport_factory=legacy_ssh_transport_factory,
         )
         yield client
     finally:
