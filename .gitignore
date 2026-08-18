@@ -16,3 +16,6 @@ venv/
 
 # Isolated feature worktrees
 .worktrees/
+
+# Local agent scratch (briefs, reviews, progress). Specs/plans live in docs/superpowers/
+.superpowers/
