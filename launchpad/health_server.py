@@ -253,6 +253,7 @@ from launchpad.lun_builder_create import build_lun_steps, run_lun_steps
 from launchpad.mouse_jiggler import SETTING_MOUSE_JIGGLER, setting_to_enabled
 from launchpad.site_lookup import SITE_LOOKUP_HTML, SITE_LOOKUP_PATH
 from launchpad.site_lookup_data import (
+    collect_lookup_snapshot_policies,
     inventory_from_command_results,
     payload_from_card_cache,
     payload_from_live,
@@ -9052,6 +9053,13 @@ class HealthServer:
                 except Exception:
                     consist_groups = []
 
+            policies: list[dict] = []
+            policies_error = ""
+            if card.device_profile in SVC_PROFILES:
+                policies, policies_error = collect_lookup_snapshot_policies(
+                    self._lun_run_command(card)
+                )
+
             if (
                 profile in HPE_SHELL_PROFILES
                 and not volumes
@@ -9071,6 +9079,8 @@ class HealthServer:
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
                 warning=hpe_warning,
+                policies=policies,
+                policies_error=policies_error,
             )
             self._persist_site_lookup_offline(payload)
             return payload

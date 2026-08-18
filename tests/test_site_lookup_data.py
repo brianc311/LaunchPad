@@ -1,12 +1,21 @@
 from launchpad.flashsystem_fc import parse_lsconsistgrp
 from launchpad.site_lookup_data import (
+    SNAPSHOT_POLICY_FIRMWARE_MSG,
+    collect_lookup_snapshot_policies,
     filter_lookup_cards,
     inventory_from_command_results,
     match_contingency_groups,
+    parse_lssnapshotpolicy,
     payload_from_card_cache,
     payload_from_live,
     showvv_inventory_note,
 )
+
+POLICY_SAMPLE = """id:name:backup_unit:backup_interval:retention_days
+0:other-policy:day:1:7
+1::day:1:3
+2:hourly:hour:2:1
+"""
 
 
 def test_parse_lsconsistgrp_colon_table():
@@ -229,3 +238,91 @@ def test_payload_from_card_cache_warns_when_hpe_showvv_failed():
     assert payload["stats"]["hosts"] == 1
     assert payload["stats"]["volumes"] == 0
     assert "Permission denied" in (payload.get("warning") or "")
+
+
+def test_parse_lssnapshotpolicy_colon_table():
+    rows = parse_lssnapshotpolicy(POLICY_SAMPLE)
+    assert [r["name"] for r in rows] == ["other-policy", "hourly"]
+    assert rows[0]["schedule"] == "every 1 day"
+    assert rows[0]["retention"] == "keep 7 days"
+    assert rows[1]["schedule"] == "every 2 hour"
+    assert rows[1]["retention"] == "keep 1 days"
+
+
+def test_parse_lssnapshotpolicy_missing_fields_and_key_value():
+    rows = parse_lssnapshotpolicy("id:name\n0:bare\n")
+    assert rows == [{"name": "bare", "schedule": "—", "retention": "—"}]
+    kv = parse_lssnapshotpolicy(
+        "name esx_snap\nbackup_unit day\nbackup_interval 1\nretention_days 7\n"
+    )
+    assert kv[0]["name"] == "esx_snap"
+    assert kv[0]["schedule"] == "every 1 day"
+    assert kv[0]["retention"] == "keep 7 days"
+
+
+def test_collect_lookup_snapshot_policies_success_firmware_and_error():
+    policies, err = collect_lookup_snapshot_policies(lambda _cmd: POLICY_SAMPLE)
+    assert err == ""
+    assert policies[0]["name"] == "other-policy"
+
+    calls = []
+
+    def empty_then_plain(cmd: str) -> str:
+        calls.append(cmd)
+        if "-delim" in cmd:
+            return ""
+        return POLICY_SAMPLE
+
+    policies, err = collect_lookup_snapshot_policies(empty_then_plain)
+    assert calls[0] == "svcinfo lssnapshotpolicy -delim :"
+    assert calls[1] == "svcinfo lssnapshotpolicy"
+    assert err == ""
+    assert policies[0]["name"] == "other-policy"
+
+    policies, err = collect_lookup_snapshot_policies(
+        lambda _cmd: "CMMVC5782E The action failed as this is not a valid command."
+    )
+    assert policies == []
+    assert err == SNAPSHOT_POLICY_FIRMWARE_MSG
+
+    def boom(_cmd: str) -> str:
+        raise RuntimeError("SSH down")
+
+    policies, err = collect_lookup_snapshot_policies(boom)
+    assert policies == []
+    assert SNAPSHOT_POLICY_FIRMWARE_MSG in err
+    assert "SSH down" in err
+
+
+def test_payload_from_live_includes_policies():
+    card = {
+        "id": 1,
+        "name": "site",
+        "host": "1.2.3.4",
+        "model": "FS",
+        "device_profile": "flashsystem_5200",
+    }
+    payload = payload_from_live(
+        card=card,
+        hosts=[],
+        volumes=[],
+        maps=[],
+        consist_groups=[],
+        pools=[],
+        policies=[{"name": "esx_snap", "schedule": "every 1 day", "retention": "keep 7 days"}],
+        policies_error="",
+    )
+    assert payload["policies"][0]["name"] == "esx_snap"
+    assert payload["stats"]["policies"] == 1
+    assert payload["policies_error"] == ""
+    empty = payload_from_live(
+        card=card,
+        hosts=[],
+        volumes=[],
+        maps=[],
+        consist_groups=[],
+        pools=[],
+    )
+    assert empty["policies"] == []
+    assert empty["stats"]["policies"] == 0
+    assert empty["policies_error"] == ""

@@ -34,6 +34,12 @@ def normalize_snapshot(raw: dict | None) -> dict | None:
             else []
         ),
         "pools": list(raw.get("pools") or []) if isinstance(raw.get("pools"), list) else [],
+        "policies": (
+            list(raw.get("policies") or [])
+            if isinstance(raw.get("policies"), list)
+            else []
+        ),
+        "policies_error": str(raw.get("policies_error") or ""),
         "refreshed_at": str(raw.get("refreshed_at") or "").strip() or None,
     }
 
@@ -82,6 +88,8 @@ def snapshot_from_live_payload(payload: dict | None) -> dict | None:
             "mappings": payload.get("mappings") or [],
             "consistency_groups": payload.get("consistency_groups") or [],
             "pools": payload.get("pools") or [],
+            "policies": payload.get("policies") or [],
+            "policies_error": payload.get("policies_error") or "",
             "refreshed_at": payload.get("refreshed_at"),
         }
     )

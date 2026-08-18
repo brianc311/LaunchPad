@@ -9,10 +9,29 @@ def test_site_lookup_path_and_markers():
     assert "/api/site-lookup/cache?card_id=" in html
     assert "/api/site-lookup/refresh" in html
     assert "Live Refresh" in html
-    for label in ("Hosts", "Volumes", "Consistency Groups", "Pools", "CPGs"):
+    for label in ("Hosts", "Volumes", "Consistency Groups", "Policy", "Pools", "CPGs"):
         assert label in html
     assert "isHpeProfile" in html
     assert "poolLabel" in html
+
+
+def test_site_lookup_policy_tab_and_empty_copy():
+    html = SITE_LOOKUP_HTML
+    assert 'tabs.push(["policies", "Policy"])' in html
+    assert "</b>Policies</div>" in html
+    assert "No snapshot policies on this array" in html
+    assert "snapshot_policies_available" in html
+    assert "function renderPolicies" in html
+    assert "<th>Name</th><th>Schedule</th><th>Retention</th>" in html
+    render = html.split("function renderPayload() {", 1)[1].split(
+        "async function selectCard", 1
+    )[0]
+    assert render.find('["consistency_groups", "Consistency Groups"]') < render.find(
+        '["policies", "Policy"]'
+    )
+    assert render.find('["policies", "Policy"]') < render.find('["pools", poolsName]')
+    assert "const showPolicies = profileSupportsConsistencyGroups(card);" in render
+    assert "snapshot_policies_available: profileSupportsConsistencyGroups(card)" in html
 
 
 def test_site_lookup_page_contracts():

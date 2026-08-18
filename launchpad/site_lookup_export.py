@@ -16,6 +16,7 @@ HOST_HEADERS = ("Host", "Status", "Type", "Ports", "Protocol")
 VOLUME_HEADERS = ("Volume", "Status", "Capacity", "Pool/CPG", "UID")
 POOL_HEADERS = ("Name", "Used %", "Used", "Free", "Total")
 CG_HEADERS = ("Name", "Status", "Location", "Volumes", "Maps")
+POLICY_HEADERS = ("Name", "Schedule", "Retention")
 OFFLINE_HEADERS = ("Type", "Name", "Status", "Detail")
 
 
@@ -33,6 +34,25 @@ def consistency_groups_sheet_wanted(payload: dict) -> bool:
         return True
     rows = payload.get("consistency_groups") or []
     return isinstance(rows, list) and bool(rows)
+
+
+def snapshot_policies_sheet_wanted(payload: dict) -> bool:
+    if payload.get("snapshot_policies_available"):
+        return True
+    rows = payload.get("policies") or []
+    return isinstance(rows, list) and bool(rows)
+
+
+def _policy_export_rows(payload: dict) -> list[tuple[Any, ...]]:
+    return [
+        (
+            p.get("name") or "",
+            p.get("schedule") or "",
+            p.get("retention") or "",
+        )
+        for p in (payload.get("policies") or [])
+        if isinstance(p, dict)
+    ]
 
 
 def offline_inventory_rows(payload: dict) -> list[dict[str, Any]]:
@@ -136,6 +156,8 @@ def export_site_lookup_xlsx(payload: dict, *, include_offline: bool = False) -> 
             if isinstance(g, dict)
         ]
         _write_sheet(wb, "Consistency Groups", CG_HEADERS, cgs)
+    if snapshot_policies_sheet_wanted(payload):
+        _write_sheet(wb, "Policies", POLICY_HEADERS, _policy_export_rows(payload))
     if include_offline:
         offline = [
             (r["row_type"], r["name"], r["status"], r["detail"])
@@ -208,6 +230,8 @@ def export_site_lookup_csv_zip(payload: dict) -> bytes:
             if isinstance(g, dict)
         ]
         members.append(("Consistency_Groups.csv", _csv_bytes(CG_HEADERS, cgs)))
+    if snapshot_policies_sheet_wanted(payload):
+        members.append(("Policies.csv", _csv_bytes(POLICY_HEADERS, _policy_export_rows(payload))))
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name, data in members:
