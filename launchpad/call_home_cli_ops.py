@@ -16,6 +16,8 @@ from launchpad.system_connectivity import parse_svc_call_home
 CONTACT_KEYS = ("name", "reply", "primary", "alternate")
 LOCATION_KEYS = ("company", "street", "city", "state", "postal", "country", "comment")
 SMTP_KEYS = ("ip", "port", "username", "password")
+EMAIL_USER_TYPES: tuple[str, ...] = ("support", "local")
+_STATUS_STATE = frozenset({"running", "stopped"})
 CONTACT_FLAGS = (
     ("name", "-contact"),
     ("reply", "-reply"),
@@ -53,6 +55,17 @@ def mask_password_in_cmd(cmd: str) -> str:
 
 def is_email_already_stopped(text: str) -> bool:
     return "already stopped" in str(text or "").lower()
+
+
+def is_email_already_started(text: str) -> bool:
+    return "already started" in str(text or "").lower()
+
+
+def sanitize_location_state(location: dict | None) -> dict[str, str]:
+    loc = trim_fields(location, LOCATION_KEYS)
+    if loc["state"].lower() in _STATUS_STATE:
+        loc["state"] = ""
+    return loc
 
 
 def smtp_add_requested(smtp: dict | None) -> bool:
@@ -134,7 +147,7 @@ def parse_lssystem_contact_location(
         "country": _pick(values, "email_country", "email_machine_country"),
         "comment": _pick(values, "email_contact_location", "email_location", "location"),
     }
-    return contact, location
+    return contact, sanitize_location_state(location)
 
 
 def format_smtp_summary(servers: list[dict], users: list[dict]) -> str:
@@ -219,33 +232,14 @@ def build_apply_array_steps(
     *,
     contact: dict,
     location: dict,
-    smtp: dict,
-    servers: list[dict],
 ) -> tuple[list[SnapStep], list[str], bool]:
     warnings: list[str] = []
     contact = trim_fields(contact, CONTACT_KEYS)
-    location = trim_fields(location, LOCATION_KEYS)
-    smtp = trim_fields(smtp, SMTP_KEYS)
-    want_smtp = smtp_add_requested(smtp)
-    if want_smtp:
-        if not smtp["ip"] or not smtp["port"]:
-            warnings.append("ERROR: SMTP add needs IP (or hostname) and port")
-        else:
-            try:
-                port = int(smtp["port"])
-            except ValueError:
-                port = -1
-            if port < 1 or port > 65535:
-                warnings.append("ERROR: SMTP port must be 1-65535")
-        if smtp["username"] and not smtp["password"]:
-            warnings.append("ERROR: SMTP password is required when username is set")
-        if servers:
-            warnings.append("ERROR: email server already exists")
+    location = sanitize_location_state(location)
     has_contact = any(contact.values())
     has_location = any(location.values())
-    if not has_contact and not has_location and not want_smtp:
+    if not has_contact and not has_location:
         warnings.append("ERROR: nothing to apply")
-    if any(item.startswith("ERROR:") for item in warnings):
         return [], warnings, False
     steps: list[SnapStep] = []
     if has_contact:
@@ -254,23 +248,149 @@ def build_apply_array_steps(
     if has_location:
         pairs = [(flag, location[key]) for key, flag in LOCATION_FLAGS if location[key]]
         steps.append(SnapStep(kind="chemail", purpose="set location", cmd=_chemail_cmd(pairs)))
-    if want_smtp:
-        parts = [
-            "svctask",
-            "mkemailserver",
-            "-ip",
-            quote_cli_arg(smtp["ip"]),
-            "-port",
-            quote_cli_arg(smtp["port"]),
-        ]
-        if smtp["username"]:
-            parts.extend(["-username", quote_cli_arg(smtp["username"])])
-        if smtp["password"]:
-            parts.extend(["-password", quote_cli_arg(smtp["password"])])
-        steps.append(
-            SnapStep(kind="mkemailserver", purpose="add email server", cmd=" ".join(parts))
-        )
     return steps, warnings, True
+
+
+def _smtp_port_ok(port: str) -> bool:
+    try:
+        value = int(port)
+    except ValueError:
+        return False
+    return 1 <= value <= 65535
+
+
+def build_smtp_array_steps(
+    *,
+    smtp: dict,
+    servers: list[dict],
+) -> tuple[list[SnapStep], list[str], bool]:
+    warnings: list[str] = []
+    smtp = trim_fields(smtp, SMTP_KEYS)
+    if not smtp_add_requested(smtp):
+        warnings.append("ERROR: nothing to apply")
+        return [], warnings, False
+    if not smtp["ip"] or not smtp["port"]:
+        warnings.append("ERROR: SMTP needs IP (or hostname) and port")
+    elif not _smtp_port_ok(smtp["port"]):
+        warnings.append("ERROR: SMTP port must be 1-65535")
+    if len(servers) > 1:
+        warnings.append("ERROR: more than one email server")
+    existing = servers[0] if len(servers) == 1 else None
+    existing_user = str((existing or {}).get("username") or "").strip()
+    username_changing = bool(existing and smtp["username"] and smtp["username"] != existing_user)
+    if smtp["username"] and not smtp["password"] and (existing is None or username_changing):
+        warnings.append("ERROR: SMTP password is required when username is set")
+    if any(item.startswith("ERROR:") for item in warnings):
+        return [], warnings, False
+    flags: list[str] = []
+    if smtp["ip"]:
+        flags.extend(["-ip", quote_cli_arg(smtp["ip"])])
+    if smtp["port"]:
+        flags.extend(["-port", quote_cli_arg(smtp["port"])])
+    if smtp["username"]:
+        flags.extend(["-username", quote_cli_arg(smtp["username"])])
+    if smtp["password"]:
+        flags.extend(["-password", quote_cli_arg(smtp["password"])])
+    if existing is None:
+        cmd = " ".join(["svctask", "mkemailserver", *flags])
+        return [SnapStep(kind="mkemailserver", purpose="add email server", cmd=cmd)], warnings, True
+    token = _object_token(existing)
+    cmd = " ".join(["svctask", "chemailserver", quote_cli_arg(token), *flags])
+    return [SnapStep(kind="chemailserver", purpose="change email server", cmd=cmd)], warnings, True
+
+
+def _norm_addr(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def build_users_array_steps(
+    *,
+    existing: list[dict],
+    remove_ids: list[str],
+    add: list[dict],
+) -> tuple[list[SnapStep], list[str], bool]:
+    warnings: list[str] = []
+    remove_set = {str(item).strip() for item in remove_ids if str(item).strip()}
+    adds = []
+    for row in add or []:
+        if not isinstance(row, dict):
+            continue
+        address = str(row.get("address") or "").strip()
+        user_type = str(row.get("user_type") or "").strip().lower()
+        if not address:
+            continue
+        adds.append({"address": address, "user_type": user_type})
+    for row in adds:
+        if row["user_type"] not in EMAIL_USER_TYPES:
+            warnings.append("ERROR: user type must be support or local")
+            break
+    kept_addrs = {
+        _norm_addr(user.get("address") or user.get("name") or "")
+        for user in existing
+        if _object_token(user) not in remove_set
+    }
+    for row in adds:
+        if _norm_addr(row["address"]) in kept_addrs:
+            warnings.append("ERROR: duplicate email user")
+            break
+        kept_addrs.add(_norm_addr(row["address"]))
+    if not remove_set and not adds:
+        warnings.append("ERROR: nothing to apply")
+    if any(item.startswith("ERROR:") for item in warnings):
+        return [], warnings, False
+    steps: list[SnapStep] = []
+    for user in existing:
+        token = _object_token(user)
+        if token not in remove_set:
+            continue
+        steps.append(
+            SnapStep(
+                kind="rmemailuser",
+                purpose=f"remove email user {token}",
+                cmd=f"svctask rmemailuser {quote_cli_arg(token)}",
+            )
+        )
+    for row in adds:
+        steps.append(
+            SnapStep(
+                kind="mkemailuser",
+                purpose=f"add email user {row['address']}",
+                cmd=(
+                    "svctask mkemailuser -address "
+                    f"{quote_cli_arg(row['address'])} -usertype {quote_cli_arg(row['user_type'])}"
+                ),
+            )
+        )
+    if any(step.kind == "mkemailuser" for step in steps):
+        steps.append(SnapStep(kind="startemail", purpose="start email", cmd="svctask startemail"))
+    return steps, warnings, True
+
+
+def build_cloud_array_steps(
+    *,
+    requested: str,
+    configured: str,
+) -> tuple[list[SnapStep], list[str], bool]:
+    want = str(requested or "").strip().lower()
+    have = str(configured or "").strip().lower()
+    if want not in {"enable", "disable"}:
+        return [], ["ERROR: cloud requested must be enable or disable"], False
+    have_on = have in {"yes", "enable", "enabled"}
+    want_on = want == "enable"
+    if want_on == have_on:
+        return [], ["ERROR: nothing to apply"], False
+    flag = "yes" if want_on else "no"
+    return (
+        [
+            SnapStep(
+                kind="chcloudcallhome",
+                purpose="set cloud call home",
+                cmd=f"svctask chcloudcallhome -enable {flag}",
+            )
+        ],
+        [],
+        True,
+    )
 
 
 def _object_token(row: dict) -> str:
@@ -312,41 +432,58 @@ def build_remove_array_steps(
 
 def preview_hash(kind: str, payload: dict) -> str:
     arrays = payload.get("arrays") or []
+
+    def card_ids(extra=None) -> list[dict]:
+        rows = []
+        for item in arrays:
+            if not isinstance(item, dict) or item.get("card_id") is None:
+                continue
+            row = {"card_id": int(item["card_id"])}
+            if extra is not None:
+                row.update(extra(item))
+            rows.append(row)
+        return sorted(rows, key=lambda row: row["card_id"])
+
     if kind == "apply":
-        smtp = trim_fields(payload.get("smtp"), SMTP_KEYS)
-        blob: dict[str, Any] = {
+        blob = {
             "kind": "apply",
             "contact": trim_fields(payload.get("contact"), CONTACT_KEYS),
-            "smtp": {
-                "ip": smtp["ip"],
-                "port": smtp["port"],
-                "username": smtp["username"],
-                "password_sha256": password_sha256(smtp["password"]),
-            },
-            "arrays": sorted(
-                [
-                    {
-                        "card_id": int(item["card_id"]),
-                        "location": trim_fields(item.get("location"), LOCATION_KEYS),
-                    }
-                    for item in arrays
-                    if isinstance(item, dict) and item.get("card_id") is not None
-                ],
-                key=lambda row: row["card_id"],
-            ),
+            "arrays": card_ids(lambda item: {"location": sanitize_location_state(item.get("location") or {})}),
+        }
+    elif kind == "smtp":
+        def smtp_row(item: dict) -> dict:
+            smtp = trim_fields(item.get("smtp"), SMTP_KEYS)
+            return {
+                "smtp": {
+                    "ip": smtp["ip"],
+                    "port": smtp["port"],
+                    "username": smtp["username"],
+                    "password_sha256": password_sha256(smtp["password"]),
+                }
+            }
+        blob = {"kind": "smtp", "arrays": card_ids(smtp_row)}
+    elif kind == "users":
+        def users_row(item: dict) -> dict:
+            add = []
+            for row in item.get("add") or []:
+                if not isinstance(row, dict):
+                    continue
+                add.append({
+                    "address": str(row.get("address") or "").strip(),
+                    "user_type": str(row.get("user_type") or "").strip().lower(),
+                })
+            return {
+                "remove_ids": sorted(str(x).strip() for x in (item.get("remove_ids") or []) if str(x).strip()),
+                "add": add,
+            }
+        blob = {"kind": "users", "arrays": card_ids(users_row)}
+    elif kind == "cloud":
+        blob = {
+            "kind": "cloud",
+            "arrays": card_ids(lambda item: {"requested": str(item.get("requested") or "").strip().lower()}),
         }
     else:
-        blob = {
-            "kind": "remove",
-            "arrays": sorted(
-                [
-                    {"card_id": int(item["card_id"])}
-                    for item in arrays
-                    if isinstance(item, dict) and item.get("card_id") is not None
-                ],
-                key=lambda row: row["card_id"],
-            ),
-        }
+        blob = {"kind": "remove", "arrays": card_ids()}
     return hashlib.sha256(
         json.dumps(blob, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -390,12 +527,22 @@ def run_call_home_steps(
                 entry["output"] = text
                 log.append(entry)
                 continue
+            if step.kind == "startemail" and is_email_already_started(text):
+                entry["ok"] = True
+                entry["output"] = text
+                log.append(entry)
+                continue
             entry["ok"] = False
             entry["error"] = text
             log.append(entry)
             return {"ok": False, "log": log, "warnings": []}
         text = str(output or "")
         if step.kind == "stopemail" and is_email_already_stopped(text):
+            entry["ok"] = True
+            entry["output"] = text
+            log.append(entry)
+            continue
+        if step.kind == "startemail" and is_email_already_started(text):
             entry["ok"] = True
             entry["output"] = text
             log.append(entry)
