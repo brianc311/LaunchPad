@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from launchpad.flashsystem_fc import (
+    _get,
+    _table_records,
     parse_fc_hosts,
     parse_host_lun_maps,
     parse_lsvdisk_volumes,
 )
+from launchpad.flashsystem_parse import _parse_key_values
 from launchpad.storage_presets import HPE_SHELL_PROFILES
 from launchpad.volume_find import (
     parse_showhost_hosts,
@@ -16,6 +20,85 @@ from launchpad.volume_find import (
     parse_showvv_volumes,
     apply_pathsum_status_to_hosts,
 )
+
+SNAPSHOT_POLICY_FIRMWARE_MSG = (
+    "Snapshot policies need IBM Storage Virtualize 8.5.1 or later"
+)
+
+
+def _schedule_label(interval: str, unit: str) -> str:
+    if not interval or not unit:
+        return "—"
+    return f"every {interval} {unit}"
+
+
+def _retention_label(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "—"
+    try:
+        days = int(text)
+    except ValueError:
+        return "—"
+    return f"keep {days} days"
+
+
+def _looks_like_policy_table(records: list[dict[str, str]]) -> bool:
+    if not records:
+        return False
+    keys = {str(key).lower() for key in records[0].keys()}
+    return bool(
+        keys
+        & {
+            "id",
+            "backup_unit",
+            "backupunit",
+            "backup_interval",
+            "backupinterval",
+            "retention_days",
+            "retentiondays",
+            "retention",
+        }
+    )
+
+
+def parse_lssnapshotpolicy(output: str) -> list[dict[str, str]]:
+    records = _table_records(output)
+    if not _looks_like_policy_table(records):
+        kv = _parse_key_values(output)
+        if kv:
+            records = [kv]
+    rows: list[dict[str, str]] = []
+    for record in records:
+        name = _get(record, "name")
+        if not name:
+            continue
+        interval = _get(record, "backup_interval", "backupinterval")
+        unit = _get(record, "backup_unit", "backupunit")
+        retention = _get(record, "retention_days", "retentiondays", "retention")
+        rows.append(
+            {
+                "name": name,
+                "schedule": _schedule_label(interval, unit),
+                "retention": _retention_label(retention),
+            }
+        )
+    return rows
+
+
+def collect_lookup_snapshot_policies(
+    run_cmd: Callable[[str], str],
+) -> tuple[list[dict[str, str]], str]:
+    try:
+        output = run_cmd("svcinfo lssnapshotpolicy -delim :")
+        if not str(output or "").strip():
+            output = run_cmd("svcinfo lssnapshotpolicy")
+    except Exception as exc:
+        return [], f"{SNAPSHOT_POLICY_FIRMWARE_MSG} ({exc})"
+    text = str(output or "")
+    if "not a valid command" in text.lower():
+        return [], SNAPSHOT_POLICY_FIRMWARE_MSG
+    return parse_lssnapshotpolicy(text), ""
 
 
 def _command_blob(item: dict) -> str:
@@ -270,7 +353,10 @@ def _build_payload(
     refreshed_at: str | None,
     error: str | None = None,
     warning: str | None = None,
+    policies: list[dict] | None = None,
+    policies_error: str | None = None,
 ) -> dict[str, Any]:
+    policy_rows = list(policies or [])
     return {
         "card": _card_meta(card),
         "stats": {
@@ -279,12 +365,15 @@ def _build_payload(
             "pools": len(pools),
             "nodes": int(card.get("node_count") or 0),
             "consistency_groups": len(consistency_groups),
+            "policies": len(policy_rows),
         },
         "hosts": hosts,
         "volumes": volumes,
         "mappings": maps,
         "consistency_groups": consistency_groups,
         "pools": pools,
+        "policies": policy_rows,
+        "policies_error": str(policies_error or ""),
         "source": source,
         "refreshed_at": refreshed_at,
         "error": error,
@@ -318,6 +407,10 @@ def payload_from_offline_snapshot(snapshot: dict) -> dict[str, Any]:
         pools=pools,
         source="offline",
         refreshed_at=snapshot.get("refreshed_at"),
+        policies=list(snapshot.get("policies") or [])
+        if isinstance(snapshot.get("policies"), list)
+        else [],
+        policies_error=str(snapshot.get("policies_error") or ""),
     )
 
 
@@ -402,6 +495,8 @@ def payload_from_live(
     contingency_groups: list[dict] | None = None,
     refreshed_at: str | None = None,
     warning: str | None = None,
+    policies: list[dict] | None = None,
+    policies_error: str | None = None,
 ) -> dict[str, Any]:
     shaped_pools = _shape_pools(pools if pools is not None else card.get("pools"))
     if consist_groups:
@@ -424,4 +519,6 @@ def payload_from_live(
         source=source,
         refreshed_at=refreshed_at,
         warning=warning,
+        policies=policies,
+        policies_error=policies_error,
     )

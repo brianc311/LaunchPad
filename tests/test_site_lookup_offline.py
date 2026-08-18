@@ -46,6 +46,10 @@ def test_snapshot_from_live_payload_and_offline_source():
         "mappings": [{"vdisk_name": "v"}],
         "consistency_groups": [{"name": "cg"}],
         "pools": [{"name": "P0", "used_pct": 10}],
+        "policies": [
+            {"name": "esx_snap", "schedule": "every 1 day", "retention": "keep 7 days"}
+        ],
+        "policies_error": "",
         "refreshed_at": "2026-08-06T13:00:00Z",
         "source": "ssh",
     }
@@ -55,6 +59,9 @@ def test_snapshot_from_live_payload_and_offline_source():
     assert payload["source"] == "offline"
     assert payload["hosts"][0]["name"] == "h"
     assert payload["refreshed_at"] == "2026-08-06T13:00:00Z"
+    assert payload["policies"][0]["name"] == "esx_snap"
+    assert payload["stats"]["policies"] == 1
+    assert payload["policies_error"] == ""
 
 
 def test_payload_from_lun_offline():
@@ -74,3 +81,22 @@ def test_payload_from_lun_offline():
     assert payload["hosts"][0]["name"] == "host-a"
     assert payload["volumes"][0]["name"] == "vol-a"
     assert payload["mappings"] == []
+
+
+def test_offline_snapshot_missing_policies_defaults_empty():
+    snap = snapshot_from_live_payload(
+        {
+            "card": {"id": 4, "name": "old", "host": "1.1.1.1"},
+            "hosts": [{"name": "h"}],
+            "volumes": [],
+            "mappings": [],
+            "consistency_groups": [],
+            "pools": [],
+            "refreshed_at": "2026-08-06T13:00:00Z",
+        }
+    )
+    assert snap is not None
+    assert snap["policies"] == []
+    payload = payload_from_offline_snapshot(snap)
+    assert payload["policies"] == []
+    assert payload["stats"]["policies"] == 0
