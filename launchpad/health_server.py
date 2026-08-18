@@ -6271,8 +6271,6 @@ class HealthServer:
             steps, warnings, runnable = build_apply_array_steps(
                 contact=payload.get("contact") or {},
                 location=item.get("location") or {},
-                smtp=payload.get("smtp") or {},
-                servers=list(state.get("servers") or []),
             )
             arrays_out.append(
                 {
@@ -6338,8 +6336,6 @@ class HealthServer:
             steps, warnings, runnable = build_apply_array_steps(
                 contact=payload.get("contact") or {},
                 location=item.get("location") or {},
-                smtp=payload.get("smtp") or {},
-                servers=list(state.get("servers") or []),
             )
             if not runnable:
                 results.append(
