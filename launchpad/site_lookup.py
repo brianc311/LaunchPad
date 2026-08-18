@@ -395,6 +395,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
           pools: pools.length,
           nodes: asRows(card.fc_ports_by_node).length,
           consistency_groups: 0,
+          policies: 0,
         },
         hosts: hosts,
         volumes: Array.from(volumeNames.values()),
@@ -404,6 +405,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         source: "cache",
         refreshed_at: card.updated_at || null,
         consistency_groups_available: profileSupportsConsistencyGroups(card),
+        policies: [],
+        policies_error: "",
+        snapshot_policies_available: profileSupportsConsistencyGroups(card),
         has_cache: hosts.length > 0 || mappings.length > 0 || pools.length > 0,
       };
     }
@@ -422,6 +426,9 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         refreshed_at: data.refreshed_at || null,
         warning: data.warning || null,
         consistency_groups_available: profileSupportsConsistencyGroups(data.card || currentCard),
+        policies: asRows(data.policies),
+        policies_error: data.policies_error || "",
+        snapshot_policies_available: profileSupportsConsistencyGroups(data.card || currentCard),
         has_cache: true,
       };
     }
@@ -547,6 +554,21 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       return html;
     }
 
+    function renderPolicies(data) {
+      const rows = (data.policies || []).filter((row) => matchesFilter(row));
+      const errorText = String(data.policies_error || "").trim();
+      if (!rows.length) {
+        return emptyMessage(false, errorText || "No snapshot policies on this array");
+      }
+      return '<div class="table-wrap"><table><thead><tr>'
+        + "<th>Name</th><th>Schedule</th><th>Retention</th>"
+        + "</tr></thead><tbody>" + rows.map((row) => (
+          "<tr><td>" + escapeHtml(row.name || "") + "</td>"
+          + "<td>" + escapeHtml(row.schedule || "—") + "</td>"
+          + "<td>" + escapeHtml(row.retention || "—") + "</td></tr>"
+        )).join("") + "</tbody></table></div>";
+    }
+
     function numberValue(value) {
       const number = Number(value);
       return Number.isFinite(number) ? number : null;
@@ -622,18 +644,22 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
       const card = data.card || {};
       const stats = data.stats || {};
       const showCgs = profileSupportsConsistencyGroups(card);
+      const showPolicies = profileSupportsConsistencyGroups(card);
       const poolsName = poolLabel(card);
       const tabs = [
         ["hosts", "Hosts"],
         ["volumes", "Volumes"],
       ];
       if (showCgs) tabs.push(["consistency_groups", "Consistency Groups"]);
+      if (showPolicies) tabs.push(["policies", "Policy"]);
       tabs.push(["pools", poolsName]);
       if (!showCgs && activeTab === "consistency_groups") activeTab = "hosts";
+      if (!showPolicies && activeTab === "policies") activeTab = "hosts";
       let body = "";
       if (activeTab === "hosts") body = renderHosts(data);
       else if (activeTab === "volumes") body = renderVolumes(data);
       else if (activeTab === "consistency_groups") body = renderConsistencyGroups(data);
+      else if (activeTab === "policies") body = renderPolicies(data);
       else body = renderPools(data);
       let statsHtml = '<div class="stat-row"><div class="stat"><b>'
         + escapeHtml(stats.hosts == null ? data.hosts.length : stats.hosts) + "</b>Hosts</div>"
@@ -642,6 +668,11 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
         statsHtml += '<div class="stat"><b>'
           + escapeHtml(stats.consistency_groups == null ? data.consistency_groups.length : stats.consistency_groups)
           + "</b>Consistency Groups</div>";
+      }
+      if (showPolicies) {
+        statsHtml += '<div class="stat"><b>'
+          + escapeHtml(stats.policies == null ? (data.policies || []).length : stats.policies)
+          + "</b>Policies</div>";
       }
       statsHtml += '<div class="stat"><b>'
         + escapeHtml(stats.pools == null ? data.pools.length : stats.pools)
@@ -670,6 +701,7 @@ SITE_LOOKUP_HTML = """<!DOCTYPE html>
           if (activeTab === "hosts") bodyEl.innerHTML = renderHosts(currentPayload);
           else if (activeTab === "volumes") bodyEl.innerHTML = renderVolumes(currentPayload);
           else if (activeTab === "consistency_groups") bodyEl.innerHTML = renderConsistencyGroups(currentPayload);
+          else if (activeTab === "policies") bodyEl.innerHTML = renderPolicies(currentPayload);
           else bodyEl.innerHTML = renderPools(currentPayload);
         });
       }
