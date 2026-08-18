@@ -51,6 +51,19 @@ def test_enable_legacy_ssh_algorithms_adds_xiv_host_key_and_kex():
         transport.close()
 
 
+def test_enable_legacy_registers_ssh_rsa_for_host_key_verify():
+    """Paramiko 5 dropped ssh-rsa from _key_info; XIV still signs kex with it."""
+    assert "ssh-rsa" not in paramiko.Transport._key_info
+    transport = paramiko.Transport(_DummySock())
+    try:
+        enable_legacy_ssh_algorithms(transport)
+        key_cls = transport._key_info["ssh-rsa"]
+        assert "ssh-rsa" in key_cls.HASHES
+        assert "ssh-rsa" not in paramiko.Transport._key_info
+    finally:
+        transport.close()
+
+
 def test_legacy_ssh_transport_factory_enables_ssh_rsa():
     transport = legacy_ssh_transport_factory(_DummySock())
     try:

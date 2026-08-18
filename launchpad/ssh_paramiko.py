@@ -11,14 +11,19 @@ from pathlib import Path
 from typing import Iterator
 
 import paramiko
+from cryptography.hazmat.primitives import hashes
+from paramiko.rsakey import RSAKey
 
 CONNECT_TIMEOUT = 15
 COMMAND_TIMEOUT = 40
 HPE_CLI_BUSY_TIMEOUT = 90
 
 # IBM XIV 114/Gen3 (and similar old OpenSSH) only offer ssh-rsa host keys and
-# SHA-1 DH groups. Paramiko 5 dropped both, which surfaces as:
-# "Incompatible ssh peer (no acceptable host key)".
+# SHA-1 DH groups. Paramiko 5 dropped both from preferred lists (that surfaces
+# as "Incompatible ssh peer (no acceptable host key)") and also dropped
+# ssh-rsa from Transport._key_info and RSAKey.HASHES. Re-adding the name to
+# preferred_keys without the verify map raises KeyError: 'ssh-rsa' during ECDH
+# host-key check (kex_ecdh_nist → Transport._verify_key).
 _LEGACY_HOST_KEYS = ("ssh-rsa",)
 _LEGACY_KEX = (
     "diffie-hellman-group-exchange-sha1",
@@ -27,6 +32,16 @@ _LEGACY_KEX = (
 )
 _PASSWORD_PROMPT_TOKENS = ("password", "passcode", "passphrase", "token", "otp")
 _USERNAME_PROMPT_TOKENS = ("user", "login", "account")
+
+
+class LegacyRSAKey(RSAKey):
+    """RSA host keys that still verify SHA-1 ``ssh-rsa`` (IBM XIV)."""
+
+    HASHES = {
+        **RSAKey.HASHES,
+        "ssh-rsa": hashes.SHA1,
+        "ssh-rsa-cert-v01@openssh.com": hashes.SHA1,
+    }
 
 
 def _extend_preferred(transport: paramiko.Transport, attr: str, extra: tuple[str, ...]) -> None:
@@ -39,6 +54,10 @@ def enable_legacy_ssh_algorithms(transport: paramiko.Transport) -> paramiko.Tran
     _extend_preferred(transport, "_preferred_keys", _LEGACY_HOST_KEYS)
     _extend_preferred(transport, "_preferred_pubkeys", _LEGACY_HOST_KEYS)
     _extend_preferred(transport, "_preferred_kex", _LEGACY_KEX)
+    key_info = dict(transport._key_info)
+    key_info["ssh-rsa"] = LegacyRSAKey
+    key_info["ssh-rsa-cert-v01@openssh.com"] = LegacyRSAKey
+    transport._key_info = key_info
     return transport
 
 
