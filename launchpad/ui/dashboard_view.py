@@ -320,6 +320,7 @@ class DashboardView(ctk.CTkFrame):
             ("FC WWPN", self._open_fc_wwpn_report_all, None),
             ("Site Lookup", self._open_site_lookup_all, None),
             ("Ansible Pad", self._open_ansible_pad, None),
+            ("vCenters", self._open_vcenters, None),
             ("Host Power", self._open_host_power, None),
             ("Consistency Groups", self._open_contingency_groups, None),
             ("FlashCopy CGs", self._open_fc_consistgrp, None),
@@ -2219,6 +2220,15 @@ class DashboardView(ctk.CTkFrame):
             fail_log="Storage Inventory failed",
             open_url=lambda server: server.open_storage_inventory(),
             summary="Storage Inventory opened — refresh live for fleet device inventory.",
+        )
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_vcenters(self) -> None:
+        worker = self._open_sync_browser_report(
+            status="Opening vCenters…",
+            fail_log="vCenters failed",
+            open_url=lambda server: server.open_vcenters(),
+            summary="vCenters opened — add name, location, and address, then use the vSphere link.",
         )
         threading.Thread(target=worker, daemon=True).start()
 

@@ -95,6 +95,7 @@ HEADER_OPENERS = (
     "_open_fc_wwpn_report_all",
     "_open_site_lookup_all",
     "_open_ansible_pad",
+    "_open_vcenters",
     "_open_host_power",
     "_open_contingency_groups",
     "_open_fc_consistgrp",

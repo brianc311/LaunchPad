@@ -18,6 +18,13 @@ from urllib.parse import parse_qs, urlparse
 import paramiko
 
 from launchpad.ansible_pad import ANSIBLE_PAD_HTML, ANSIBLE_PAD_PATH
+from launchpad.vcenters import VCENTERS_HTML, VCENTERS_PATH
+from launchpad.vcenters_directory import (
+    SETTING_VCENTERS_DIRECTORY,
+    delete_vcenter,
+    parse_vcenters_setting,
+    upsert_vcenter,
+)
 from launchpad.ansible_pad_export import (
     build_ansible_pad_files,
     build_ansible_pad_zip_bytes,
@@ -2692,6 +2699,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if path == ANSIBLE_PAD_PATH:
             self._send_html(_fill_page(ANSIBLE_PAD_HTML))
             return
+        if path == VCENTERS_PATH:
+            self._send_html(_fill_page(VCENTERS_HTML))
+            return
         if path == HOST_POWER_PATH:
             self._send_html(_fill_page(HOST_POWER_HTML))
             return
@@ -2700,6 +2710,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 self._send_json(server.get_ansible_pad_settings())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=500)
+            return
+        if path == "/api/vcenters":
+            self._send_json(server.get_vcenters())
             return
         if path == "/api/ansible-pad/export.zip":
             try:
@@ -3776,6 +3789,44 @@ class _HealthHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
             return
+        if path == "/api/vcenters":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                self._send_json(server.upsert_vcenter_record(payload))
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
+        if path == "/api/vcenters/delete":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                self._send_json(
+                    server.delete_vcenter_record(str(payload.get("id") or ""))
+                )
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
         if path in {
             "/api/ansible-pad/sync-run",
             "/api/ansible-pad/run-existing",
@@ -4791,6 +4842,43 @@ class HealthServer:
         for setting, field in _ANSIBLE_PAD_SECRET_SETTINGS.items():
             setter(setting, encrypt_text(crypto_key, cleaned[field]) if crypto_key else "")
         return self._ansible_pad_public_settings(cleaned)
+
+    def get_vcenters(self) -> dict:
+        with self._lock:
+            getter = self._get_setting
+            setter = self._set_setting
+        unlocked = getter is not None and setter is not None
+        if not getter:
+            return {"vcenters": [], "unlocked": False}
+        raw = getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]"
+        return {
+            "vcenters": parse_vcenters_setting(raw),
+            "unlocked": unlocked,
+        }
+
+    def upsert_vcenter_record(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object required")
+        with self._lock:
+            getter = self._get_setting
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError("LaunchPad must be unlocked to save vCenters.")
+        raw = (getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]") if getter else "[]"
+        cleaned = upsert_vcenter(parse_vcenters_setting(raw), payload)
+        setter(SETTING_VCENTERS_DIRECTORY, json.dumps(cleaned))
+        return {"vcenters": cleaned, "unlocked": True}
+
+    def delete_vcenter_record(self, vcenter_id: str) -> dict:
+        with self._lock:
+            getter = self._get_setting
+            setter = self._set_setting
+        if not setter:
+            raise RuntimeError("LaunchPad must be unlocked to save vCenters.")
+        raw = (getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]") if getter else "[]"
+        cleaned = delete_vcenter(parse_vcenters_setting(raw), vcenter_id)
+        setter(SETTING_VCENTERS_DIRECTORY, json.dumps(cleaned))
+        return {"vcenters": cleaned, "unlocked": True}
 
     def _ansible_pad_export_cards(self) -> list[dict]:
         with self._lock:
@@ -8800,6 +8888,10 @@ class HealthServer:
         return f"http://127.0.0.1:{self._port}{ANSIBLE_PAD_PATH}"
 
     @property
+    def vcenters_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}{VCENTERS_PATH}"
+
+    @property
     def host_power_url(self) -> str:
         return f"http://127.0.0.1:{self._port}{HOST_POWER_PATH}"
 
@@ -9619,6 +9711,13 @@ class HealthServer:
         webbrowser.open(self.storage_inventory_url)
         _log(f"Opened Storage Inventory in browser: {self.storage_inventory_url}")
         return self.storage_inventory_url
+
+    def open_vcenters(self) -> str:
+        """Open the vCenters directory page in the default browser."""
+        self.ensure_running()
+        webbrowser.open(self.vcenters_url)
+        _log(f"Opened vCenters in browser: {self.vcenters_url}")
+        return self.vcenters_url
 
 
 _instance: HealthServer | None = None
