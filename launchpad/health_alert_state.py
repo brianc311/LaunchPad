@@ -8,6 +8,7 @@ from datetime import date, datetime
 from typing import Any
 
 HEALTH_ALERT_SETTING = "health_alert_state"
+SETTING_ALERT_POPUPS = "alert_popups_enabled"
 CONNECTIVITY_SENTINEL = "connectivity"
 
 DEFAULT_ACTIVE_ISSUES_SINCE = "2026-08-14"
@@ -18,6 +19,15 @@ _DRIVE_CATEGORIES = frozenset({"nvme", "disk", "mdisk", "drive"})
 _OFFLINE_DEGRADED = frozenset(
     {"offline", "degraded", "failed", "error", "down", "missing", "inactive", "fault"}
 )
+
+
+def desktop_alert_popups_enabled(value: str | None) -> bool:
+    """Return whether desktop critical popups should open.
+
+    Missing or empty setting means On. Only the string ``false`` (any case,
+    surrounding whitespace ignored) turns popups off.
+    """
+    return str(value or "").strip().lower() != "false"
 
 
 def issue_fingerprint(card_id: int | str, category: str, message: str) -> str:

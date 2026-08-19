@@ -36,7 +36,11 @@ from launchpad.dashboard_array_rail import (
 from launchpad.database import Card
 from launchpad.health_format import card_stats_columns, command_results_columns
 from launchpad.health_alert_art import ensure_health_alert_art_dir
-from launchpad.health_alert_state import same_health_alert_card_id
+from launchpad.health_alert_state import (
+    SETTING_ALERT_POPUPS,
+    desktop_alert_popups_enabled,
+    same_health_alert_card_id,
+)
 from launchpad.health_metrics import run_remote_metrics
 from launchpad.health_server import get_health_server
 from launchpad.launchers import launch_card
@@ -117,6 +121,9 @@ class DashboardView(ctk.CTkFrame):
         self._expanded_card_ids = self._load_expanded_card_ids()
         self._mouse_jiggler_enabled = setting_to_enabled(
             self.db.get_setting(SETTING_MOUSE_JIGGLER, "")
+        )
+        self._alert_popups_enabled = desktop_alert_popups_enabled(
+            self.db.get_setting(SETTING_ALERT_POPUPS, "")
         )
 
         self.grid_columnconfigure(0, weight=1)
@@ -395,7 +402,7 @@ class DashboardView(ctk.CTkFrame):
         # Row 0: toggles + selection count (keeps the button row from overflowing).
         toggles = ctk.CTkFrame(bulk, fg_color="transparent")
         toggles.grid(row=0, column=0, sticky="ew")
-        toggles.grid_columnconfigure(3, weight=1)
+        toggles.grid_columnconfigure(4, weight=1)
 
         self.compact_switch = ctk.CTkSwitch(
             toggles,
@@ -422,13 +429,22 @@ class DashboardView(ctk.CTkFrame):
             self.mouse_jiggler_switch.select()
         self.mouse_jiggler_switch.grid(row=0, column=2, padx=(0, 12))
 
+        self.alert_popups_switch = ctk.CTkSwitch(
+            toggles,
+            text="Alert popups",
+            command=self._toggle_alert_popups,
+        )
+        if self._alert_popups_enabled:
+            self.alert_popups_switch.select()
+        self.alert_popups_switch.grid(row=0, column=3, padx=(0, 12))
+
         self.selection_label = ctk.CTkLabel(
             toggles,
             text="0 selected",
             text_color=self.theme["muted"],
             font=ctk.CTkFont(size=12),
         )
-        self.selection_label.grid(row=0, column=3, padx=(12, 0), sticky="e")
+        self.selection_label.grid(row=0, column=4, padx=(12, 0), sticky="e")
 
         # Row 1: bulk action buttons (own line so Expand/Collapse stay on-screen).
         actions = ctk.CTkFrame(bulk, fg_color="transparent")
@@ -931,6 +947,15 @@ class DashboardView(ctk.CTkFrame):
             if alert.get("fingerprint") is not None
         }
         self._health_alert_beeped &= active_fingerprints
+
+        self._health_alert_cards_meta = payload.get("cards") or {}
+        self._sync_health_alarm_muted_indicators()
+        groups = group_health_alerts(alerts)
+        self._sync_health_alert_overlays(groups)
+
+        if not self._alert_popups_enabled:
+            return
+
         beeped_this_poll = False
         for alert in alerts:
             fingerprint = str(alert.get("fingerprint") or "")
@@ -940,11 +965,6 @@ class DashboardView(ctk.CTkFrame):
                 play_health_alert_beep()
                 beeped_this_poll = True
             self._health_alert_beeped.add(fingerprint)
-
-        self._health_alert_cards_meta = payload.get("cards") or {}
-        self._sync_health_alarm_muted_indicators()
-        groups = group_health_alerts(alerts)
-        self._sync_health_alert_overlays(groups)
 
         if self._health_alert_dialog is not None:
             return
@@ -1675,6 +1695,13 @@ class DashboardView(ctk.CTkFrame):
         self.db.set_setting(SETTING_MOUSE_JIGGLER, "true" if enabled else "false")
         if hasattr(self.master, "set_mouse_jiggler_enabled"):
             self.master.set_mouse_jiggler_enabled(enabled)
+
+    def _toggle_alert_popups(self) -> None:
+        enabled = bool(self.alert_popups_switch.get())
+        self._alert_popups_enabled = enabled
+        self.db.set_setting(SETTING_ALERT_POPUPS, "true" if enabled else "false")
+        if not enabled:
+            self._force_close_health_alert_dialog()
 
     def _toggle_compact_cards(self) -> None:
         self._cards_compact = bool(self.compact_switch.get())
