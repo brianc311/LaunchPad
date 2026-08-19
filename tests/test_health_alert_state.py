@@ -3,9 +3,11 @@ from datetime import datetime
 from launchpad.health_alert_state import (
     CONNECTIVITY_SENTINEL,
     DEFAULT_ACTIVE_ISSUES_SINCE,
+    SETTING_ALERT_POPUPS,
     acknowledge,
     cards_have_health_signal,
     collect_critical_candidates,
+    desktop_alert_popups_enabled,
     empty_state,
     ensure_first_seen,
     grandfather_fingerprints,
@@ -529,3 +531,14 @@ def test_prepare_command_results_only_applies_empty_baseline():
     out2 = prepare_health_issue_limit(out, [leftover], now=_ts(2026, 8, 15))
     assert fp not in out2["grandfathered"]
     assert issue_is_visible(out2, fp, now=_ts(2026, 8, 15)) is True
+
+
+def test_desktop_alert_popups_enabled_defaults_on():
+    assert SETTING_ALERT_POPUPS == "alert_popups_enabled"
+    assert desktop_alert_popups_enabled(None) is True
+    assert desktop_alert_popups_enabled("") is True
+    assert desktop_alert_popups_enabled("true") is True
+    assert desktop_alert_popups_enabled("TRUE") is True
+    assert desktop_alert_popups_enabled("false") is False
+    assert desktop_alert_popups_enabled("FALSE") is False
+    assert desktop_alert_popups_enabled(" false ") is False
