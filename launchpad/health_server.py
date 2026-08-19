@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -21,8 +22,11 @@ from launchpad.ansible_pad import ANSIBLE_PAD_HTML, ANSIBLE_PAD_PATH
 from launchpad.vcenters import VCENTERS_HTML, VCENTERS_PATH
 from launchpad.vcenters_directory import (
     SETTING_VCENTERS_DIRECTORY,
+    VPXCLIENT_PATH,
     delete_vcenter,
     parse_vcenters_setting,
+    public_vcenters,
+    resolve_password_encrypted,
     upsert_vcenter,
 )
 from launchpad.ansible_pad_export import (
@@ -3827,6 +3831,26 @@ class _HealthHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=400)
             return
+        if path == "/api/vcenters/launch":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "Invalid JSON"}, status=400)
+                return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, status=400)
+                return
+            try:
+                self._send_json(
+                    server.launch_vcenter_client(str(payload.get("id") or ""))
+                )
+            except RuntimeError as exc:
+                self._send_json({"error": str(exc)}, status=503)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
         if path in {
             "/api/ansible-pad/sync-run",
             "/api/ansible-pad/run-existing",
@@ -4852,7 +4876,7 @@ class HealthServer:
             return {"vcenters": [], "unlocked": False}
         raw = getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]"
         return {
-            "vcenters": parse_vcenters_setting(raw),
+            "vcenters": public_vcenters(parse_vcenters_setting(raw)),
             "unlocked": unlocked,
         }
 
@@ -4862,12 +4886,23 @@ class HealthServer:
         with self._lock:
             getter = self._get_setting
             setter = self._set_setting
+            crypto_key = self._crypto_key
         if not setter:
             raise RuntimeError("LaunchPad must be unlocked to save vCenters.")
+        if crypto_key is None:
+            raise RuntimeError("LaunchPad must be unlocked to save vCenters.")
         raw = (getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]") if getter else "[]"
-        cleaned = upsert_vcenter(parse_vcenters_setting(raw), payload)
+        store = parse_vcenters_setting(raw)
+        incoming_id = str(payload.get("id") or "").strip()
+        existing = next((row for row in store if row["id"] == incoming_id), {})
+        stored_payload = dict(payload)
+        stored_payload["password_encrypted"] = resolve_password_encrypted(
+            payload, str(existing.get("password_encrypted") or ""), crypto_key
+        )
+        stored_payload.pop("password", None)
+        cleaned = upsert_vcenter(store, stored_payload)
         setter(SETTING_VCENTERS_DIRECTORY, json.dumps(cleaned))
-        return {"vcenters": cleaned, "unlocked": True}
+        return {"vcenters": public_vcenters(cleaned), "unlocked": True}
 
     def delete_vcenter_record(self, vcenter_id: str) -> dict:
         with self._lock:
@@ -4878,7 +4913,34 @@ class HealthServer:
         raw = (getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]") if getter else "[]"
         cleaned = delete_vcenter(parse_vcenters_setting(raw), vcenter_id)
         setter(SETTING_VCENTERS_DIRECTORY, json.dumps(cleaned))
-        return {"vcenters": cleaned, "unlocked": True}
+        return {"vcenters": public_vcenters(cleaned), "unlocked": True}
+
+    def launch_vcenter_client(self, vcenter_id: str) -> dict:
+        with self._lock:
+            getter = self._get_setting
+            setter = self._set_setting
+            crypto_key = self._crypto_key
+        if not setter or crypto_key is None:
+            raise RuntimeError("LaunchPad must be unlocked to launch vSphere Client.")
+        raw = (getter(SETTING_VCENTERS_DIRECTORY, "[]") or "[]") if getter else "[]"
+        store = parse_vcenters_setting(raw)
+        target = str(vcenter_id or "").strip()
+        row = next((item for item in store if item["id"] == target), None)
+        if row is None:
+            raise ValueError("Unknown vCenter.")
+        if not row.get("use_vsphere_client"):
+            raise ValueError("vSphere Client is not enabled for this vCenter.")
+        if not VPXCLIENT_PATH.is_file():
+            raise ValueError(f"vSphere Client not found: {VPXCLIENT_PATH}")
+        password = decrypt_text(crypto_key, str(row.get("password_encrypted") or ""))
+        cmd = [str(VPXCLIENT_PATH), "-s", str(row.get("address") or "")]
+        user = str(row.get("username") or "").strip()
+        if user:
+            cmd.extend(["-u", user])
+        if password:
+            cmd.extend(["-p", password])
+        subprocess.Popen(cmd, cwd=str(VPXCLIENT_PATH.parent), close_fds=False)
+        return {"ok": True}
 
     def _ansible_pad_export_cards(self) -> list[dict]:
         with self._lock:
