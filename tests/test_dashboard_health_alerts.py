@@ -84,3 +84,27 @@ def test_desktop_surfaces_do_not_cover_art_with_transparent_frames():
     backdrop_place = "backdrop.place(relx=0, rely=0, relwidth=1, relheight=1)"
     assert backdrop_place in LAYOUT
     assert "relheight=1" not in LAYOUT.split(backdrop_place)[1]
+
+
+def test_dashboard_has_alert_popups_toggle():
+    assert 'text="Alert popups"' in DASH
+    assert "SETTING_ALERT_POPUPS" in DASH
+    assert "desktop_alert_popups_enabled" in DASH
+    assert "_toggle_alert_popups" in DASH
+    assert "alert_popups_switch" in DASH
+    assert "grid_columnconfigure(4, weight=1)" in DASH
+
+
+def test_dashboard_skips_dialog_and_beep_when_alert_popups_off():
+    apply = DASH.split("    def _apply_health_alert_payload", 1)[1].split(
+        "    def _health_alert_group_key", 1
+    )[0]
+    assert "self._alert_popups_enabled" in apply
+    assert "play_health_alert_beep" in apply
+    assert "_sync_health_alert_overlays" in apply
+    assert "_show_next_health_alert" in apply
+    toggle = DASH.split("    def _toggle_alert_popups", 1)[1].split("    def ", 1)[0]
+    assert "_force_close_health_alert_dialog" in toggle
+    assert 'set_setting(SETTING_ALERT_POPUPS, "true"' in DASH or (
+        'SETTING_ALERT_POPUPS, "true"' in toggle
+    )
