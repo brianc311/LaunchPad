@@ -26,17 +26,37 @@ def test_keyboard_answers_single_and_multi_field():
     ) == ["admin", "secret"]
 
 
-def test_keyboard_answers_single_username_prompt_uses_username():
+def test_keyboard_answers_single_username_prompt_uses_password():
+    """SSH already sent the username; a lone login: field is the password challenge.
+
+    IBM XIV rejects sending ``admin`` again (wrong keyboard-interactive auth).
+    """
     assert keyboard_interactive_answers(
         [("login:", True)],
         password="secret",
         username="admin",
-    ) == ["admin"]
+    ) == ["secret"]
+    assert keyboard_interactive_answers(
+        [("Username:", True)],
+        password="secret",
+        username="admin",
+    ) == ["secret"]
     assert keyboard_interactive_answers(
         [("Password for user admin:", False)],
         password="secret",
         username="admin",
     ) == ["secret"]
+
+
+def test_authenticate_sends_password_to_lone_login_prompt():
+    transport = MagicMock()
+    transport.auth_none.side_effect = paramiko.BadAuthenticationType(
+        "Bad authentication type",
+        ["publickey", "keyboard-interactive"],
+    )
+    authenticate_with_password(transport, "admin", "secret")
+    _username, handler = transport.auth_interactive.call_args[0]
+    assert handler(None, None, [("login:", True)]) == ["secret"]
 
 
 def test_authenticate_uses_password_when_only_password_allowed():
