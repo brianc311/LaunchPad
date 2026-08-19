@@ -80,12 +80,18 @@ def keyboard_interactive_answers(
 ) -> list[str]:
     """Answer keyboard-interactive prompts without logging secrets.
 
-    Username-style prompts (including a lone ``login:`` field) get ``username``.
-    Prompts that mention a password still get ``password`` even if they also
-    contain the word ``user``.
+    A single field is always the password: SSH already sent ``username``, and
+    IBM XIV rejects sending the username again (wrong keyboard-interactive auth).
+    Multiple fields: username-style prompts get ``username``; password prompts
+    (including ``Password for user …``) get ``password``.
     """
+    fields = list(prompt_list or [])
+    if not fields:
+        return []
+    if len(fields) == 1:
+        return [password]
     answers: list[str] = []
-    for prompt, _echo in list(prompt_list or []):
+    for prompt, _echo in fields:
         if _is_username_prompt(prompt):
             answers.append(username)
         else:
