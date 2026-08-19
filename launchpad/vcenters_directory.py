@@ -4,9 +4,71 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from typing import Any
 
+from launchpad.crypto import encrypt_text
+
 SETTING_VCENTERS_DIRECTORY = "vcenters_directory"
+
+VCENTER_PASSWORD_PLACEHOLDER = "***"
+VPXCLIENT_PATH = Path(
+    r"C:\Program Files (x86)\VMware\Infrastructure\Client\Launcher\vpxclient.exe"
+)
+
+
+def use_vsphere_client_enabled(value: object) -> bool:
+    if value is True:
+        return True
+    text = str(value or "").strip().lower()
+    return text in {"true", "1", "on", "yes"}
+
+
+def public_vcenter(record: dict) -> dict:
+    encrypted = str(record.get("password_encrypted") or "").strip()
+    return {
+        "id": str(record.get("id") or ""),
+        "name": str(record.get("name") or ""),
+        "location": str(record.get("location") or ""),
+        "address": str(record.get("address") or ""),
+        "url": str(record.get("url") or ""),
+        "use_vsphere_client": use_vsphere_client_enabled(
+            record.get("use_vsphere_client")
+        ),
+        "username": str(record.get("username") or ""),
+        "password": VCENTER_PASSWORD_PLACEHOLDER if encrypted else "",
+    }
+
+
+def public_vcenters(store: list[dict]) -> list[dict]:
+    return [public_vcenter(row) for row in store]
+
+
+def resolve_password_encrypted(
+    incoming: dict, existing_encrypted: str, crypto_key: bytes
+) -> str:
+    if "password" not in incoming:
+        return str(existing_encrypted or "")
+    text = incoming.get("password")
+    if text is None:
+        return str(existing_encrypted or "")
+    raw = str(text)
+    if raw == VCENTER_PASSWORD_PLACEHOLDER:
+        return str(existing_encrypted or "")
+    if not raw.strip():
+        return ""
+    return encrypt_text(crypto_key, raw)
+
+
+def vpxclient_argv(address: str, username: str = "", password: str = "") -> list[str]:
+    cmd = [str(VPXCLIENT_PATH), "-s", str(address)]
+    user = str(username or "").strip()
+    secret = str(password or "")
+    if user:
+        cmd.extend(["-u", user])
+    if secret:
+        cmd.extend(["-p", secret])
+    return cmd
 
 
 def vcenter_default_url(address: str) -> str:
@@ -48,6 +110,11 @@ def normalize_vcenter(raw: dict, *, assign_id: bool = False) -> dict:
         "location": location,
         "address": address,
         "url": url,
+        "use_vsphere_client": use_vsphere_client_enabled(
+            raw.get("use_vsphere_client")
+        ),
+        "username": str(raw.get("username") or "").strip(),
+        "password_encrypted": str(raw.get("password_encrypted") or "").strip(),
     }
 
 
