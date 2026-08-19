@@ -32,6 +32,9 @@ VCENTERS_HTML = """<!doctype html>
     .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
     .name-btn { background:none; border:0; color:#93c5fd; padding:0; min-height:auto; font:inherit; font-weight:600; cursor:pointer; }
     .empty { color:var(--muted); padding:12px 0; }
+    .checks { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:8px; }
+    .checks label { flex-direction:row; align-items:center; cursor:pointer; font-weight:600; }
+    .checks input { width:auto; accent-color:var(--accent); }
     @media (max-width:700px) { .grid { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -54,11 +57,14 @@ VCENTERS_HTML = """<!doctype html>
       <p><strong>Location</strong><br><span id="d-location"></span></p>
       <p><strong>Address</strong><br><span id="d-address"></span></p>
       <p><strong>Link</strong><br><a id="d-link" href="#" target="_blank" rel="noopener"></a></p>
+      <p id="d-user-wrap" hidden><strong>Username</strong><br><span id="d-username"></span></p>
       <div class="actions">
+        <button id="launch-btn" type="button" hidden>Open vSphere Client</button>
         <button id="edit-btn" type="button">Edit</button>
         <button id="delete-btn" class="danger" type="button">Delete</button>
         <button id="back-btn" class="secondary" type="button">Back</button>
       </div>
+      <p id="detail-status" class="status" role="status"></p>
     </section>
     <section id="form-section" hidden>
       <h2 id="form-title">Add vCenter</h2>
@@ -68,6 +74,11 @@ VCENTERS_HTML = """<!doctype html>
         <label>Location<input id="location" name="location"></label>
         <label>Address<input id="address" name="address" required placeholder="10.0.0.1 or vc.example.com"></label>
         <label>URL override (optional)<input id="url" name="url" placeholder="https://host/ui"></label>
+        <label class="wide checks" style="grid-column:1 / -1;flex-direction:row;">
+          <input id="use_vsphere_client" name="use_vsphere_client" type="checkbox"> vSphere Client
+        </label>
+        <label>Username<input id="username" name="username" autocomplete="username"></label>
+        <label>Password<input id="password" name="password" type="password" autocomplete="new-password"></label>
       </form>
       <div class="actions">
         <button id="save-btn" type="button">Save</button>
@@ -87,6 +98,7 @@ VCENTERS_HTML = """<!doctype html>
     const editBtn = document.getElementById("edit-btn");
     const deleteBtn = document.getElementById("delete-btn");
     const saveBtn = document.getElementById("save-btn");
+    const launchBtn = document.getElementById("launch-btn");
     let rows = [];
     let unlocked = false;
     let selectedId = new URLSearchParams(location.search).get("id") || "";
@@ -106,6 +118,7 @@ VCENTERS_HTML = """<!doctype html>
       editBtn.disabled = !on;
       deleteBtn.disabled = !on;
       saveBtn.disabled = !on;
+      launchBtn.disabled = !on;
       if (!on) listStatus.textContent = "Unlock LaunchPad to add or edit vCenters.";
     }
 
@@ -162,6 +175,10 @@ VCENTERS_HTML = """<!doctype html>
       const link = document.getElementById("d-link");
       link.href = effectiveUrl(row);
       link.textContent = effectiveUrl(row);
+      const useClient = row.use_vsphere_client === true;
+      document.getElementById("d-user-wrap").hidden = !useClient;
+      document.getElementById("d-username").textContent = row.username || "—";
+      launchBtn.hidden = !useClient;
       listSection.hidden = true;
       formSection.hidden = true;
       detailSection.hidden = false;
@@ -174,6 +191,9 @@ VCENTERS_HTML = """<!doctype html>
       document.getElementById("location").value = row ? row.location : "";
       document.getElementById("address").value = row ? row.address : "";
       document.getElementById("url").value = row ? row.url : "";
+      document.getElementById("use_vsphere_client").checked = !!(row && row.use_vsphere_client);
+      document.getElementById("username").value = row ? (row.username || "") : "";
+      document.getElementById("password").value = row ? (row.password || "") : "";
       document.getElementById("form-status").textContent = "";
       listSection.hidden = true;
       detailSection.hidden = true;
@@ -214,6 +234,9 @@ VCENTERS_HTML = """<!doctype html>
         location: document.getElementById("location").value,
         address: document.getElementById("address").value,
         url: document.getElementById("url").value,
+        use_vsphere_client: document.getElementById("use_vsphere_client").checked,
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
       };
       const res = await fetch("/api/vcenters", {
         method: "POST",
@@ -230,6 +253,20 @@ VCENTERS_HTML = """<!doctype html>
       const keepId = payload.id || (rows.find((row) => row.name === payload.name.trim()) || {}).id;
       selectedId = keepId || "";
       render();
+    });
+    launchBtn.addEventListener("click", async () => {
+      if (!selectedId) return;
+      const statusEl = document.getElementById("detail-status");
+      statusEl.textContent = "";
+      const res = await fetch("/api/vcenters/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedId }),
+      });
+      const data = await res.json();
+      statusEl.textContent = res.ok
+        ? "vSphere Client started."
+        : (data.error || "Launch failed.");
     });
     loadList().catch((err) => {
       listStatus.textContent = err.message || String(err);
