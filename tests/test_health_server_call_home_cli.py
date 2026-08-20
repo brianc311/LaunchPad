@@ -226,3 +226,29 @@ def test_cloud_already_matched_run_is_skip_success(monkeypatch):
     assert failed["arrays"][0]["ok"] is False
     assert "already at requested cloud state" not in failed["arrays"][0]["warnings"]
     assert not any(c.startswith("svctask") for c in calls2)
+
+
+def test_preview_testemail_and_smtp_hash_cannot_run_it(monkeypatch):
+    server = _server()
+    _bind(monkeypatch, [
+        ("lscloudcallhome", CLOUD),
+        ("lsemailserver", SERVERS),
+        ("lsemailuser", USERS),
+        ("lssystem", LSYS),
+    ])
+    payload = {"arrays": [{"card_id": 1, "user_id": "1", "address": "EISSAN-Alerts@walgreens.com"}]}
+    preview = server.preview_call_home_testemail(payload)
+    assert preview["ok"] is True
+    cmd = preview["arrays"][0]["steps"][0]["cmd"]
+    assert cmd.startswith("svctask testemail")
+    assert "chemailserver" not in cmd
+    smtp_hash = preview_hash(
+        "smtp",
+        {"arrays": [{"card_id": 1, "smtp": {"ip": "1.2.3.4", "port": "25", "username": "u", "password": "x"}}]},
+    )
+    denied = server.run_call_home_testemail(
+        {**payload, "confirm": True, "preview_hash": smtp_hash}
+    )
+    assert denied["ok"] is False
+    empty = server.preview_call_home_testemail({"arrays": [{"card_id": 1, "user_id": "", "address": ""}]})
+    assert empty["ok"] is False

@@ -393,6 +393,31 @@ def build_cloud_array_steps(
     )
 
 
+def build_testemail_array_steps(
+    *,
+    user_id: str = "",
+    address: str = "",
+) -> tuple[list[SnapStep], list[str], bool]:
+    token = str(user_id or "").strip() or str(address or "").strip()
+    if not token:
+        return [], ["ERROR: select a test user"], False
+    try:
+        quoted = quote_cli_arg(token)
+    except ValueError as exc:
+        return [], [f"ERROR: {exc}"], False
+    return (
+        [
+            SnapStep(
+                kind="testemail",
+                purpose=f"test email to {token}",
+                cmd=f"svctask testemail {quoted}",
+            )
+        ],
+        [],
+        True,
+    )
+
+
 def _object_token(row: dict) -> str:
     return str(row.get("id") or row.get("name") or "").strip()
 
@@ -482,6 +507,13 @@ def preview_hash(kind: str, payload: dict) -> str:
             "kind": "cloud",
             "arrays": card_ids(lambda item: {"requested": str(item.get("requested") or "").strip().lower()}),
         }
+    elif kind == "testemail":
+        def test_row(item: dict) -> dict:
+            return {
+                "user_id": str(item.get("user_id") or item.get("id") or "").strip(),
+                "address": str(item.get("address") or "").strip(),
+            }
+        blob = {"kind": "testemail", "arrays": card_ids(test_row)}
     else:
         blob = {"kind": "remove", "arrays": card_ids()}
     return hashlib.sha256(

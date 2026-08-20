@@ -63,6 +63,8 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
         <button type="button" class="danger" id="run-apply-btn" disabled>Run Contact</button>
         <button type="button" class="secondary" id="preview-smtp-btn">Preview SMTP</button>
         <button type="button" class="danger" id="run-smtp-btn" disabled>Run SMTP</button>
+        <button type="button" class="secondary" id="preview-testemail-btn">Preview Test Email</button>
+        <button type="button" class="danger" id="run-testemail-btn" disabled>Run Test Email</button>
         <button type="button" class="secondary" id="preview-users-btn">Preview Users</button>
         <button type="button" class="danger" id="run-users-btn" disabled>Run Users</button>
         <button type="button" class="secondary" id="preview-cloud-btn">Preview Cloud</button>
@@ -89,17 +91,18 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
     const modalBody = document.getElementById("modal-body");
     const modalTitle = document.getElementById("modal-title");
     const LOC = ["company","street","city","state","postal","country","comment"];
-    const KINDS = ["apply","smtp","users","cloud","remove"];
+    const KINDS = ["apply","smtp","testemail","users","cloud","remove"];
     const runBtns = {};
     KINDS.forEach((k) => { runBtns[k] = document.getElementById(k === "apply" ? "run-apply-btn" : k === "remove" ? "run-remove-btn" : "run-"+k+"-btn"); });
-    const PREVIEW_URL = { apply:"/api/call-home/preview-apply", smtp:"/api/call-home/preview-smtp", users:"/api/call-home/preview-users", cloud:"/api/call-home/preview-cloud", remove:"/api/call-home/preview-remove" };
-    const RUN_URL = { apply:"/api/call-home/run-apply", smtp:"/api/call-home/run-smtp", users:"/api/call-home/run-users", cloud:"/api/call-home/run-cloud", remove:"/api/call-home/run-remove" };
-    const PREVIEW_TITLE = { apply:"Preview Contact", smtp:"Preview SMTP", users:"Preview Users", cloud:"Preview Cloud", remove:"Preview Remove SMTP" };
-    const RUN_TITLE = { apply:"Run Contact", smtp:"Run SMTP", users:"Run Users", cloud:"Run Cloud", remove:"Run Remove SMTP" };
-    const STATUS_KIND = { apply:"Contact", smtp:"SMTP", users:"Users", cloud:"Cloud", remove:"Remove" };
+    const PREVIEW_URL = { apply:"/api/call-home/preview-apply", smtp:"/api/call-home/preview-smtp", testemail:"/api/call-home/preview-testemail", users:"/api/call-home/preview-users", cloud:"/api/call-home/preview-cloud", remove:"/api/call-home/preview-remove" };
+    const RUN_URL = { apply:"/api/call-home/run-apply", smtp:"/api/call-home/run-smtp", testemail:"/api/call-home/run-testemail", users:"/api/call-home/run-users", cloud:"/api/call-home/run-cloud", remove:"/api/call-home/run-remove" };
+    const PREVIEW_TITLE = { apply:"Preview Contact", smtp:"Preview SMTP", testemail:"Preview Test Email", users:"Preview Users", cloud:"Preview Cloud", remove:"Preview Remove SMTP" };
+    const RUN_TITLE = { apply:"Run Contact", smtp:"Run SMTP", testemail:"Run Test Email", users:"Run Users", cloud:"Run Cloud", remove:"Run Remove SMTP" };
+    const STATUS_KIND = { apply:"Contact", smtp:"SMTP", testemail:"Test Email", users:"Users", cloud:"Cloud", remove:"Remove" };
     const CONFIRMS = {
       apply: "This writes Call Home contact/location on the selected arrays. The first CLI error stops that array; other arrays continue. No rollback.",
       smtp: "This writes SMTP (add or change the email server) on the selected arrays. The first CLI error stops that array; other arrays continue. No rollback.",
+      testemail: "This sends a test email through the SMTP already on the selected arrays. It does not change SMTP, users, contact, or Cloud Call Home. The first CLI error stops that array; other arrays continue. No rollback.",
       users: "This writes Call Home email users on the selected arrays. The first CLI error stops that array; other arrays continue. No rollback.",
       cloud: "This enables or disables Cloud Call Home on the selected arrays. The first CLI error stops that array; other arrays continue. No rollback.",
       remove: "This stops email sending and deletes email users and email servers on the selected arrays. Cloud Call Home, contact, and location are not changed."
@@ -107,6 +110,7 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
     let cards = [];
     window.__applyOk = false; window.__applyHash = "";
     window.__smtpOk = false; window.__smtpHash = "";
+    window.__testemailOk = false; window.__testemailHash = "";
     window.__usersOk = false; window.__usersHash = "";
     window.__cloudOk = false; window.__cloudHash = "";
     window.__removeOk = false; window.__removeHash = "";
@@ -169,9 +173,23 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
     function removePayload() {
       return { arrays: selectedIds().map((id) => ({ card_id: id })) };
     }
+    function testemailKindPayload() {
+      return {
+        arrays: selectedIds().map((id) => {
+          const sel = document.getElementById("test-user-" + id);
+          const opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+          return {
+            card_id: id,
+            user_id: sel ? (sel.value || "") : "",
+            address: opt ? (opt.getAttribute("data-address") || "") : ""
+          };
+        })
+      };
+    }
     function kindPayload(kind) {
       if (kind === "apply") return applyPayload();
       if (kind === "smtp") return smtpKindPayload();
+      if (kind === "testemail") return testemailKindPayload();
       if (kind === "users") return usersKindPayload();
       if (kind === "cloud") return cloudKindPayload();
       return removePayload();
@@ -202,7 +220,16 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
       }).join("");
       const add = '<div class="grid"><label>Add address <input id="user-add-addr-'+id+'"></label>'
         + '<label>Type <select id="user-add-type-'+id+'"><option value="support">support</option><option value="local">local</option></select></label></div>';
-      el.innerHTML = rows + add;
+      const selected = (document.getElementById("test-user-"+id)||{}).value || "";
+      const opts = ['<option value="">Select user</option>'].concat((users || []).map((u) => {
+        const uid = String(u.id || u.name || "").replace(/"/g, "");
+        const addr = String(u.address || "").replace(/"/g, "");
+        const typ = String(u.user_type || "").replace(/"/g, "");
+        const sel = uid === selected ? " selected" : "";
+        return '<option value="'+uid+'" data-address="'+addr+'"'+sel+'>'+addr+' ('+typ+')</option>';
+      }));
+      const testSel = '<label>Test user <select id="test-user-'+id+'">'+opts.join("")+'</select></label>';
+      el.innerHTML = rows + add + testSel;
       el.querySelectorAll("input,select").forEach((node) => {
         node.addEventListener("input", invalidatePreview);
         node.addEventListener("change", invalidatePreview);
@@ -346,6 +373,7 @@ CALL_HOME_CLI_HTML = """<!DOCTYPE html>
     document.getElementById("load-btn").onclick = () => loadCurrent();
     document.getElementById("preview-apply-btn").onclick = () => doPreview("apply");
     document.getElementById("preview-smtp-btn").onclick = () => doPreview("smtp");
+    document.getElementById("preview-testemail-btn").onclick = () => doPreview("testemail");
     document.getElementById("preview-users-btn").onclick = () => doPreview("users");
     document.getElementById("preview-cloud-btn").onclick = () => doPreview("cloud");
     document.getElementById("preview-remove-btn").onclick = () => doPreview("remove");
