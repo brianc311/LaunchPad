@@ -13,7 +13,7 @@ SETTING_VCENTERS_DIRECTORY = "vcenters_directory"
 
 VCENTER_PASSWORD_PLACEHOLDER = "***"
 VPXCLIENT_PATH = Path(
-    r"C:\Program Files (x86)\VMware\Infrastructure\Client\Launcher\vpxclient.exe"
+    r"C:\Program Files (x86)\VMware\Infrastructure\Virtual Infrastructure Client\Launcher\VpxClient.exe"
 )
 
 
@@ -37,11 +37,25 @@ def public_vcenter(record: dict) -> dict:
         ),
         "username": str(record.get("username") or ""),
         "password": VCENTER_PASSWORD_PLACEHOLDER if encrypted else "",
+        "description": str(record.get("description") or ""),
+        "vm_notes": str(record.get("vm_notes") or ""),
     }
 
 
 def public_vcenters(store: list[dict]) -> list[dict]:
     return [public_vcenter(row) for row in store]
+
+
+def vcenter_matches_query(row: dict, query: str) -> bool:
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return True
+    haystacks = (
+        str(row.get("name") or ""),
+        str(row.get("address") or ""),
+        str(row.get("vm_notes") or ""),
+    )
+    return any(needle in part.casefold() for part in haystacks)
 
 
 def resolve_password_encrypted(
@@ -89,6 +103,8 @@ def normalize_vcenter(raw: dict, *, assign_id: bool = False) -> dict:
     location = str(raw.get("location") or "").strip()
     address = str(raw.get("address") or "").strip()
     url = str(raw.get("url") or "").strip()
+    description = str(raw.get("description") or "").strip()
+    vm_notes = str(raw.get("vm_notes") or "").strip()
     if not name:
         raise ValueError("name is required")
     if not address:
@@ -110,6 +126,8 @@ def normalize_vcenter(raw: dict, *, assign_id: bool = False) -> dict:
         "location": location,
         "address": address,
         "url": url,
+        "description": description,
+        "vm_notes": vm_notes,
         "use_vsphere_client": use_vsphere_client_enabled(
             raw.get("use_vsphere_client")
         ),
