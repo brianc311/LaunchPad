@@ -27,3 +27,19 @@ def test_vcenters_page_has_vsphere_client_controls():
     assert 'id="d-username"' in VCENTERS_HTML
     assert 'id="launch-btn"' in VCENTERS_HTML
     assert 'id="detail-status"' in VCENTERS_HTML
+
+
+def test_vcenters_page_has_description_vm_notes_and_search():
+    assert 'id="vcenter-search"' in VCENTERS_HTML
+    assert 'placeholder="Search name, IP, or VM"' in VCENTERS_HTML
+    assert 'id="description"' in VCENTERS_HTML
+    assert "<strong>Description</strong>" in VCENTERS_HTML
+    assert 'id="vm_notes"' in VCENTERS_HTML
+    assert "<textarea" in VCENTERS_HTML
+    assert 'id="d-description"' in VCENTERS_HTML
+    assert "<details" in VCENTERS_HTML
+    assert "<summary>VM names</summary>" in VCENTERS_HTML
+    assert 'id="d-vm-notes"' in VCENTERS_HTML
+    assert "function rowMatchesQuery" in VCENTERS_HTML
+    assert "No matching vCenters" in VCENTERS_HTML
+    assert "<th>Name</th><th>Location</th><th>Address</th><th>Link</th>" in VCENTERS_HTML

@@ -16,6 +16,7 @@ from launchpad.vcenters_directory import (
     upsert_vcenter,
     use_vsphere_client_enabled,
     vcenter_default_url,
+    vcenter_matches_query,
     vpxclient_argv,
 )
 
@@ -104,7 +105,7 @@ def test_resolve_password_keeps_placeholder_and_clears_empty():
 
 def test_vpxclient_argv_and_path():
     assert str(VPXCLIENT_PATH) == (
-        r"C:\Program Files (x86)\VMware\Infrastructure\Client\Launcher\vpxclient.exe"
+        r"C:\Program Files (x86)\VMware\Infrastructure\Virtual Infrastructure Client\Launcher\VpxClient.exe"
     )
     assert vpxclient_argv("10.1.2.3") == [str(VPXCLIENT_PATH), "-s", "10.1.2.3"]
     assert vpxclient_argv("10.1.2.3", "admin", "pw") == [
@@ -119,4 +120,42 @@ def test_vpxclient_argv_and_path():
     assert use_vsphere_client_enabled(True) is True
     assert use_vsphere_client_enabled("true") is True
     assert use_vsphere_client_enabled(None) is False
+
+
+def test_description_and_vm_notes_default_empty_and_public():
+    row = normalize_vcenter(
+        {"name": "VC1", "address": "10.0.0.1"}, assign_id=True
+    )
+    assert row["description"] == ""
+    assert row["vm_notes"] == ""
+    stored = normalize_vcenter(
+        {
+            "name": "VC1",
+            "address": "10.0.0.1",
+            "description": "  purpose line  ",
+            "vm_notes": "  web01\napp02  ",
+        },
+        assign_id=True,
+    )
+    assert stored["description"] == "purpose line"
+    assert stored["vm_notes"] == "web01\napp02"
+    pub = public_vcenter(stored)
+    assert pub["description"] == "purpose line"
+    assert pub["vm_notes"] == "web01\napp02"
+
+
+def test_vcenter_matches_query_name_address_vm_notes_not_description():
+    row = {
+        "name": "HPEW101VCENTER6",
+        "address": "172.19.195.31",
+        "description": "WAG1 compute cluster",
+        "vm_notes": "sql01\nweb-prod",
+    }
+    assert vcenter_matches_query(row, "") is True
+    assert vcenter_matches_query(row, "   ") is True
+    assert vcenter_matches_query(row, "hpew101") is True
+    assert vcenter_matches_query(row, "195.31") is True
+    assert vcenter_matches_query(row, "SQL01") is True
+    assert vcenter_matches_query(row, "compute cluster") is False
+    assert vcenter_matches_query(row, "no-such") is False
 

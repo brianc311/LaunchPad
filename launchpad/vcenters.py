@@ -29,6 +29,11 @@ VCENTERS_HTML = """<!doctype html>
     .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
     label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:.86rem; font-weight:600; }
     input { width:100%; padding:9px 10px; color:var(--text); background:var(--panel-alt); border:1px solid var(--border); border-radius:8px; font:inherit; }
+    textarea { width:100%; min-height:88px; padding:9px 10px; color:var(--text); background:var(--panel-alt); border:1px solid var(--border); border-radius:8px; font:inherit; resize:vertical; }
+    #vcenter-search { width:auto; min-width:220px; flex:1; max-width:360px; padding:9px 10px; color:var(--text); background:var(--panel-alt); border:1px solid var(--border); border-radius:8px; font:inherit; }
+    details.notes { margin:12px 0 0; }
+    details.notes summary { cursor:pointer; font-weight:700; }
+    #d-vm-notes { white-space:pre-wrap; margin:8px 0 0; color:var(--muted); }
     .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
     .name-btn { background:none; border:0; color:#93c5fd; padding:0; min-height:auto; font:inherit; font-weight:600; cursor:pointer; }
     .empty { color:var(--muted); padding:12px 0; }
@@ -47,7 +52,10 @@ VCENTERS_HTML = """<!doctype html>
     </section>
     <section id="list-section">
       <h2>Directory</h2>
-      <div class="actions"><button id="add-btn" type="button">Add</button></div>
+      <div class="actions">
+        <button id="add-btn" type="button">Add</button>
+        <input id="vcenter-search" type="search" placeholder="Search name, IP, or VM" aria-label="Search name, IP, or VM">
+      </div>
       <div id="list-wrap"></div>
       <p id="list-status" class="status" role="status"></p>
     </section>
@@ -57,7 +65,12 @@ VCENTERS_HTML = """<!doctype html>
       <p><strong>Location</strong><br><span id="d-location"></span></p>
       <p><strong>Address</strong><br><span id="d-address"></span></p>
       <p><strong>Link</strong><br><a id="d-link" href="#" target="_blank" rel="noopener"></a></p>
+      <p><strong>Description</strong><br><span id="d-description"></span></p>
       <p id="d-user-wrap" hidden><strong>Username</strong><br><span id="d-username"></span></p>
+      <details id="d-vm-notes-wrap" class="notes">
+        <summary>VM names</summary>
+        <p id="d-vm-notes"></p>
+      </details>
       <div class="actions">
         <button id="launch-btn" type="button" hidden>Open vSphere Client</button>
         <button id="edit-btn" type="button">Edit</button>
@@ -74,6 +87,8 @@ VCENTERS_HTML = """<!doctype html>
         <label>Location<input id="location" name="location"></label>
         <label>Address<input id="address" name="address" required placeholder="10.0.0.1 or vc.example.com"></label>
         <label>URL override (optional)<input id="url" name="url" placeholder="https://host/ui"></label>
+        <label class="wide" style="grid-column:1 / -1;">Description<input id="description" name="description"></label>
+        <label class="wide" style="grid-column:1 / -1;">VM names<textarea id="vm_notes" name="vm_notes" rows="5"></textarea></label>
         <label class="wide checks" style="grid-column:1 / -1;flex-direction:row;">
           <input id="use_vsphere_client" name="use_vsphere_client" type="checkbox"> vSphere Client
         </label>
@@ -113,6 +128,13 @@ VCENTERS_HTML = """<!doctype html>
       return (row.url || "").trim() || ("https://" + row.address + "/ui");
     }
 
+    function rowMatchesQuery(row, query) {
+      const needle = String(query || "").trim().toLowerCase();
+      if (!needle) return true;
+      const hay = [row.name, row.address, row.vm_notes].map((value) => String(value || "").toLowerCase());
+      return hay.some((part) => part.includes(needle));
+    }
+
     function setMutationsEnabled(on) {
       addBtn.disabled = !on;
       editBtn.disabled = !on;
@@ -141,11 +163,17 @@ VCENTERS_HTML = """<!doctype html>
     }
 
     function renderTable() {
+      const query = document.getElementById("vcenter-search").value;
+      const visible = rows.filter((row) => rowMatchesQuery(row, query));
       if (!rows.length) {
         listWrap.innerHTML = '<p class="empty">No vCenters yet</p>';
         return;
       }
-      const body = rows.map((row) => {
+      if (!visible.length) {
+        listWrap.innerHTML = '<p class="empty">No matching vCenters</p>';
+        return;
+      }
+      const body = visible.map((row) => {
         const href = escapeHtml(effectiveUrl(row));
         return `<tr>
           <td><button class="name-btn" data-id="${escapeHtml(row.id)}" type="button">${escapeHtml(row.name)}</button></td>
@@ -175,6 +203,10 @@ VCENTERS_HTML = """<!doctype html>
       const link = document.getElementById("d-link");
       link.href = effectiveUrl(row);
       link.textContent = effectiveUrl(row);
+      document.getElementById("d-description").textContent = row.description || "—";
+      const vmWrap = document.getElementById("d-vm-notes-wrap");
+      vmWrap.open = false;
+      document.getElementById("d-vm-notes").textContent = row.vm_notes || "";
       const useClient = row.use_vsphere_client === true;
       document.getElementById("d-user-wrap").hidden = !useClient;
       document.getElementById("d-username").textContent = row.username || "—";
@@ -191,6 +223,8 @@ VCENTERS_HTML = """<!doctype html>
       document.getElementById("location").value = row ? row.location : "";
       document.getElementById("address").value = row ? row.address : "";
       document.getElementById("url").value = row ? row.url : "";
+      document.getElementById("description").value = row ? (row.description || "") : "";
+      document.getElementById("vm_notes").value = row ? (row.vm_notes || "") : "";
       document.getElementById("use_vsphere_client").checked = !!(row && row.use_vsphere_client);
       document.getElementById("username").value = row ? (row.username || "") : "";
       document.getElementById("password").value = row ? (row.password || "") : "";
@@ -206,6 +240,7 @@ VCENTERS_HTML = """<!doctype html>
     }
 
     addBtn.addEventListener("click", () => showForm(null));
+    document.getElementById("vcenter-search").addEventListener("input", renderTable);
     editBtn.addEventListener("click", () => showForm(rowById(selectedId)));
     document.getElementById("back-btn").addEventListener("click", showList);
     document.getElementById("cancel-btn").addEventListener("click", () => {
@@ -234,6 +269,8 @@ VCENTERS_HTML = """<!doctype html>
         location: document.getElementById("location").value,
         address: document.getElementById("address").value,
         url: document.getElementById("url").value,
+        description: document.getElementById("description").value,
+        vm_notes: document.getElementById("vm_notes").value,
         use_vsphere_client: document.getElementById("use_vsphere_client").checked,
         username: document.getElementById("username").value,
         password: document.getElementById("password").value,
