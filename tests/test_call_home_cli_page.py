@@ -10,6 +10,8 @@ def test_path_title_and_actions():
     assert "Run Contact" in html
     assert "Preview SMTP" in html
     assert "Run SMTP" in html
+    assert "Preview Test Email" in html
+    assert "Run Test Email" in html
     assert "Preview Users" in html
     assert "Run Users" in html
     assert "Preview Cloud" in html
@@ -29,6 +31,8 @@ def test_api_paths_and_payload_fields():
         "/api/call-home/run-apply",
         "/api/call-home/preview-smtp",
         "/api/call-home/run-smtp",
+        "/api/call-home/preview-testemail",
+        "/api/call-home/run-testemail",
         "/api/call-home/preview-users",
         "/api/call-home/run-users",
         "/api/call-home/preview-cloud",
@@ -40,6 +44,8 @@ def test_api_paths_and_payload_fields():
     assert "remove_ids" in html
     assert "user_type" in html
     assert "requested" in html
+    assert "test-user-" in html or 'id="test-user-' in html
+    assert "user_id" in html
 
 
 def test_array_host_is_https_link_outside_checkbox_label():
@@ -49,15 +55,16 @@ def test_array_host_is_https_link_outside_checkbox_label():
     assert 'rel="noopener"' in html
 
 
-def test_five_run_kinds_invalidate_and_catch():
+def test_six_run_kinds_invalidate_and_catch():
     html = CALL_HOME_CLI_HTML
     assert "invalidatePreview" in html
-    for key in ("apply", "smtp", "users", "cloud", "remove"):
+    for key in ("apply", "smtp", "testemail", "users", "cloud", "remove"):
         assert f"__{key}Ok" in html or f"window.__{key}Ok" in html
     assert "catch" in html
     assert "This writes Call Home contact/location" in html
     assert "optional SMTP add" not in html
     assert "This writes SMTP" in html
+    assert "This sends a test email through the SMTP already on the selected arrays" in html
     assert "This writes Call Home email users" in html
     assert "This enables or disables Cloud Call Home" in html
 
