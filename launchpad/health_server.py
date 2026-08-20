@@ -96,6 +96,7 @@ from launchpad.call_home_cli_ops import (
     build_cloud_array_steps,
     build_remove_array_steps,
     build_smtp_array_steps,
+    build_testemail_array_steps,
     build_users_array_steps,
     collect_call_home_state,
     masked_steps_payload,
@@ -4523,6 +4524,8 @@ class _HealthHandler(BaseHTTPRequestHandler):
             "/api/call-home/run-apply",
             "/api/call-home/preview-smtp",
             "/api/call-home/run-smtp",
+            "/api/call-home/preview-testemail",
+            "/api/call-home/run-testemail",
             "/api/call-home/preview-users",
             "/api/call-home/run-users",
             "/api/call-home/preview-cloud",
@@ -4554,6 +4557,8 @@ class _HealthHandler(BaseHTTPRequestHandler):
                 "/api/call-home/run-apply": lambda: server.run_call_home_apply(payload, confirm=payload.get("confirm") is True),
                 "/api/call-home/preview-smtp": lambda: server.preview_call_home_smtp(payload),
                 "/api/call-home/run-smtp": lambda: server.run_call_home_smtp(payload, confirm=payload.get("confirm") is True),
+                "/api/call-home/preview-testemail": lambda: server.preview_call_home_testemail(payload),
+                "/api/call-home/run-testemail": lambda: server.run_call_home_testemail(payload, confirm=payload.get("confirm") is True),
                 "/api/call-home/preview-users": lambda: server.preview_call_home_users(payload),
                 "/api/call-home/run-users": lambda: server.run_call_home_users(payload, confirm=payload.get("confirm") is True),
                 "/api/call-home/preview-cloud": lambda: server.preview_call_home_cloud(payload),
@@ -6550,6 +6555,32 @@ class HealthServer:
             preview_fn=self.preview_call_home_smtp,
             builder=builder,
             skip_if_live_mismatch=None,
+        )
+
+    def preview_call_home_testemail(self, payload: dict) -> dict[str, Any]:
+        def builder(item, state):
+            return build_testemail_array_steps(
+                user_id=str(item.get("user_id") or item.get("id") or ""),
+                address=str(item.get("address") or ""),
+            )
+        return self._call_home_preview_rows(payload, "testemail", builder)
+
+    def run_call_home_testemail(self, payload: dict, *, confirm: bool | None = None) -> dict[str, Any]:
+        if confirm is None:
+            confirm = payload.get("confirm") is True
+        def builder(item, state):
+            return build_testemail_array_steps(
+                user_id=str(item.get("user_id") or item.get("id") or ""),
+                address=str(item.get("address") or ""),
+            )
+        return self._call_home_run_rows(
+            payload,
+            kind="testemail",
+            confirm=confirm,
+            confirm_warning="confirm must be true before sending a test email",
+            hash_warning="Preview must be run again before sending a test email.",
+            preview_fn=self.preview_call_home_testemail,
+            builder=builder,
         )
 
     def preview_call_home_users(self, payload: dict) -> dict[str, Any]:
