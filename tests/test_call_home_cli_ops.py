@@ -3,6 +3,7 @@ from launchpad.call_home_cli_ops import (
     build_cloud_array_steps,
     build_remove_array_steps,
     build_smtp_array_steps,
+    build_testemail_array_steps,
     build_users_array_steps,
     collect_call_home_state,
     is_email_already_started,
@@ -247,6 +248,23 @@ def test_users_remove_then_add_then_startemail():
     assert [s.kind for s in remove_only] == ["rmemailuser"]
 
 
+def test_testemail_uses_id_then_address_and_rejects_empty():
+    steps, warnings, ok = build_testemail_array_steps(user_id="1", address="a@b.com")
+    assert ok is True
+    assert warnings == []
+    assert steps[0].kind == "testemail"
+    assert steps[0].cmd == "svctask testemail 1"
+    assert "chemailserver" not in steps[0].cmd
+    assert "mkemailserver" not in steps[0].cmd
+    by_addr, _, ok2 = build_testemail_array_steps(user_id="", address="a@b.com")
+    assert ok2 is True
+    assert by_addr[0].cmd == 'svctask testemail "a@b.com"'
+    empty, errs, ok3 = build_testemail_array_steps(user_id="", address="")
+    assert ok3 is False
+    assert empty == []
+    assert any("select a test user" in item for item in errs)
+
+
 def test_cloud_only_when_changed():
     steps, _, ok = build_cloud_array_steps(requested="enable", configured="no")
     assert ok is True
@@ -277,6 +295,16 @@ def test_preview_hash_isolates_kinds_and_hides_password():
     assert preview_hash("users", {"arrays": [{"card_id": 1, "remove_ids": ["0"], "add": []}]}) != h_smtp
     assert preview_hash("cloud", {"arrays": [{"card_id": 1, "requested": "enable"}]}) != h_smtp
     assert preview_hash("remove", {"arrays": [{"card_id": 1}]}) != h_smtp
+    h_test = preview_hash(
+        "testemail",
+        {"arrays": [{"card_id": 1, "user_id": "1", "address": "a@b.com"}]},
+    )
+    assert h_test != h_smtp
+    assert preview_hash(
+        "testemail",
+        {"arrays": [{"card_id": 1, "user_id": "2", "address": "a@b.com"}]},
+    ) != h_test
+    assert "s3cret" not in h_test
 
 
 def test_startemail_already_started_is_success():
